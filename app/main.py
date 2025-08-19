@@ -29,7 +29,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://easier-frontend.vercel.app",
-        "https://www.eaiser.ai",  # Frontend URL on Render
+        "https://www.eaiser.ai",   # Frontend URL on Render
         "https://snapfixai.io",              # Frontend URL on SnapFix AI
         "http://localhost:5173",              # Local development (Vite default)
         "http://localhost:3000",              # Local development (React default)
