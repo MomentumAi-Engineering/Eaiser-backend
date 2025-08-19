@@ -24,7 +24,7 @@ except ImportError:
     raise
 
 # Database connection setup
-MONGO_URI = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+MONGO_URI = os.getenv("MONGODB_URL", "mongodb+srv://snapfix:Chrishabh100@cluster0.mk0k1wa.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 DB_NAME = os.getenv("MONGODB_NAME", "snapfix")
 
 # Parse database name from MONGO_URI if provided
