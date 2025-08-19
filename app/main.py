@@ -19,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app
-app = FastAPI(title="SnapFix AI Backend")
+app = FastAPI(title="Eaiser AI Backend")
 
 # Templates (for HTML pages)
 templates = Jinja2Templates(directory="templates")
@@ -174,7 +174,7 @@ app.include_router(issues_router, prefix="/api")
 # Log startup
 @app.on_event("startup")
 async def startup_event():
-    logger.info("SnapFix AI backend started successfully")
+    logger.info("Eaiser AI backend started successfully")
 
 # Run the app
 if __name__ == "__main__":
