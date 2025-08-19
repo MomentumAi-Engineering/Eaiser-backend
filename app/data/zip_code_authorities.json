@@ -1,0 +1,828 @@
+{
+  "37013": {
+    "public_works": [
+      {
+        "name": "Antioch Public Works",
+        "email": "chrishabh07@gmail.com",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37013@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37013@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37027": {
+    "public_works": [
+      {
+        "name": "Brentwood Public Works",
+        "email": "chrishabh2002@gmail.com",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "police": [
+      {
+        "name": "Police Department",
+        "email": "police.37027@nashville.gov",
+        "type": "police",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37062": {
+    "public_works": [
+      {
+        "name": "Fairview Public Works Department",
+        "email": "chrishabh2002@gmail.com",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Fairview Sanitation Department",
+        "email": "chrishabh1000@gmail.com",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "police": [
+      {
+        "name": "Fairview Police Department",
+        "email": "rishav@momntumai.com",
+        "type": "police",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "emergency": [
+      {
+        "name": "Fairview Emergency Services",
+        "email": "joel@momntumai.com",
+        "type": "emergency",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Fairview Fire Department",
+        "email": "chrishabh2002@gmail.com",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "building_inspection": [
+      {
+        "name": "Fairview Building Inspection",
+        "email": "building@fairviewtn.gov",
+        "type": "building_inspection",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "animal_control": [
+      {
+        "name": "Fairview Animal Control",
+        "email": "joel@momntumai.com",
+        "type": "animal_control",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "environment": [
+      {
+        "name": "Fairview Environmental Department",
+        "email": "environment@fairviewtn.gov",
+        "type": "environment",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "water_utility": [
+      {
+        "name": "Fairview Water Utility Department",
+        "email": "water@fairviewtn.gov",
+        "type": "water_utility",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "code_enforcement": [
+      {
+        "name": "Fairview Code Enforcement",
+        "email": "code@fairviewtn.gov",
+        "type": "code_enforcement",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "transportation": [
+      {
+        "name": "Fairview Transportation Department",
+        "email": "transport@fairviewtn.gov",
+        "type": "transportation",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "property_management": [
+      {
+        "name": "Fairview Property Management",
+        "email": "chrishabh1000@gmail.com",
+        "type": "property_management",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "general": [
+      {
+        "name": "Fairview City Department",
+        "email": "info@fairviewtn.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37072": {
+    "public_works": [
+      {
+        "name": "Goodlettsville Public Works",
+        "email": "pw.37072@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37072@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37076": {
+    "public_works": [
+      {
+        "name": "Hermitage Public Works",
+        "email": "pw.37076@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37076@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37115": {
+    "public_works": [
+      {
+        "name": "Madison Public Works",
+        "email": "pw.37115@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "animal_control": [
+      {
+        "name": "Animal Control",
+        "email": "animal.37115@nashville.gov",
+        "type": "animal_control",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37138": {
+    "public_works": [
+      {
+        "name": "Old Hickory Public Works",
+        "email": "pw.37138@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37138@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37201": {
+    "public_works": [
+      {
+        "name": "Nashville Public Works",
+        "email": "pw.37201@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37201@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37203": {
+    "public_works": [
+      {
+        "name": "Nashville Public Works",
+        "email": "pw.37203@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "police": [
+      {
+        "name": "Police Department",
+        "email": "police.37203@nashville.gov",
+        "type": "police",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37204": {
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37204@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "environment": [
+      {
+        "name": "Environmental Department",
+        "email": "env.37204@nashville.gov",
+        "type": "environment",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37205": {
+    "environment": [
+      {
+        "name": "Environmental Department",
+        "email": "env.37205@nashville.gov",
+        "type": "environment",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "public_works": [
+      {
+        "name": "Belle Meade Public Works",
+        "email": "pw.37205@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37206": {
+    "public_works": [
+      {
+        "name": "East Nashville Public Works",
+        "email": "pw.37206@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37206@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37207": {
+    "animal_control": [
+      {
+        "name": "Animal Control",
+        "email": "animal.37207@nashville.gov",
+        "type": "animal_control",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "public_works": [
+      {
+        "name": "North Nashville Public Works",
+        "email": "pw.37207@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37208": {
+    "police": [
+      {
+        "name": "Police Department",
+        "email": "police.37208@nashville.gov",
+        "type": "police",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "public_works": [
+      {
+        "name": "Germantown Public Works",
+        "email": "pw.37208@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37209": {
+    "transportation": [
+      {
+        "name": "Transportation Department",
+        "email": "transport.37209@nashville.gov",
+        "type": "transportation",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "public_works": [
+      {
+        "name": "Sylvan Park Public Works",
+        "email": "pw.37209@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37210": {
+    "code_enforcement": [
+      {
+        "name": "Code Enforcement",
+        "email": "code.37210@nashville.gov",
+        "type": "code_enforcement",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37210@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37211": {
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37211@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "public_works": [
+      {
+        "name": "Cane Ridge Public Works",
+        "email": "pw.37211@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37212": {
+    "public_works": [
+      {
+        "name": "Vanderbilt Public Works",
+        "email": "pw.37212@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "police": [
+      {
+        "name": "Police Department",
+        "email": "police.37212@nashville.gov",
+        "type": "police",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37214": {
+    "public_works": [
+      {
+        "name": "Donelson Public Works",
+        "email": "pw.37214@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37214@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37215": {
+    "public_works": [
+      {
+        "name": "Green Hills Public Works",
+        "email": "pw.37215@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "environment": [
+      {
+        "name": "Environmental Department",
+        "email": "env.37215@nashville.gov",
+        "type": "environment",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37216": {
+    "public_works": [
+      {
+        "name": "Inglewood Public Works",
+        "email": "pw.37216@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37216@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37217": {
+    "public_works": [
+      {
+        "name": "Priest Lake Public Works",
+        "email": "pw.37217@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37217@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37218": {
+    "public_works": [
+      {
+        "name": "Bordeaux Public Works",
+        "email": "pw.37218@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "police": [
+      {
+        "name": "Police Department",
+        "email": "police.37218@nashville.gov",
+        "type": "police",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37219": {
+    "public_works": [
+      {
+        "name": "Downtown Public Works",
+        "email": "pw.37219@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37219@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37220": {
+    "public_works": [
+      {
+        "name": "Oak Hill Public Works",
+        "email": "pw.37220@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37220@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37221": {
+    "public_works": [
+      {
+        "name": "Bellevue Public Works",
+        "email": "pw.37221@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "environment": [
+      {
+        "name": "Environmental Department",
+        "email": "env.37221@nashville.gov",
+        "type": "environment",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37222": {
+    "public_works": [
+      {
+        "name": "Nashville Public Works",
+        "email": "pw.37222@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37222@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37224": {
+    "public_works": [
+      {
+        "name": "Nashville Public Works",
+        "email": "pw.37224@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "general": [
+      {
+        "name": "PO Box Services",
+        "email": "po.37224@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37227": {
+    "public_works": [
+      {
+        "name": "Nashville Public Works",
+        "email": "pw.37227@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37227@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37228": {
+    "public_works": [
+      {
+        "name": "Nashville Public Works",
+        "email": "pw.37228@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "general": [
+      {
+        "name": "PO Box Services",
+        "email": "po.37228@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37229": {
+    "public_works": [
+      {
+        "name": "Nashville Public Works",
+        "email": "pw.37229@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "general": [
+      {
+        "name": "PO Box Services",
+        "email": "po.37229@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37230": {
+    "general": [
+      {
+        "name": "Unique Services",
+        "email": "unique.37230@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37230@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37232": {
+    "general": [
+      {
+        "name": "Vanderbilt Medical Services",
+        "email": "vanderbilt.37232@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "public_works": [
+      {
+        "name": "Public Works Department",
+        "email": "pw.37232@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37234": {
+    "general": [
+      {
+        "name": "Unique Services",
+        "email": "unique.37234@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37234@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37235": {
+    "general": [
+      {
+        "name": "Unique Services",
+        "email": "unique.37235@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "public_works": [
+      {
+        "name": "Public Works Department",
+        "email": "pw.37235@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37236": {
+    "general": [
+      {
+        "name": "Unique Services",
+        "email": "unique.37236@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37236@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37238": {
+    "general": [
+      {
+        "name": "Unique Services",
+        "email": "unique.37238@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "sanitation": [
+      {
+        "name": "Sanitation Department",
+        "email": "sanitation.37238@nashville.gov",
+        "type": "sanitation",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37240": {
+    "general": [
+      {
+        "name": "Unique Services",
+        "email": "unique.37240@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "public_works": [
+      {
+        "name": "Public Works Department",
+        "email": "pw.37240@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37242": {
+    "general": [
+      {
+        "name": "Unique Services",
+        "email": "unique.37242@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "fire": [
+      {
+        "name": "Nashville Fire Department",
+        "email": "fire.37242@nashville.gov",
+        "type": "fire",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "37250": {
+    "public_works": [
+      {
+        "name": "Nashville Public Works",
+        "email": "pw.37250@nashville.gov",
+        "type": "public_works",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "general": [
+      {
+        "name": "PO Box Services",
+        "email": "po.37250@nashville.gov",
+        "type": "general",
+        "timezone": "America/Chicago"
+      }
+    ]
+  },
+  "default": {
+    "general": [
+      {
+        "name": "City Department",
+        "email": "chrishabh1000@gmail.com",
+        "type": "general",
+        "timezone": "UTC"
+      }
+    ]
+  }
+}
