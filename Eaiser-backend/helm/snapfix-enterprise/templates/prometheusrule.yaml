@@ -1,0 +1,528 @@
+{{/*
+🚨 SnapFix Enterprise - Advanced Prometheus Alerting Rules
+📊 Comprehensive Monitoring & Alerting for 100,000+ Concurrent Users
+⚡ Real-time Performance & Health Monitoring
+*/}}
+{{- if and .Values.monitoring.prometheus.enabled .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus-rule
+    app.kubernetes.io/part-of: snapfix-enterprise
+    monitoring.coreos.com/type: alerting-rules
+  annotations:
+    # PrometheusRule metadata
+    monitoring.coreos.com/version: "v1"
+    monitoring.coreos.com/component: "alerting-rules"
+    monitoring.coreos.com/environment: "{{ .Values.global.environment }}"
+    # Alert routing annotations
+    alerting.coreos.com/routing-key: "snapfix-enterprise"
+    alerting.coreos.com/escalation-policy: "{{ .Values.monitoring.alerting.escalationPolicy | default "standard" }}"
+spec:
+  groups:
+    # ========================================
+    # APPLICATION HEALTH & AVAILABILITY
+    # ========================================
+    - name: snapfix-enterprise.application.health
+      interval: {{ .Values.monitoring.prometheusRule.evaluationInterval | default "30s" }}
+      rules:
+        # Application Pod Availability
+        - alert: SnapFixApplicationDown
+          expr: |
+            (
+              sum(up{job=~".*snapfix-enterprise.*", component="web"}) by (namespace, job)
+              /
+              sum(up{job=~".*snapfix-enterprise.*", component="web"}) by (namespace, job)
+            ) < {{ .Values.monitoring.alerting.thresholds.applicationAvailability | default "0.8" }}
+          for: {{ .Values.monitoring.alerting.durations.applicationDown | default "2m" }}
+          labels:
+            severity: critical
+            component: application
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Enterprise application is down or degraded"
+            description: "Less than {{ .Values.monitoring.alerting.thresholds.applicationAvailability | default "80" }}% of SnapFix Enterprise application pods are available in namespace {{ "{{" }} $labels.namespace {{ "}}" }}. Current availability: {{ "{{" }} $value | humanizePercentage {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/application-down"
+            dashboard_url: "{{ .Values.monitoring.grafana.url }}/d/snapfix-overview"
+        
+        # High Response Time
+        - alert: SnapFixHighResponseTime
+          expr: |
+            (
+              histogram_quantile(0.95, 
+                sum(rate(http_request_duration_seconds_bucket{job=~".*snapfix-enterprise.*"}[5m])) by (le, namespace, job)
+              )
+            ) > {{ .Values.monitoring.alerting.thresholds.responseTime | default "2" }}
+          for: {{ .Values.monitoring.alerting.durations.highResponseTime | default "5m" }}
+          labels:
+            severity: warning
+            component: application
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Enterprise high response time detected"
+            description: "95th percentile response time is {{ "{{" }} $value {{ "}}" }}s, which is above the threshold of {{ .Values.monitoring.alerting.thresholds.responseTime | default "2" }}s."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/high-response-time"
+        
+        # High Error Rate
+        - alert: SnapFixHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{job=~".*snapfix-enterprise.*", status=~"5.."}[5m])) by (namespace, job)
+              /
+              sum(rate(http_requests_total{job=~".*snapfix-enterprise.*"}[5m])) by (namespace, job)
+            ) > {{ .Values.monitoring.alerting.thresholds.errorRate | default "0.05" }}
+          for: {{ .Values.monitoring.alerting.durations.highErrorRate | default "3m" }}
+          labels:
+            severity: critical
+            component: application
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Enterprise high error rate detected"
+            description: "Error rate is {{ "{{" }} $value | humanizePercentage {{ "}}" }}, which is above the threshold of {{ .Values.monitoring.alerting.thresholds.errorRate | default "5" }}%."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/high-error-rate"
+        
+        # Low Throughput
+        - alert: SnapFixLowThroughput
+          expr: |
+            (
+              sum(rate(http_requests_total{job=~".*snapfix-enterprise.*"}[5m])) by (namespace, job)
+            ) < {{ .Values.monitoring.alerting.thresholds.lowThroughput | default "100" }}
+          for: {{ .Values.monitoring.alerting.durations.lowThroughput | default "10m" }}
+          labels:
+            severity: warning
+            component: application
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Enterprise low throughput detected"
+            description: "Request throughput is {{ "{{" }} $value {{ "}}" }} req/s, which is below the expected threshold of {{ .Values.monitoring.alerting.thresholds.lowThroughput | default "100" }} req/s."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/low-throughput"
+    
+    # ========================================
+    # RESOURCE UTILIZATION
+    # ========================================
+    - name: snapfix-enterprise.resources
+      interval: {{ .Values.monitoring.prometheusRule.evaluationInterval | default "30s" }}
+      rules:
+        # High CPU Usage
+        - alert: SnapFixHighCPUUsage
+          expr: |
+            (
+              sum(rate(container_cpu_usage_seconds_total{pod=~".*snapfix-enterprise.*", container!="POD", container!=""}[5m])) by (namespace, pod, container)
+              /
+              sum(container_spec_cpu_quota{pod=~".*snapfix-enterprise.*", container!="POD", container!=""}/container_spec_cpu_period{pod=~".*snapfix-enterprise.*", container!="POD", container!=""}) by (namespace, pod, container)
+            ) > {{ .Values.monitoring.alerting.thresholds.cpuUsage | default "0.8" }}
+          for: {{ .Values.monitoring.alerting.durations.highCPU | default "5m" }}
+          labels:
+            severity: warning
+            component: resources
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Enterprise high CPU usage"
+            description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} container {{ "{{" }} $labels.container {{ "}}" }} CPU usage is {{ "{{" }} $value | humanizePercentage {{ "}}" }}, which is above {{ .Values.monitoring.alerting.thresholds.cpuUsage | default "80" }}%."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/high-cpu-usage"
+        
+        # High Memory Usage
+        - alert: SnapFixHighMemoryUsage
+          expr: |
+            (
+              sum(container_memory_working_set_bytes{pod=~".*snapfix-enterprise.*", container!="POD", container!=""}) by (namespace, pod, container)
+              /
+              sum(container_spec_memory_limit_bytes{pod=~".*snapfix-enterprise.*", container!="POD", container!=""}) by (namespace, pod, container)
+            ) > {{ .Values.monitoring.alerting.thresholds.memoryUsage | default "0.85" }}
+          for: {{ .Values.monitoring.alerting.durations.highMemory | default "5m" }}
+          labels:
+            severity: warning
+            component: resources
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Enterprise high memory usage"
+            description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} container {{ "{{" }} $labels.container {{ "}}" }} memory usage is {{ "{{" }} $value | humanizePercentage {{ "}}" }}, which is above {{ .Values.monitoring.alerting.thresholds.memoryUsage | default "85" }}%."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/high-memory-usage"
+        
+        # Pod Restart Rate
+        - alert: SnapFixHighPodRestartRate
+          expr: |
+            (
+              increase(kube_pod_container_status_restarts_total{pod=~".*snapfix-enterprise.*"}[1h])
+            ) > {{ .Values.monitoring.alerting.thresholds.podRestarts | default "5" }}
+          for: {{ .Values.monitoring.alerting.durations.podRestarts | default "0m" }}
+          labels:
+            severity: warning
+            component: resources
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Enterprise pod restarting frequently"
+            description: "Pod {{ "{{" }} $labels.pod {{ "}}" }} has restarted {{ "{{" }} $value {{ "}}" }} times in the last hour."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/pod-restarts"
+    
+    # ========================================
+    # DATABASE MONITORING
+    # ========================================
+    {{- if .Values.postgresql.enabled }}
+    - name: snapfix-enterprise.postgresql
+      interval: {{ .Values.monitoring.prometheusRule.evaluationInterval | default "30s" }}
+      rules:
+        # PostgreSQL Connection Pool Exhaustion
+        - alert: SnapFixPostgreSQLConnectionPoolHigh
+          expr: |
+            (
+              sum(pg_stat_database_numbackends{datname!~"template.*|postgres"}) by (instance, datname)
+              /
+              sum(pg_settings_max_connections) by (instance)
+            ) > {{ .Values.monitoring.alerting.thresholds.dbConnections | default "0.8" }}
+          for: {{ .Values.monitoring.alerting.durations.dbConnections | default "2m" }}
+          labels:
+            severity: warning
+            component: database
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix PostgreSQL connection pool usage high"
+            description: "PostgreSQL connection pool usage is {{ "{{" }} $value | humanizePercentage {{ "}}" }} on instance {{ "{{" }} $labels.instance {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/postgresql-connections"
+        
+        # PostgreSQL Slow Queries
+        - alert: SnapFixPostgreSQLSlowQueries
+          expr: |
+            (
+              rate(pg_stat_database_tup_returned{datname!~"template.*|postgres"}[5m])
+              /
+              rate(pg_stat_database_tup_fetched{datname!~"template.*|postgres"}[5m])
+            ) < {{ .Values.monitoring.alerting.thresholds.dbQueryEfficiency | default "0.1" }}
+          for: {{ .Values.monitoring.alerting.durations.dbSlowQueries | default "5m" }}
+          labels:
+            severity: warning
+            component: database
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix PostgreSQL query efficiency low"
+            description: "PostgreSQL query efficiency is {{ "{{" }} $value | humanizePercentage {{ "}}" }} on database {{ "{{" }} $labels.datname {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/postgresql-slow-queries"
+        
+        # PostgreSQL Replication Lag
+        - alert: SnapFixPostgreSQLReplicationLag
+          expr: |
+            (
+              pg_replication_lag_seconds
+            ) > {{ .Values.monitoring.alerting.thresholds.dbReplicationLag | default "30" }}
+          for: {{ .Values.monitoring.alerting.durations.dbReplicationLag | default "2m" }}
+          labels:
+            severity: critical
+            component: database
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix PostgreSQL replication lag high"
+            description: "PostgreSQL replication lag is {{ "{{" }} $value {{ "}}" }}s on replica {{ "{{" }} $labels.instance {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/postgresql-replication-lag"
+    {{- end }}
+    
+    # ========================================
+    # REDIS MONITORING
+    # ========================================
+    {{- if .Values.redis.enabled }}
+    - name: snapfix-enterprise.redis
+      interval: {{ .Values.monitoring.prometheusRule.evaluationInterval | default "30s" }}
+      rules:
+        # Redis Memory Usage
+        - alert: SnapFixRedisHighMemoryUsage
+          expr: |
+            (
+              redis_memory_used_bytes
+              /
+              redis_memory_max_bytes
+            ) > {{ .Values.monitoring.alerting.thresholds.redisMemory | default "0.85" }}
+          for: {{ .Values.monitoring.alerting.durations.redisMemory | default "5m" }}
+          labels:
+            severity: warning
+            component: cache
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Redis high memory usage"
+            description: "Redis memory usage is {{ "{{" }} $value | humanizePercentage {{ "}}" }} on instance {{ "{{" }} $labels.instance {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/redis-memory"
+        
+        # Redis Connection Count
+        - alert: SnapFixRedisHighConnections
+          expr: |
+            (
+              redis_connected_clients
+            ) > {{ .Values.monitoring.alerting.thresholds.redisConnections | default "1000" }}
+          for: {{ .Values.monitoring.alerting.durations.redisConnections | default "5m" }}
+          labels:
+            severity: warning
+            component: cache
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Redis high connection count"
+            description: "Redis has {{ "{{" }} $value {{ "}}" }} connected clients on instance {{ "{{" }} $labels.instance {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/redis-connections"
+        
+        # Redis Hit Rate
+        - alert: SnapFixRedisLowHitRate
+          expr: |
+            (
+              rate(redis_keyspace_hits_total[5m])
+              /
+              (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m]))
+            ) < {{ .Values.monitoring.alerting.thresholds.redisHitRate | default "0.8" }}
+          for: {{ .Values.monitoring.alerting.durations.redisHitRate | default "10m" }}
+          labels:
+            severity: warning
+            component: cache
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Redis low hit rate"
+            description: "Redis hit rate is {{ "{{" }} $value | humanizePercentage {{ "}}" }} on instance {{ "{{" }} $labels.instance {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/redis-hit-rate"
+    {{- end }}
+    
+    # ========================================
+    # CELERY MONITORING
+    # ========================================
+    {{- if .Values.celery.worker.enabled }}
+    - name: snapfix-enterprise.celery
+      interval: {{ .Values.monitoring.prometheusRule.evaluationInterval | default "30s" }}
+      rules:
+        # Celery Queue Length
+        - alert: SnapFixCeleryQueueBacklog
+          expr: |
+            (
+              sum(celery_queue_length) by (queue)
+            ) > {{ .Values.monitoring.alerting.thresholds.celeryQueueLength | default "1000" }}
+          for: {{ .Values.monitoring.alerting.durations.celeryQueue | default "5m" }}
+          labels:
+            severity: warning
+            component: queue
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Celery queue backlog detected"
+            description: "Celery queue {{ "{{" }} $labels.queue {{ "}}" }} has {{ "{{" }} $value {{ "}}" }} pending tasks."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/celery-queue-backlog"
+        
+        # Celery Worker Availability
+        - alert: SnapFixCeleryWorkersDown
+          expr: |
+            (
+              sum(celery_worker_up) by (namespace)
+              /
+              sum(celery_worker_up) by (namespace)
+            ) < {{ .Values.monitoring.alerting.thresholds.celeryWorkerAvailability | default "0.7" }}
+          for: {{ .Values.monitoring.alerting.durations.celeryWorkers | default "3m" }}
+          labels:
+            severity: critical
+            component: queue
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Celery workers unavailable"
+            description: "Only {{ "{{" }} $value | humanizePercentage {{ "}}" }} of Celery workers are available."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/celery-workers-down"
+        
+        # Celery Task Failure Rate
+        - alert: SnapFixCeleryHighFailureRate
+          expr: |
+            (
+              sum(rate(celery_task_failed_total[5m])) by (namespace)
+              /
+              sum(rate(celery_task_total[5m])) by (namespace)
+            ) > {{ .Values.monitoring.alerting.thresholds.celeryFailureRate | default "0.1" }}
+          for: {{ .Values.monitoring.alerting.durations.celeryFailures | default "5m" }}
+          labels:
+            severity: warning
+            component: queue
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Celery high task failure rate"
+            description: "Celery task failure rate is {{ "{{" }} $value | humanizePercentage {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/celery-task-failures"
+    {{- end }}
+    
+    # ========================================
+    # NETWORK & INGRESS MONITORING
+    # ========================================
+    {{- if .Values.ingress.enabled }}
+    - name: snapfix-enterprise.ingress
+      interval: {{ .Values.monitoring.prometheusRule.evaluationInterval | default "30s" }}
+      rules:
+        # Ingress High Latency
+        - alert: SnapFixIngressHighLatency
+          expr: |
+            (
+              histogram_quantile(0.95, 
+                sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress=~".*snapfix-enterprise.*"}[5m])) by (le, ingress)
+              )
+            ) > {{ .Values.monitoring.alerting.thresholds.ingressLatency | default "2" }}
+          for: {{ .Values.monitoring.alerting.durations.ingressLatency | default "5m" }}
+          labels:
+            severity: warning
+            component: ingress
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Ingress high latency detected"
+            description: "95th percentile ingress latency is {{ "{{" }} $value {{ "}}" }}s for ingress {{ "{{" }} $labels.ingress {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/ingress-latency"
+        
+        # Ingress Error Rate
+        - alert: SnapFixIngressHighErrorRate
+          expr: |
+            (
+              sum(rate(nginx_ingress_controller_requests{ingress=~".*snapfix-enterprise.*", status=~"5.."}[5m])) by (ingress)
+              /
+              sum(rate(nginx_ingress_controller_requests{ingress=~".*snapfix-enterprise.*"}[5m])) by (ingress)
+            ) > {{ .Values.monitoring.alerting.thresholds.ingressErrorRate | default "0.05" }}
+          for: {{ .Values.monitoring.alerting.durations.ingressErrors | default "3m" }}
+          labels:
+            severity: critical
+            component: ingress
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Ingress high error rate"
+            description: "Ingress error rate is {{ "{{" }} $value | humanizePercentage {{ "}}" }} for ingress {{ "{{" }} $labels.ingress {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/ingress-errors"
+    {{- end }}
+    
+    # ========================================
+    # KUBERNETES CLUSTER MONITORING
+    # ========================================
+    - name: snapfix-enterprise.kubernetes
+      interval: {{ .Values.monitoring.prometheusRule.evaluationInterval | default "30s" }}
+      rules:
+        # Node Resource Pressure
+        - alert: SnapFixNodeResourcePressure
+          expr: |
+            (
+              kube_node_status_condition{condition="MemoryPressure", status="true"}
+              or
+              kube_node_status_condition{condition="DiskPressure", status="true"}
+              or
+              kube_node_status_condition{condition="PIDPressure", status="true"}
+            )
+          for: {{ .Values.monitoring.alerting.durations.nodeResourcePressure | default "5m" }}
+          labels:
+            severity: warning
+            component: kubernetes
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix Kubernetes node resource pressure"
+            description: "Node {{ "{{" }} $labels.node {{ "}}" }} is experiencing {{ "{{" }} $labels.condition {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/node-resource-pressure"
+        
+        # Pod Pending
+        - alert: SnapFixPodsPending
+          expr: |
+            (
+              sum(kube_pod_status_phase{phase="Pending", namespace="{{ .Release.Namespace }}"}) by (namespace)
+            ) > {{ .Values.monitoring.alerting.thresholds.pendingPods | default "5" }}
+          for: {{ .Values.monitoring.alerting.durations.pendingPods | default "10m" }}
+          labels:
+            severity: warning
+            component: kubernetes
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix pods stuck in pending state"
+            description: "{{ "{{" }} $value {{ "}}" }} pods are stuck in pending state in namespace {{ "{{" }} $labels.namespace {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/pods-pending"
+        
+        # PVC Usage
+        - alert: SnapFixPVCHighUsage
+          expr: |
+            (
+              (
+                kubelet_volume_stats_used_bytes{namespace="{{ .Release.Namespace }}"}
+                /
+                kubelet_volume_stats_capacity_bytes{namespace="{{ .Release.Namespace }}"}
+              ) * 100
+            ) > {{ .Values.monitoring.alerting.thresholds.pvcUsage | default "85" }}
+          for: {{ .Values.monitoring.alerting.durations.pvcUsage | default "5m" }}
+          labels:
+            severity: warning
+            component: storage
+            environment: {{ .Values.global.environment }}
+            team: platform
+          annotations:
+            summary: "SnapFix PVC usage high"
+            description: "PVC {{ "{{" }} $labels.persistentvolumeclaim {{ "}}" }} usage is {{ "{{" }} $value {{ "}}" }}% in namespace {{ "{{" }} $labels.namespace {{ "}}" }}."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/pvc-usage"
+    
+    # ========================================
+    # BUSINESS METRICS
+    # ========================================
+    - name: snapfix-enterprise.business
+      interval: {{ .Values.monitoring.prometheusRule.evaluationInterval | default "30s" }}
+      rules:
+        # User Registration Rate Drop
+        - alert: SnapFixLowRegistrationRate
+          expr: |
+            (
+              sum(rate(snapfix_user_registrations_total[1h])) by (namespace)
+            ) < {{ .Values.monitoring.alerting.thresholds.registrationRate | default "10" }}
+          for: {{ .Values.monitoring.alerting.durations.lowRegistrationRate | default "30m" }}
+          labels:
+            severity: warning
+            component: business
+            environment: {{ .Values.global.environment }}
+            team: product
+          annotations:
+            summary: "SnapFix low user registration rate"
+            description: "User registration rate is {{ "{{" }} $value {{ "}}" }} registrations/hour, below expected threshold."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/low-registration-rate"
+        
+        # Active User Count Drop
+        - alert: SnapFixLowActiveUsers
+          expr: |
+            (
+              sum(snapfix_active_users_current) by (namespace)
+            ) < {{ .Values.monitoring.alerting.thresholds.activeUsers | default "1000" }}
+          for: {{ .Values.monitoring.alerting.durations.lowActiveUsers | default "15m" }}
+          labels:
+            severity: warning
+            component: business
+            environment: {{ .Values.global.environment }}
+            team: product
+          annotations:
+            summary: "SnapFix low active user count"
+            description: "Current active user count is {{ "{{" }} $value {{ "}}" }}, below expected threshold."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/low-active-users"
+        
+        # Payment Processing Issues
+        - alert: SnapFixPaymentFailures
+          expr: |
+            (
+              sum(rate(snapfix_payment_failures_total[5m])) by (namespace)
+              /
+              sum(rate(snapfix_payment_attempts_total[5m])) by (namespace)
+            ) > {{ .Values.monitoring.alerting.thresholds.paymentFailureRate | default "0.05" }}
+          for: {{ .Values.monitoring.alerting.durations.paymentFailures | default "5m" }}
+          labels:
+            severity: critical
+            component: business
+            environment: {{ .Values.global.environment }}
+            team: product
+          annotations:
+            summary: "SnapFix high payment failure rate"
+            description: "Payment failure rate is {{ "{{" }} $value | humanizePercentage {{ "}}" }}, above acceptable threshold."
+            runbook_url: "{{ .Values.monitoring.alerting.runbookUrl }}/payment-failures"
+
+{{- end }}

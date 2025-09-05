@@ -1,0 +1,635 @@
+{{/*
+📈 Auto-Scaling Configuration for SnapFix Enterprise
+
+This template creates auto-scaling configurations for:
+- Horizontal Pod Autoscaler (HPA) for dynamic scaling
+- Vertical Pod Autoscaler (VPA) for resource optimization
+- Custom metrics scaling with Prometheus
+- KEDA (Kubernetes Event-driven Autoscaling) for queue-based scaling
+- Cluster Autoscaler configuration
+- Resource quotas and limits
+*/}}
+
+{{- if .Values.autoscaling.enabled }}
+{{/*
+📊 Horizontal Pod Autoscaler for Main Application
+*/}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-hpa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "snapfix-enterprise.fullname" . }}
+  
+  minReplicas: {{ .Values.autoscaling.hpa.minReplicas | default 3 }}
+  maxReplicas: {{ .Values.autoscaling.hpa.maxReplicas | default 50 }}
+  
+  metrics:
+    # CPU utilization scaling
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.hpa.targetCPUUtilizationPercentage | default 70 }}
+    
+    # Memory utilization scaling
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.hpa.targetMemoryUtilizationPercentage | default 80 }}
+    
+    {{- if .Values.monitoring.prometheus.enabled }}
+    # Custom metrics from Prometheus
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.hpa.targetRequestsPerSecond | default "100" }}
+    
+    # Response time based scaling
+    - type: Pods
+      pods:
+        metric:
+          name: http_request_duration_seconds
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.hpa.targetResponseTime | default "0.5" }}
+    
+    # Queue depth scaling
+    - type: Pods
+      pods:
+        metric:
+          name: rabbitmq_queue_messages
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.hpa.targetQueueDepth | default "100" }}
+    {{- end }}
+  
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.hpa.scaleDown.stabilizationWindowSeconds | default 300 }}
+      policies:
+        - type: Percent
+          value: {{ .Values.autoscaling.hpa.scaleDown.percentPolicy | default 10 }}
+          periodSeconds: {{ .Values.autoscaling.hpa.scaleDown.periodSeconds | default 60 }}
+        - type: Pods
+          value: {{ .Values.autoscaling.hpa.scaleDown.podsPolicy | default 2 }}
+          periodSeconds: {{ .Values.autoscaling.hpa.scaleDown.periodSeconds | default 60 }}
+      selectPolicy: Min
+    
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.hpa.scaleUp.stabilizationWindowSeconds | default 60 }}
+      policies:
+        - type: Percent
+          value: {{ .Values.autoscaling.hpa.scaleUp.percentPolicy | default 50 }}
+          periodSeconds: {{ .Values.autoscaling.hpa.scaleUp.periodSeconds | default 30 }}
+        - type: Pods
+          value: {{ .Values.autoscaling.hpa.scaleUp.podsPolicy | default 5 }}
+          periodSeconds: {{ .Values.autoscaling.hpa.scaleUp.periodSeconds | default 30 }}
+      selectPolicy: Max
+
+---
+{{/*
+📊 HPA for Celery Workers
+*/}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-workers-hpa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "snapfix-enterprise.fullname" . }}-celery-workers
+  
+  minReplicas: {{ .Values.autoscaling.celery.minReplicas | default 2 }}
+  maxReplicas: {{ .Values.autoscaling.celery.maxReplicas | default 20 }}
+  
+  metrics:
+    # CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.celery.targetCPUUtilizationPercentage | default 75 }}
+    
+    # Memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.celery.targetMemoryUtilizationPercentage | default 85 }}
+    
+    {{- if .Values.monitoring.prometheus.enabled }}
+    # Queue-based scaling
+    - type: External
+      external:
+        metric:
+          name: rabbitmq_queue_messages_ready
+          selector:
+            matchLabels:
+              queue: "celery"
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.celery.targetQueueMessages | default "50" }}
+    {{- end }}
+  
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 20
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+      selectPolicy: Max
+
+---
+{{/*
+📊 HPA for Static Assets (CDN)
+*/}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-static-assets-hpa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "snapfix-enterprise.fullname" . }}-static-assets
+  
+  minReplicas: {{ .Values.autoscaling.staticAssets.minReplicas | default 2 }}
+  maxReplicas: {{ .Values.autoscaling.staticAssets.maxReplicas | default 10 }}
+  
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.staticAssets.targetCPUUtilizationPercentage | default 60 }}
+    
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - type: Pods
+      pods:
+        metric:
+          name: nginx_http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.staticAssets.targetRequestsPerSecond | default "500" }}
+    {{- end }}
+
+---
+{{/*
+📈 Vertical Pod Autoscaler for Main Application
+*/}}
+{{- if .Values.autoscaling.vpa.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-vpa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "snapfix-enterprise.fullname" . }}
+  
+  updatePolicy:
+    updateMode: {{ .Values.autoscaling.vpa.updateMode | default "Auto" }}  # Auto, Recreation, Initial, Off
+  
+  resourcePolicy:
+    containerPolicies:
+      - containerName: {{ include "snapfix-enterprise.name" . }}
+        minAllowed:
+          cpu: {{ .Values.autoscaling.vpa.minAllowed.cpu | default "100m" }}
+          memory: {{ .Values.autoscaling.vpa.minAllowed.memory | default "128Mi" }}
+        maxAllowed:
+          cpu: {{ .Values.autoscaling.vpa.maxAllowed.cpu | default "4" }}
+          memory: {{ .Values.autoscaling.vpa.maxAllowed.memory | default "8Gi" }}
+        controlledResources: ["cpu", "memory"]
+        controlledValues: RequestsAndLimits
+{{- end }}
+
+---
+{{/*
+🎯 KEDA ScaledObject for Queue-based Scaling
+*/}}
+{{- if .Values.autoscaling.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-keda-celery
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  scaleTargetRef:
+    name: {{ include "snapfix-enterprise.fullname" . }}-celery-workers
+  
+  pollingInterval: {{ .Values.autoscaling.keda.pollingInterval | default 30 }}
+  cooldownPeriod: {{ .Values.autoscaling.keda.cooldownPeriod | default 300 }}
+  idleReplicaCount: {{ .Values.autoscaling.keda.idleReplicaCount | default 0 }}
+  minReplicaCount: {{ .Values.autoscaling.keda.minReplicaCount | default 1 }}
+  maxReplicaCount: {{ .Values.autoscaling.keda.maxReplicaCount | default 30 }}
+  
+  triggers:
+    # RabbitMQ queue trigger
+    - type: rabbitmq
+      metadata:
+        protocol: amqp
+        host: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq:5672
+        vhostName: /
+        queueName: celery
+        queueLength: {{ .Values.autoscaling.keda.queueLength | default "10" }}
+      authenticationRef:
+        name: {{ include "snapfix-enterprise.fullname" . }}-keda-rabbitmq-auth
+    
+    # High priority queue trigger
+    - type: rabbitmq
+      metadata:
+        protocol: amqp
+        host: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq:5672
+        vhostName: /
+        queueName: celery.high_priority
+        queueLength: {{ .Values.autoscaling.keda.highPriorityQueueLength | default "5" }}
+      authenticationRef:
+        name: {{ include "snapfix-enterprise.fullname" . }}-keda-rabbitmq-auth
+    
+    {{- if .Values.monitoring.prometheus.enabled }}
+    # Prometheus metrics trigger
+    - type: prometheus
+      metadata:
+        serverAddress: http://{{ include "snapfix-enterprise.fullname" . }}-prometheus:9090
+        metricName: http_requests_per_second
+        threshold: {{ .Values.autoscaling.keda.prometheusThreshold | default "100" }}
+        query: sum(rate(http_requests_total[2m]))
+    {{- end }}
+  
+  advanced:
+    restoreToOriginalReplicaCount: true
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 10
+              periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 4
+              periodSeconds: 15
+          selectPolicy: Max
+
+---
+{{/*
+🔐 KEDA TriggerAuthentication for RabbitMQ
+*/}}
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-keda-rabbitmq-auth
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  secretTargetRef:
+    - parameter: host
+      name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-secret
+      key: rabbitmq-host
+    - parameter: username
+      name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-secret
+      key: rabbitmq-username
+    - parameter: password
+      name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-secret
+      key: rabbitmq-password
+{{- end }}
+
+---
+{{/*
+📊 Custom Metrics API Configuration
+*/}}
+{{- if .Values.autoscaling.customMetrics.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-custom-metrics-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  # Prometheus adapter configuration
+  config.yaml: |
+    rules:
+      # HTTP request rate
+      - seriesQuery: 'http_requests_total{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^http_requests_total"
+          as: "http_requests_per_second"
+        metricsQuery: 'sum(rate(<<.Series>>{<<.LabelMatchers>>}[2m])) by (<<.GroupBy>>)'
+      
+      # HTTP request duration
+      - seriesQuery: 'http_request_duration_seconds{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^http_request_duration_seconds"
+          as: "http_request_duration_seconds"
+        metricsQuery: 'histogram_quantile(0.95, sum(rate(<<.Series>>_bucket{<<.LabelMatchers>>}[2m])) by (<<.GroupBy>>, le))'
+      
+      # RabbitMQ queue messages
+      - seriesQuery: 'rabbitmq_queue_messages{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^rabbitmq_queue_messages"
+          as: "rabbitmq_queue_messages"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+      
+      # Database connection pool usage
+      - seriesQuery: 'db_connections_active{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^db_connections_active"
+          as: "db_connections_active"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+      
+      # Redis memory usage
+      - seriesQuery: 'redis_memory_used_bytes{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^redis_memory_used_bytes"
+          as: "redis_memory_used_bytes"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+      
+      # Nginx requests per second
+      - seriesQuery: 'nginx_http_requests_total{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^nginx_http_requests_total"
+          as: "nginx_http_requests_per_second"
+        metricsQuery: 'sum(rate(<<.Series>>{<<.LabelMatchers>>}[2m])) by (<<.GroupBy>>)'
+{{- end }}
+
+---
+{{/*
+🎯 Resource Quotas for Namespace
+*/}}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-resource-quota
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: {{ .Values.autoscaling.resourceQuota.requestsCpu | default "50" }}
+    requests.memory: {{ .Values.autoscaling.resourceQuota.requestsMemory | default "100Gi" }}
+    limits.cpu: {{ .Values.autoscaling.resourceQuota.limitsCpu | default "100" }}
+    limits.memory: {{ .Values.autoscaling.resourceQuota.limitsMemory | default "200Gi" }}
+    
+    # Storage resources
+    requests.storage: {{ .Values.autoscaling.resourceQuota.requestsStorage | default "1Ti" }}
+    
+    # Object counts
+    count/pods: {{ .Values.autoscaling.resourceQuota.countPods | default "200" }}
+    count/services: {{ .Values.autoscaling.resourceQuota.countServices | default "50" }}
+    count/secrets: {{ .Values.autoscaling.resourceQuota.countSecrets | default "100" }}
+    count/configmaps: {{ .Values.autoscaling.resourceQuota.countConfigmaps | default "100" }}
+    count/persistentvolumeclaims: {{ .Values.autoscaling.resourceQuota.countPvcs | default "50" }}
+    
+    # Network resources
+    count/services.loadbalancers: {{ .Values.autoscaling.resourceQuota.countLoadBalancers | default "5" }}
+    count/services.nodeports: {{ .Values.autoscaling.resourceQuota.countNodePorts | default "10" }}
+
+---
+{{/*
+📏 Limit Ranges for Resource Constraints
+*/}}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-limit-range
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  limits:
+    # Container limits
+    - type: Container
+      default:
+        cpu: {{ .Values.autoscaling.limitRange.container.defaultCpu | default "500m" }}
+        memory: {{ .Values.autoscaling.limitRange.container.defaultMemory | default "512Mi" }}
+      defaultRequest:
+        cpu: {{ .Values.autoscaling.limitRange.container.defaultRequestCpu | default "100m" }}
+        memory: {{ .Values.autoscaling.limitRange.container.defaultRequestMemory | default "128Mi" }}
+      max:
+        cpu: {{ .Values.autoscaling.limitRange.container.maxCpu | default "8" }}
+        memory: {{ .Values.autoscaling.limitRange.container.maxMemory | default "16Gi" }}
+      min:
+        cpu: {{ .Values.autoscaling.limitRange.container.minCpu | default "50m" }}
+        memory: {{ .Values.autoscaling.limitRange.container.minMemory | default "64Mi" }}
+    
+    # Pod limits
+    - type: Pod
+      max:
+        cpu: {{ .Values.autoscaling.limitRange.pod.maxCpu | default "16" }}
+        memory: {{ .Values.autoscaling.limitRange.pod.maxMemory | default "32Gi" }}
+      min:
+        cpu: {{ .Values.autoscaling.limitRange.pod.minCpu | default "100m" }}
+        memory: {{ .Values.autoscaling.limitRange.pod.minMemory | default "128Mi" }}
+    
+    # PVC limits
+    - type: PersistentVolumeClaim
+      max:
+        storage: {{ .Values.autoscaling.limitRange.pvc.maxStorage | default "1Ti" }}
+      min:
+        storage: {{ .Values.autoscaling.limitRange.pvc.minStorage | default "1Gi" }}
+
+---
+{{/*
+🔧 Pod Disruption Budget for Main Application
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-pdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  {{- if .Values.autoscaling.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.autoscaling.podDisruptionBudget.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ .Values.autoscaling.podDisruptionBudget.maxUnavailable | default "25%" }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+
+---
+{{/*
+🔧 Pod Disruption Budget for Celery Workers
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-workers-pdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  maxUnavailable: {{ .Values.autoscaling.celery.podDisruptionBudget.maxUnavailable | default "50%" }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-workers
+
+---
+{{/*
+📊 Cluster Autoscaler Configuration
+*/}}
+{{- if .Values.autoscaling.clusterAutoscaler.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-cluster-autoscaler-config
+  namespace: kube-system
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-autoscaler
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  # Cluster autoscaler configuration
+  cluster-autoscaler-config.yaml: |
+    # Node group configurations
+    nodeGroups:
+      # General purpose nodes
+      - name: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.general.name | default "general-purpose" }}
+        minSize: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.general.minSize | default 3 }}
+        maxSize: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.general.maxSize | default 20 }}
+        instanceType: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.general.instanceType | default "m5.large" }}
+        labels:
+          node-type: general-purpose
+          workload: web-application
+        taints: []
+      
+      # Compute optimized nodes for CPU intensive tasks
+      - name: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.compute.name | default "compute-optimized" }}
+        minSize: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.compute.minSize | default 0 }}
+        maxSize: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.compute.maxSize | default 10 }}
+        instanceType: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.compute.instanceType | default "c5.xlarge" }}
+        labels:
+          node-type: compute-optimized
+          workload: cpu-intensive
+        taints:
+          - key: workload
+            value: cpu-intensive
+            effect: NoSchedule
+      
+      # Memory optimized nodes for memory intensive tasks
+      - name: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.memory.name | default "memory-optimized" }}
+        minSize: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.memory.minSize | default 0 }}
+        maxSize: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.memory.maxSize | default 5 }}
+        instanceType: {{ .Values.autoscaling.clusterAutoscaler.nodeGroups.memory.instanceType | default "r5.xlarge" }}
+        labels:
+          node-type: memory-optimized
+          workload: memory-intensive
+        taints:
+          - key: workload
+            value: memory-intensive
+            effect: NoSchedule
+    
+    # Scaling policies
+    scaleDownDelayAfterAdd: {{ .Values.autoscaling.clusterAutoscaler.scaleDownDelayAfterAdd | default "10m" }}
+    scaleDownDelayAfterDelete: {{ .Values.autoscaling.clusterAutoscaler.scaleDownDelayAfterDelete | default "10s" }}
+    scaleDownDelayAfterFailure: {{ .Values.autoscaling.clusterAutoscaler.scaleDownDelayAfterFailure | default "3m" }}
+    scaleDownUnneededTime: {{ .Values.autoscaling.clusterAutoscaler.scaleDownUnneededTime | default "10m" }}
+    scaleDownUtilizationThreshold: {{ .Values.autoscaling.clusterAutoscaler.scaleDownUtilizationThreshold | default 0.5 }}
+    
+    # Resource limits
+    maxNodeProvisionTime: {{ .Values.autoscaling.clusterAutoscaler.maxNodeProvisionTime | default "15m" }}
+    maxNodesTotal: {{ .Values.autoscaling.clusterAutoscaler.maxNodesTotal | default 100 }}
+    
+    # Skip nodes with specific conditions
+    skipNodesWithLocalStorage: {{ .Values.autoscaling.clusterAutoscaler.skipNodesWithLocalStorage | default true }}
+    skipNodesWithSystemPods: {{ .Values.autoscaling.clusterAutoscaler.skipNodesWithSystemPods | default true }}
+{{- end }}
+
+{{- end }}

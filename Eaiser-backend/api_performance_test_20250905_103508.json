@@ -1,0 +1,28 @@
+{
+  "test_suite": "api_performance_comparison",
+  "timestamp": "2025-09-05T10:35:08.864273",
+  "total_tests": 3,
+  "successful_tests": 3,
+  "failed_tests": 0,
+  "success_rate_percentage": 100.0,
+  "detailed_results": [
+    {
+      "test": "health_check",
+      "status": "success",
+      "response_time_ms": 2092.6895141601562
+    },
+    {
+      "test": "report_endpoint",
+      "status": "success",
+      "response_time_ms": 2056.069850921631,
+      "issues_count": 0
+    },
+    {
+      "test": "original_api",
+      "status": "success",
+      "response_time_ms": 21325.695991516113,
+      "issue_id": null,
+      "report_generated": true
+    }
+  ]
+}

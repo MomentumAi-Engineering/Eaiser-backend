@@ -1,0 +1,823 @@
+{{/*
+📊 Advanced Monitoring Stack Part 2 - Grafana, ELK, Jaeger
+
+This template continues the monitoring stack with:
+- Grafana for visualization and dashboards
+- Elasticsearch for log storage and search
+- Logstash for log processing and transformation
+- Kibana for log visualization and analysis
+- Jaeger for distributed tracing
+- Node Exporter for system metrics
+- Custom dashboards and configurations
+*/}}
+
+{{- if .Values.monitoring.enabled }}
+{{/*
+📈 Grafana Configuration
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-grafana-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  grafana.ini: |
+    [analytics]
+    check_for_updates = true
+    
+    [grafana_net]
+    url = https://grafana.net
+    
+    [log]
+    mode = console
+    level = {{ .Values.monitoring.grafana.logLevel | default "info" }}
+    
+    [paths]
+    data = /var/lib/grafana/
+    logs = /var/log/grafana
+    plugins = /var/lib/grafana/plugins
+    provisioning = /etc/grafana/provisioning
+    
+    [server]
+    protocol = http
+    http_port = 3000
+    domain = {{ .Values.monitoring.grafana.domain | default "localhost" }}
+    enforce_domain = false
+    root_url = {{ .Values.monitoring.grafana.rootUrl | default "%(protocol)s://%(domain)s:%(http_port)s/" }}
+    serve_from_sub_path = false
+    
+    [database]
+    type = {{ .Values.monitoring.grafana.database.type | default "sqlite3" }}
+    {{- if eq (.Values.monitoring.grafana.database.type | default "sqlite3") "postgres" }}
+    host = {{ .Values.monitoring.grafana.database.host }}
+    name = {{ .Values.monitoring.grafana.database.name }}
+    user = {{ .Values.monitoring.grafana.database.user }}
+    password = {{ .Values.monitoring.grafana.database.password }}
+    ssl_mode = {{ .Values.monitoring.grafana.database.sslMode | default "require" }}
+    {{- end }}
+    
+    [session]
+    provider = file
+    
+    [dataproxy]
+    logging = false
+    timeout = 30
+    
+    [security]
+    admin_user = {{ .Values.monitoring.grafana.adminUser | default "admin" }}
+    admin_password = {{ .Values.monitoring.grafana.adminPassword | default "admin123" }}
+    secret_key = {{ .Values.monitoring.grafana.secretKey | default "SW2YcwTIb9zpOOhoPsMm" }}
+    login_remember_days = 7
+    cookie_username = grafana_user
+    cookie_remember_name = grafana_remember
+    disable_gravatar = false
+    
+    [snapshots]
+    external_enabled = true
+    external_snapshot_url = https://snapshots-origin.raintank.io
+    external_snapshot_name = Publish to snapshot.raintank.io
+    
+    [dashboards]
+    versions_to_keep = 20
+    
+    [users]
+    allow_sign_up = {{ .Values.monitoring.grafana.allowSignUp | default false }}
+    allow_org_create = {{ .Values.monitoring.grafana.allowOrgCreate | default false }}
+    auto_assign_org = true
+    auto_assign_org_id = 1
+    auto_assign_org_role = Viewer
+    verify_email_enabled = false
+    login_hint = email or username
+    default_theme = {{ .Values.monitoring.grafana.defaultTheme | default "dark" }}
+    
+    [auth]
+    login_cookie_name = grafana_session
+    login_maximum_inactive_lifetime_duration = 7d
+    login_maximum_lifetime_duration = 30d
+    token_rotation_interval_minutes = 10
+    disable_login_form = false
+    disable_signout_menu = false
+    signout_redirect_url = 
+    oauth_auto_login = false
+    
+    [auth.anonymous]
+    enabled = {{ .Values.monitoring.grafana.auth.anonymous.enabled | default false }}
+    org_name = {{ .Values.monitoring.grafana.auth.anonymous.orgName | default "Main Org." }}
+    org_role = {{ .Values.monitoring.grafana.auth.anonymous.orgRole | default "Viewer" }}
+    
+    [smtp]
+    enabled = {{ .Values.monitoring.grafana.smtp.enabled | default false }}
+    host = {{ .Values.monitoring.grafana.smtp.host | default "localhost:587" }}
+    user = {{ .Values.monitoring.grafana.smtp.user | default "" }}
+    password = {{ .Values.monitoring.grafana.smtp.password | default "" }}
+    cert_file = 
+    key_file = 
+    skip_verify = false
+    from_address = {{ .Values.monitoring.grafana.smtp.fromAddress | default "admin@grafana.localhost" }}
+    from_name = {{ .Values.monitoring.grafana.smtp.fromName | default "Grafana" }}
+    ehlo_identity = dashboard.example.com
+    
+    [emails]
+    welcome_email_on_sign_up = false
+    
+    [alerting]
+    enabled = true
+    execute_alerts = true
+    error_or_timeout = alerting
+    nodata_or_nullvalues = no_data
+    concurrent_render_limit = 5
+    
+    [metrics]
+    enabled = true
+    interval_seconds = 10
+    
+    [metrics.graphite]
+    address = 
+    prefix = prod.grafana.%(instance_name)s.
+  
+  # Datasource provisioning
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      # Prometheus datasource
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://{{ include "snapfix-enterprise.fullname" . }}-prometheus:9090
+        isDefault: true
+        editable: true
+        jsonData:
+          timeInterval: "15s"
+          queryTimeout: "60s"
+          httpMethod: "POST"
+      
+      # Jaeger datasource
+      - name: Jaeger
+        type: jaeger
+        access: proxy
+        url: http://{{ include "snapfix-enterprise.fullname" . }}-jaeger-query:16686
+        editable: true
+        jsonData:
+          tracesToLogs:
+            datasourceUid: 'loki'
+            tags: ['job', 'instance', 'pod', 'namespace']
+            mappedTags: [{ key: 'service.name', value: 'service' }]
+            mapTagNamesEnabled: false
+            spanStartTimeShift: '1h'
+            spanEndTimeShift: '1h'
+            filterByTraceID: false
+            filterBySpanID: false
+      
+      # Elasticsearch datasource for logs
+      - name: Elasticsearch
+        type: elasticsearch
+        access: proxy
+        url: http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200
+        database: "logstash-*"
+        editable: true
+        jsonData:
+          interval: "Daily"
+          timeField: "@timestamp"
+          esVersion: "7.10.0"
+          maxConcurrentShardRequests: 5
+          logMessageField: "message"
+          logLevelField: "level"
+  
+  # Dashboard provisioning
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 10
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+      
+      - name: 'snapfix-enterprise'
+        orgId: 1
+        folder: 'SnapFix Enterprise'
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 10
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards/snapfix
+  
+  # SnapFix Enterprise Application Dashboard
+  snapfix-app-dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "SnapFix Enterprise - Application Metrics",
+        "tags": ["snapfix", "application", "performance"],
+        "style": "dark",
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Request Rate",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum(rate(http_requests_total{job=\"snapfix-enterprise-app\"}[5m]))",
+                "legendFormat": "Requests/sec"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {"mode": "palette-classic"},
+                "custom": {"displayMode": "list", "orientation": "horizontal"},
+                "mappings": [],
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "red", "value": 1000}
+                  ]
+                },
+                "unit": "reqps"
+              }
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "id": 2,
+            "title": "Response Time (95th percentile)",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"snapfix-enterprise-app\"}[5m])) by (le))",
+                "legendFormat": "95th percentile"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {"mode": "palette-classic"},
+                "mappings": [],
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 0.5},
+                    {"color": "red", "value": 2}
+                  ]
+                },
+                "unit": "s"
+              }
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "id": 3,
+            "title": "Error Rate",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "sum(rate(http_requests_total{job=\"snapfix-enterprise-app\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"snapfix-enterprise-app\"}[5m]))",
+                "legendFormat": "Error Rate"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 10,
+                  "gradientMode": "none",
+                  "hideFrom": {"legend": false, "tooltip": false, "vis": false},
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {"group": "A", "mode": "none"},
+                  "thresholdsStyle": {"mode": "off"}
+                },
+                "mappings": [],
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "red", "value": 0.01}
+                  ]
+                },
+                "unit": "percentunit"
+              }
+            },
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+          }
+        ],
+        "time": {"from": "now-1h", "to": "now"},
+        "timepicker": {},
+        "templating": {"list": []},
+        "annotations": {"list": []},
+        "refresh": "5s",
+        "schemaVersion": 27,
+        "version": 0,
+        "links": []
+      }
+    }
+  
+  # Infrastructure Dashboard
+  infrastructure-dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "SnapFix Enterprise - Infrastructure Metrics",
+        "tags": ["snapfix", "infrastructure", "kubernetes"],
+        "style": "dark",
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "CPU Usage by Node",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "(1 - rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100",
+                "legendFormat": "{{instance}}"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {"mode": "palette-classic"},
+                "unit": "percent",
+                "min": 0,
+                "max": 100
+              }
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "id": 2,
+            "title": "Memory Usage by Node",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+                "legendFormat": "{{instance}}"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {"mode": "palette-classic"},
+                "unit": "percent",
+                "min": 0,
+                "max": 100
+              }
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          }
+        ],
+        "time": {"from": "now-1h", "to": "now"},
+        "refresh": "30s",
+        "schemaVersion": 27,
+        "version": 0
+      }
+    }
+
+---
+{{/*
+📈 Grafana Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-grafana
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.monitoring.grafana.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: grafana
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: grafana
+    spec:
+      securityContext:
+        fsGroup: 472
+        runAsUser: 472
+        runAsNonRoot: true
+      containers:
+        - name: grafana
+          image: {{ .Values.monitoring.grafana.image.repository }}:{{ .Values.monitoring.grafana.image.tag | default "9.5.2" }}
+          imagePullPolicy: {{ .Values.monitoring.grafana.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - containerPort: 3000
+              name: http
+              protocol: TCP
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: {{ .Values.monitoring.grafana.adminUser | default "admin" }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-grafana-secret
+                  key: admin-password
+            - name: GF_INSTALL_PLUGINS
+              value: {{ .Values.monitoring.grafana.plugins | default "grafana-piechart-panel,grafana-worldmap-panel,grafana-clock-panel" }}
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 30
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.grafana.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/grafana
+            - name: storage
+              mountPath: /var/lib/grafana
+            - name: dashboards-snapfix
+              mountPath: /var/lib/grafana/dashboards/snapfix
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-grafana-config
+        - name: dashboards-snapfix
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-grafana-config
+            items:
+              - key: snapfix-app-dashboard.json
+                path: snapfix-app-dashboard.json
+              - key: infrastructure-dashboard.json
+                path: infrastructure-dashboard.json
+        - name: storage
+          {{- if .Values.monitoring.grafana.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-grafana-storage
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+
+---
+{{/*
+📈 Grafana Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-grafana
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: {{ .Values.monitoring.grafana.service.type | default "ClusterIP" }}
+  ports:
+    - port: 3000
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+
+---
+{{/*
+📈 Grafana Secret
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-grafana-secret
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+    app.kubernetes.io/part-of: snapfix-enterprise
+type: Opaque
+data:
+  admin-password: {{ .Values.monitoring.grafana.adminPassword | default "admin123" | b64enc }}
+
+---
+{{/*
+📈 Grafana PVC
+*/}}
+{{- if .Values.monitoring.grafana.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-grafana-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.monitoring.grafana.persistence.size | default "10Gi" }}
+  {{- if .Values.monitoring.grafana.persistence.storageClass }}
+  storageClassName: {{ .Values.monitoring.grafana.persistence.storageClass }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+🔍 Elasticsearch Configuration
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: elasticsearch
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  elasticsearch.yml: |
+    cluster.name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch
+    node.name: ${HOSTNAME}
+    node.data: true
+    node.master: true
+    node.ingest: true
+    
+    # Network settings
+    network.host: 0.0.0.0
+    http.port: 9200
+    transport.port: 9300
+    
+    # Discovery settings
+    discovery.seed_hosts:
+      {{- range $i := until (int .Values.monitoring.elasticsearch.replicas) }}
+      - {{ include "snapfix-enterprise.fullname" $ }}-elasticsearch-{{ $i }}.{{ include "snapfix-enterprise.fullname" $ }}-elasticsearch-headless
+      {{- end }}
+    
+    cluster.initial_master_nodes:
+      {{- range $i := until (int .Values.monitoring.elasticsearch.replicas) }}
+      - {{ include "snapfix-enterprise.fullname" $ }}-elasticsearch-{{ $i }}
+      {{- end }}
+    
+    # Memory settings
+    bootstrap.memory_lock: false
+    
+    # Security settings
+    xpack.security.enabled: {{ .Values.monitoring.elasticsearch.security.enabled | default false }}
+    {{- if .Values.monitoring.elasticsearch.security.enabled }}
+    xpack.security.transport.ssl.enabled: true
+    xpack.security.transport.ssl.verification_mode: certificate
+    xpack.security.transport.ssl.keystore.path: certs/elastic-certificates.p12
+    xpack.security.transport.ssl.truststore.path: certs/elastic-certificates.p12
+    xpack.security.http.ssl.enabled: true
+    xpack.security.http.ssl.keystore.path: certs/elastic-certificates.p12
+    {{- end }}
+    
+    # Monitoring settings
+    xpack.monitoring.collection.enabled: true
+    
+    # Index settings
+    action.destructive_requires_name: true
+    
+    # Performance settings
+    thread_pool.write.queue_size: {{ .Values.monitoring.elasticsearch.threadPool.writeQueueSize | default 1000 }}
+    thread_pool.search.queue_size: {{ .Values.monitoring.elasticsearch.threadPool.searchQueueSize | default 1000 }}
+    
+    # Logging
+    logger.org.elasticsearch.discovery: {{ .Values.monitoring.elasticsearch.logLevel | default "INFO" }}
+  
+  jvm.options: |
+    # Xms represents the initial size of total heap space
+    # Xmx represents the maximum size of total heap space
+    -Xms{{ .Values.monitoring.elasticsearch.jvm.heapSize | default "1g" }}
+    -Xmx{{ .Values.monitoring.elasticsearch.jvm.heapSize | default "1g" }}
+    
+    # GC settings
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=16m
+    -XX:+UseG1GC
+    -XX:+UnlockExperimentalVMOptions
+    -XX:+UseCGroupMemoryLimitForHeap
+    
+    # JVM temporary directory
+    -Djava.io.tmpdir=${ES_TMPDIR}
+    
+    # Heap dumps
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=/var/lib/elasticsearch
+    
+    # GC logging
+    -Xlog:gc*,gc+age=trace,safepoint:gc.log:utctime,pid,tid,level
+    -Xlog:gc+heap=debug:gc.log:utctime,pid,tid,level
+
+---
+{{/*
+🔍 Elasticsearch StatefulSet
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: elasticsearch
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  serviceName: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch-headless
+  replicas: {{ .Values.monitoring.elasticsearch.replicas | default 3 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: elasticsearch
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: elasticsearch
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      initContainers:
+        - name: configure-sysctl
+          image: busybox:1.35
+          command: ['sh', '-c']
+          args:
+            - |
+              sysctl -w vm.max_map_count=262144
+              echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
+          securityContext:
+            privileged: true
+        - name: fix-permissions
+          image: busybox:1.35
+          command: ['sh', '-c']
+          args:
+            - |
+              chown -R 1000:1000 /usr/share/elasticsearch/data
+              chmod -R 755 /usr/share/elasticsearch/data
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+      containers:
+        - name: elasticsearch
+          image: {{ .Values.monitoring.elasticsearch.image.repository }}:{{ .Values.monitoring.elasticsearch.image.tag | default "7.17.9" }}
+          imagePullPolicy: {{ .Values.monitoring.elasticsearch.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: node.name
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ES_JAVA_OPTS
+              value: "-Xms{{ .Values.monitoring.elasticsearch.jvm.heapSize | default "1g" }} -Xmx{{ .Values.monitoring.elasticsearch.jvm.heapSize | default "1g" }}"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch-secret
+                  key: elastic-password
+                  optional: true
+          ports:
+            - containerPort: 9200
+              name: http
+              protocol: TCP
+            - containerPort: 9300
+              name: transport
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /_cluster/health?local=true
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /_cluster/health?wait_for_status=green&timeout=1s&local=true
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.elasticsearch.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/elasticsearch/config/elasticsearch.yml
+              subPath: elasticsearch.yml
+            - name: config
+              mountPath: /usr/share/elasticsearch/config/jvm.options
+              subPath: jvm.options
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "snapfix-enterprise.labels" . | nindent 10 }}
+          app.kubernetes.io/component: elasticsearch
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.monitoring.elasticsearch.persistence.size | default "30Gi" }}
+        {{- if .Values.monitoring.elasticsearch.persistence.storageClass }}
+        storageClassName: {{ .Values.monitoring.elasticsearch.persistence.storageClass }}
+        {{- end }}
+
+---
+{{/*
+🔍 Elasticsearch Headless Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: elasticsearch
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  clusterIP: None
+  ports:
+    - port: 9200
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: 9300
+      targetPort: transport
+      protocol: TCP
+      name: transport
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: elasticsearch
+
+---
+{{/*
+🔍 Elasticsearch Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: elasticsearch
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: {{ .Values.monitoring.elasticsearch.service.type | default "ClusterIP" }}
+  ports:
+    - port: 9200
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: elasticsearch
+
+---
+{{/*
+🔍 Elasticsearch Secret
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch-secret
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: elasticsearch
+    app.kubernetes.io/part-of: snapfix-enterprise
+type: Opaque
+data:
+  elastic-password: {{ .Values.monitoring.elasticsearch.password | default "elastic123" | b64enc }}
+
+{{- end }}

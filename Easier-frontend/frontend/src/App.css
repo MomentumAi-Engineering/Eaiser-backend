@@ -1,0 +1,86 @@
+body {
+  background-color: #f8f9fa;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  overflow-x: hidden; /* Prevent horizontal scrolling */
+}
+
+.container {
+  max-width: 1200px;
+  padding: 0 15px;
+  margin: 0 auto;
+}
+
+.navbar {
+  margin-bottom: 20px;
+}
+
+.status-message {
+  margin-top: 20px;
+}
+
+.issue-list {
+  margin-top: 30px;
+}
+
+.report-card {
+  margin-top: 20px;
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+  .container {
+    padding: 0 10px;
+  }
+  
+  .row {
+    margin-left: -10px;
+    margin-right: -10px;
+  }
+  
+  .col, .col-1, .col-2, .col-3, .col-4, .col-5, .col-6, 
+  .col-7, .col-8, .col-9, .col-10, .col-11, .col-12, 
+  .col-sm, .col-md, .col-lg, .col-xl {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  
+  .feature-card-container {
+    margin-bottom: 20px;
+  }
+  
+  .stat-card {
+    margin-bottom: 15px;
+  }
+  
+  .testimonial-card {
+    margin-bottom: 20px;
+  }
+}
+
+@media (max-width: 576px) {
+  .container {
+    padding: 0 8px;
+  }
+  
+  h1, .h1 {
+    font-size: 1.8rem;
+  }
+  
+  h2, .h2 {
+    font-size: 1.5rem;
+  }
+  
+  h3, .h3 {
+    font-size: 1.3rem;
+  }
+  
+  .fab {
+    right: 15px;
+    bottom: 15px;
+  }
+  
+  .scroll-top {
+    right: 15px;
+    bottom: 70px;
+  }
+}

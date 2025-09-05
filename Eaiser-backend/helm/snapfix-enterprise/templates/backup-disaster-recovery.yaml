@@ -1,0 +1,663 @@
+# Backup and Disaster Recovery Configuration for SnapFix Enterprise
+# This template provides comprehensive backup, disaster recovery, and business continuity features
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-backup-config
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+data:
+  backup-config.yaml: |
+    # Backup and Disaster Recovery Configuration
+    backup:
+      # Database Backup Configuration
+      database:
+        enabled: {{ .Values.backup.database.enabled | default true }}
+        
+        # PostgreSQL Backup
+        postgresql:
+          enabled: {{ .Values.backup.database.postgresql.enabled | default true }}
+          schedule: "{{ .Values.backup.database.postgresql.schedule | default "0 2 * * *" }}" # Daily at 2 AM
+          retention_days: {{ .Values.backup.database.postgresql.retentionDays | default 30 }}
+          compression: {{ .Values.backup.database.postgresql.compression | default true }}
+          encryption: {{ .Values.backup.database.postgresql.encryption | default true }}
+          
+          # Backup Types
+          backup_types:
+            full:
+              enabled: true
+              schedule: "{{ .Values.backup.database.postgresql.fullBackup.schedule | default "0 2 * * 0" }}" # Weekly on Sunday
+              retention_weeks: {{ .Values.backup.database.postgresql.fullBackup.retentionWeeks | default 12 }}
+            
+            incremental:
+              enabled: {{ .Values.backup.database.postgresql.incrementalBackup.enabled | default true }}
+              schedule: "{{ .Values.backup.database.postgresql.incrementalBackup.schedule | default "0 2 * * 1-6" }}" # Daily except Sunday
+              retention_days: {{ .Values.backup.database.postgresql.incrementalBackup.retentionDays | default 7 }}
+            
+            point_in_time:
+              enabled: {{ .Values.backup.database.postgresql.pointInTimeRecovery.enabled | default true }}
+              wal_archive_timeout: "{{ .Values.backup.database.postgresql.pointInTimeRecovery.walArchiveTimeout | default "5min" }}"
+              wal_retention_days: {{ .Values.backup.database.postgresql.pointInTimeRecovery.walRetentionDays | default 7 }}
+        
+        # MongoDB Backup
+        mongodb:
+          enabled: {{ .Values.backup.database.mongodb.enabled | default true }}
+          schedule: "{{ .Values.backup.database.mongodb.schedule | default "0 3 * * *" }}" # Daily at 3 AM
+          retention_days: {{ .Values.backup.database.mongodb.retentionDays | default 30 }}
+          compression: {{ .Values.backup.database.mongodb.compression | default true }}
+          encryption: {{ .Values.backup.database.mongodb.encryption | default true }}
+          
+          # Replica Set Backup
+          replica_set:
+            enabled: {{ .Values.backup.database.mongodb.replicaSet.enabled | default true }}
+            secondary_preferred: {{ .Values.backup.database.mongodb.replicaSet.secondaryPreferred | default true }}
+          
+          # Sharded Cluster Backup
+          sharded_cluster:
+            enabled: {{ .Values.backup.database.mongodb.shardedCluster.enabled | default false }}
+            config_server_backup: {{ .Values.backup.database.mongodb.shardedCluster.configServerBackup | default true }}
+      
+      # File System Backup
+      filesystem:
+        enabled: {{ .Values.backup.filesystem.enabled | default true }}
+        
+        # User Uploaded Files
+        user_files:
+          enabled: {{ .Values.backup.filesystem.userFiles.enabled | default true }}
+          schedule: "{{ .Values.backup.filesystem.userFiles.schedule | default "0 1 * * *" }}" # Daily at 1 AM
+          retention_days: {{ .Values.backup.filesystem.userFiles.retentionDays | default 90 }}
+          compression: {{ .Values.backup.filesystem.userFiles.compression | default true }}
+          encryption: {{ .Values.backup.filesystem.userFiles.encryption | default true }}
+          
+          # Backup Paths
+          paths:
+            - "/app/uploads/images"
+            - "/app/uploads/documents"
+            - "/app/uploads/videos"
+        
+        # Application Logs
+        logs:
+          enabled: {{ .Values.backup.filesystem.logs.enabled | default true }}
+          schedule: "{{ .Values.backup.filesystem.logs.schedule | default "0 4 * * *" }}" # Daily at 4 AM
+          retention_days: {{ .Values.backup.filesystem.logs.retentionDays | default 365 }}
+          compression: {{ .Values.backup.filesystem.logs.compression | default true }}
+          
+          # Log Paths
+          paths:
+            - "/app/logs"
+            - "/var/log/nginx"
+            - "/var/log/application"
+        
+        # Configuration Files
+        config:
+          enabled: {{ .Values.backup.filesystem.config.enabled | default true }}
+          schedule: "{{ .Values.backup.filesystem.config.schedule | default "0 0 * * 0" }}" # Weekly on Sunday
+          retention_weeks: {{ .Values.backup.filesystem.config.retentionWeeks | default 52 }}
+          
+          # Config Paths
+          paths:
+            - "/app/config"
+            - "/etc/nginx"
+            - "/etc/ssl"
+      
+      # Redis Backup
+      redis:
+        enabled: {{ .Values.backup.redis.enabled | default true }}
+        
+        # RDB Snapshots
+        rdb_snapshots:
+          enabled: {{ .Values.backup.redis.rdbSnapshots.enabled | default true }}
+          schedule: "{{ .Values.backup.redis.rdbSnapshots.schedule | default "0 */6 * * *" }}" # Every 6 hours
+          retention_days: {{ .Values.backup.redis.rdbSnapshots.retentionDays | default 7 }}
+          compression: {{ .Values.backup.redis.rdbSnapshots.compression | default true }}
+        
+        # AOF Backup
+        aof_backup:
+          enabled: {{ .Values.backup.redis.aofBackup.enabled | default true }}
+          schedule: "{{ .Values.backup.redis.aofBackup.schedule | default "0 */2 * * *" }}" # Every 2 hours
+          retention_hours: {{ .Values.backup.redis.aofBackup.retentionHours | default 48 }}
+      
+      # Backup Storage Configuration
+      storage:
+        # Primary Storage (S3-compatible)
+        primary:
+          type: "{{ .Values.backup.storage.primary.type | default "s3" }}"
+          
+          # S3 Configuration
+          s3:
+            bucket: "{{ .Values.backup.storage.primary.s3.bucket | default "snapfix-backups" }}"
+            region: "{{ .Values.backup.storage.primary.s3.region | default "us-east-1" }}"
+            endpoint: "{{ .Values.backup.storage.primary.s3.endpoint | default "" }}"
+            access_key_id: "{{ .Values.backup.storage.primary.s3.accessKeyId | default "" }}"
+            secret_access_key: "{{ .Values.backup.storage.primary.s3.secretAccessKey | default "" }}"
+            encryption: {{ .Values.backup.storage.primary.s3.encryption | default true }}
+            storage_class: "{{ .Values.backup.storage.primary.s3.storageClass | default "STANDARD_IA" }}"
+        
+        # Secondary Storage (for redundancy)
+        secondary:
+          enabled: {{ .Values.backup.storage.secondary.enabled | default true }}
+          type: "{{ .Values.backup.storage.secondary.type | default "gcs" }}"
+          
+          # Google Cloud Storage Configuration
+          gcs:
+            bucket: "{{ .Values.backup.storage.secondary.gcs.bucket | default "snapfix-backups-secondary" }}"
+            project_id: "{{ .Values.backup.storage.secondary.gcs.projectId | default "" }}"
+            service_account_key: "{{ .Values.backup.storage.secondary.gcs.serviceAccountKey | default "" }}"
+            storage_class: "{{ .Values.backup.storage.secondary.gcs.storageClass | default "NEARLINE" }}"
+        
+        # Local Storage (for immediate recovery)
+        local:
+          enabled: {{ .Values.backup.storage.local.enabled | default true }}
+          path: "{{ .Values.backup.storage.local.path | default "/backup/local" }}"
+          retention_days: {{ .Values.backup.storage.local.retentionDays | default 3 }}
+          max_size_gb: {{ .Values.backup.storage.local.maxSizeGb | default 100 }}
+    
+    # Disaster Recovery Configuration
+    disaster_recovery:
+      # Recovery Time Objective (RTO) and Recovery Point Objective (RPO)
+      objectives:
+        rto_minutes: {{ .Values.disasterRecovery.objectives.rtoMinutes | default 60 }} # 1 hour
+        rpo_minutes: {{ .Values.disasterRecovery.objectives.rpoMinutes | default 15 }} # 15 minutes
+      
+      # Multi-Region Setup
+      multi_region:
+        enabled: {{ .Values.disasterRecovery.multiRegion.enabled | default true }}
+        
+        # Primary Region
+        primary_region: "{{ .Values.disasterRecovery.multiRegion.primaryRegion | default "us-east-1" }}"
+        
+        # Secondary Regions
+        secondary_regions:
+          {{- range .Values.disasterRecovery.multiRegion.secondaryRegions | default (list "us-west-2" "eu-west-1") }}
+          - "{{ . }}"
+          {{- end }}
+        
+        # Replication Configuration
+        replication:
+          # Database Replication
+          database:
+            enabled: {{ .Values.disasterRecovery.multiRegion.replication.database.enabled | default true }}
+            sync_mode: "{{ .Values.disasterRecovery.multiRegion.replication.database.syncMode | default "async" }}" # sync, async
+            lag_threshold_seconds: {{ .Values.disasterRecovery.multiRegion.replication.database.lagThresholdSeconds | default 30 }}
+          
+          # File Replication
+          files:
+            enabled: {{ .Values.disasterRecovery.multiRegion.replication.files.enabled | default true }}
+            sync_interval_minutes: {{ .Values.disasterRecovery.multiRegion.replication.files.syncIntervalMinutes | default 5 }}
+      
+      # Failover Configuration
+      failover:
+        enabled: {{ .Values.disasterRecovery.failover.enabled | default true }}
+        
+        # Automatic Failover
+        automatic:
+          enabled: {{ .Values.disasterRecovery.failover.automatic.enabled | default true }}
+          health_check_interval_seconds: {{ .Values.disasterRecovery.failover.automatic.healthCheckIntervalSeconds | default 30 }}
+          failure_threshold: {{ .Values.disasterRecovery.failover.automatic.failureThreshold | default 3 }}
+          
+          # Failover Triggers
+          triggers:
+            database_unavailable: {{ .Values.disasterRecovery.failover.triggers.databaseUnavailable | default true }}
+            application_unhealthy: {{ .Values.disasterRecovery.failover.triggers.applicationUnhealthy | default true }}
+            network_partition: {{ .Values.disasterRecovery.failover.triggers.networkPartition | default true }}
+            resource_exhaustion: {{ .Values.disasterRecovery.failover.triggers.resourceExhaustion | default true }}
+        
+        # Manual Failover
+        manual:
+          enabled: {{ .Values.disasterRecovery.failover.manual.enabled | default true }}
+          confirmation_required: {{ .Values.disasterRecovery.failover.manual.confirmationRequired | default true }}
+          
+          # Notification Channels for Manual Failover
+          notifications:
+            email: {{ .Values.disasterRecovery.failover.manual.notifications.email | default true }}
+            slack: {{ .Values.disasterRecovery.failover.manual.notifications.slack | default true }}
+            pagerduty: {{ .Values.disasterRecovery.failover.manual.notifications.pagerduty | default true }}
+      
+      # Recovery Procedures
+      recovery:
+        # Database Recovery
+        database:
+          # Point-in-Time Recovery
+          point_in_time:
+            enabled: {{ .Values.disasterRecovery.recovery.database.pointInTime.enabled | default true }}
+            max_recovery_time_hours: {{ .Values.disasterRecovery.recovery.database.pointInTime.maxRecoveryTimeHours | default 168 }} # 7 days
+          
+          # Full Recovery
+          full_recovery:
+            enabled: {{ .Values.disasterRecovery.recovery.database.fullRecovery.enabled | default true }}
+            parallel_restore: {{ .Values.disasterRecovery.recovery.database.fullRecovery.parallelRestore | default true }}
+            verification_enabled: {{ .Values.disasterRecovery.recovery.database.fullRecovery.verificationEnabled | default true }}
+        
+        # Application Recovery
+        application:
+          # Rolling Recovery
+          rolling_recovery:
+            enabled: {{ .Values.disasterRecovery.recovery.application.rollingRecovery.enabled | default true }}
+            batch_size: {{ .Values.disasterRecovery.recovery.application.rollingRecovery.batchSize | default 3 }}
+            wait_time_seconds: {{ .Values.disasterRecovery.recovery.application.rollingRecovery.waitTimeSeconds | default 30 }}
+          
+          # Blue-Green Recovery
+          blue_green:
+            enabled: {{ .Values.disasterRecovery.recovery.application.blueGreen.enabled | default true }}
+            traffic_switch_percentage: {{ .Values.disasterRecovery.recovery.application.blueGreen.trafficSwitchPercentage | default 10 }}
+            validation_time_minutes: {{ .Values.disasterRecovery.recovery.application.blueGreen.validationTimeMinutes | default 5 }}
+    
+    # Business Continuity Configuration
+    business_continuity:
+      # Service Level Agreements (SLA)
+      sla:
+        uptime_percentage: {{ .Values.businessContinuity.sla.uptimePercentage | default 99.9 }}
+        response_time_ms: {{ .Values.businessContinuity.sla.responseTimeMs | default 500 }}
+        throughput_requests_per_second: {{ .Values.businessContinuity.sla.throughputRequestsPerSecond | default 1000 }}
+      
+      # Maintenance Windows
+      maintenance:
+        enabled: {{ .Values.businessContinuity.maintenance.enabled | default true }}
+        
+        # Scheduled Maintenance
+        scheduled:
+          day_of_week: "{{ .Values.businessContinuity.maintenance.scheduled.dayOfWeek | default "Sunday" }}"
+          start_time: "{{ .Values.businessContinuity.maintenance.scheduled.startTime | default "02:00" }}"
+          duration_hours: {{ .Values.businessContinuity.maintenance.scheduled.durationHours | default 4 }}
+          timezone: "{{ .Values.businessContinuity.maintenance.scheduled.timezone | default "UTC" }}"
+          
+          # Notification Settings
+          notifications:
+            advance_notice_hours: {{ .Values.businessContinuity.maintenance.notifications.advanceNoticeHours | default 24 }}
+            reminder_hours: {{ .Values.businessContinuity.maintenance.notifications.reminderHours | default 2 }}
+        
+        # Emergency Maintenance
+        emergency:
+          enabled: {{ .Values.businessContinuity.maintenance.emergency.enabled | default true }}
+          max_duration_hours: {{ .Values.businessContinuity.maintenance.emergency.maxDurationHours | default 2 }}
+          approval_required: {{ .Values.businessContinuity.maintenance.emergency.approvalRequired | default true }}
+      
+      # Capacity Planning
+      capacity_planning:
+        enabled: {{ .Values.businessContinuity.capacityPlanning.enabled | default true }}
+        
+        # Growth Projections
+        growth_projections:
+          monthly_growth_percentage: {{ .Values.businessContinuity.capacityPlanning.monthlyGrowthPercentage | default 10 }}
+          peak_load_multiplier: {{ .Values.businessContinuity.capacityPlanning.peakLoadMultiplier | default 3 }}
+        
+        # Resource Thresholds
+        thresholds:
+          cpu_warning_percentage: {{ .Values.businessContinuity.capacityPlanning.thresholds.cpuWarningPercentage | default 70 }}
+          memory_warning_percentage: {{ .Values.businessContinuity.capacityPlanning.thresholds.memoryWarningPercentage | default 80 }}
+          storage_warning_percentage: {{ .Values.businessContinuity.capacityPlanning.thresholds.storageWarningPercentage | default 85 }}
+          network_warning_percentage: {{ .Values.businessContinuity.capacityPlanning.thresholds.networkWarningPercentage | default 75 }}
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-database-backup
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "{{ .Values.backup.database.postgresql.schedule | default "0 2 * * *" }}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit | default 3 }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit | default 1 }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "snapfix-enterprise.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+          containers:
+            - name: database-backup
+              image: "{{ .Values.backup.image.repository }}:{{ .Values.backup.image.tag | default "latest" }}"
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy | default "IfNotPresent" }}
+              command:
+                - "/bin/bash"
+                - "-c"
+                - |
+                  set -e
+                  
+                  # Set backup timestamp
+                  BACKUP_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+                  BACKUP_NAME="snapfix_db_backup_${BACKUP_TIMESTAMP}"
+                  
+                  echo "Starting database backup: ${BACKUP_NAME}"
+                  
+                  # Create backup directory
+                  mkdir -p /backup/database
+                  
+                  # PostgreSQL backup
+                  if [ "${POSTGRESQL_BACKUP_ENABLED}" = "true" ]; then
+                    echo "Creating PostgreSQL backup..."
+                    
+                    # Full backup on Sundays, incremental on other days
+                    if [ $(date +%u) -eq 7 ]; then
+                      # Full backup
+                      pg_dump -h ${POSTGRES_HOST} -U ${POSTGRES_USER} -d ${POSTGRES_DB} \
+                        --verbose --format=custom --compress=9 \
+                        --file="/backup/database/${BACKUP_NAME}_full.dump"
+                    else
+                      # Incremental backup (WAL archiving)
+                      pg_receivewal -h ${POSTGRES_HOST} -U ${POSTGRES_USER} \
+                        -D "/backup/database/wal/${BACKUP_TIMESTAMP}" --synchronous
+                    fi
+                  fi
+                  
+                  # MongoDB backup
+                  if [ "${MONGODB_BACKUP_ENABLED}" = "true" ]; then
+                    echo "Creating MongoDB backup..."
+                    mongodump --host ${MONGODB_HOST} --port ${MONGODB_PORT} \
+                      --username ${MONGODB_USER} --password ${MONGODB_PASSWORD} \
+                      --authenticationDatabase admin \
+                      --gzip --archive="/backup/database/${BACKUP_NAME}_mongo.archive"
+                  fi
+                  
+                  # Encrypt backups if enabled
+                  if [ "${BACKUP_ENCRYPTION_ENABLED}" = "true" ]; then
+                    echo "Encrypting backups..."
+                    for file in /backup/database/${BACKUP_NAME}*; do
+                      if [ -f "$file" ]; then
+                        gpg --symmetric --cipher-algo AES256 --compress-algo 2 \
+                          --passphrase "${BACKUP_ENCRYPTION_KEY}" \
+                          --batch --yes "$file"
+                        rm "$file"
+                      fi
+                    done
+                  fi
+                  
+                  # Upload to cloud storage
+                  echo "Uploading backups to cloud storage..."
+                  
+                  # Upload to primary storage (S3)
+                  if [ "${S3_BACKUP_ENABLED}" = "true" ]; then
+                    aws s3 sync /backup/database/ s3://${S3_BUCKET}/database/ \
+                      --storage-class ${S3_STORAGE_CLASS} --sse AES256
+                  fi
+                  
+                  # Upload to secondary storage (GCS)
+                  if [ "${GCS_BACKUP_ENABLED}" = "true" ]; then
+                    gsutil -m cp -r /backup/database/* gs://${GCS_BUCKET}/database/
+                  fi
+                  
+                  # Cleanup old local backups
+                  find /backup/database -type f -mtime +${LOCAL_RETENTION_DAYS} -delete
+                  
+                  echo "Database backup completed successfully"
+              
+              env:
+                # PostgreSQL Configuration
+                - name: POSTGRESQL_BACKUP_ENABLED
+                  value: "{{ .Values.backup.database.postgresql.enabled | default true }}"
+                - name: POSTGRES_HOST
+                  value: "{{ include "snapfix-enterprise.fullname" . }}-postgresql"
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                      key: postgres-user
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                      key: postgres-password
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                      key: postgres-database
+                
+                # MongoDB Configuration
+                - name: MONGODB_BACKUP_ENABLED
+                  value: "{{ .Values.backup.database.mongodb.enabled | default true }}"
+                - name: MONGODB_HOST
+                  value: "{{ include "snapfix-enterprise.fullname" . }}-mongodb"
+                - name: MONGODB_PORT
+                  value: "27017"
+                - name: MONGODB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                      key: mongodb-user
+                - name: MONGODB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                      key: mongodb-password
+                
+                # Backup Configuration
+                - name: BACKUP_ENCRYPTION_ENABLED
+                  value: "{{ .Values.backup.encryption.enabled | default true }}"
+                - name: BACKUP_ENCRYPTION_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-backup-secrets
+                      key: encryption-key
+                - name: LOCAL_RETENTION_DAYS
+                  value: "{{ .Values.backup.storage.local.retentionDays | default 3 }}"
+                
+                # S3 Configuration
+                - name: S3_BACKUP_ENABLED
+                  value: "{{ .Values.backup.storage.primary.s3.enabled | default true }}"
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-backup-secrets
+                      key: s3-access-key-id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-backup-secrets
+                      key: s3-secret-access-key
+                - name: S3_BUCKET
+                  value: "{{ .Values.backup.storage.primary.s3.bucket | default "snapfix-backups" }}"
+                - name: S3_STORAGE_CLASS
+                  value: "{{ .Values.backup.storage.primary.s3.storageClass | default "STANDARD_IA" }}"
+                
+                # GCS Configuration
+                - name: GCS_BACKUP_ENABLED
+                  value: "{{ .Values.backup.storage.secondary.enabled | default true }}"
+                - name: GOOGLE_APPLICATION_CREDENTIALS
+                  value: "/etc/gcs/service-account.json"
+                - name: GCS_BUCKET
+                  value: "{{ .Values.backup.storage.secondary.gcs.bucket | default "snapfix-backups-secondary" }}"
+              
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backup
+                - name: backup-config
+                  mountPath: /etc/backup
+                  readOnly: true
+                {{- if .Values.backup.storage.secondary.gcs.serviceAccountKey }}
+                - name: gcs-service-account
+                  mountPath: /etc/gcs
+                  readOnly: true
+                {{- end }}
+              
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+          
+          volumes:
+            - name: backup-storage
+              {{- if .Values.backup.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ include "snapfix-enterprise.fullname" . }}-backup-storage
+              {{- else }}
+              emptyDir:
+                sizeLimit: {{ .Values.backup.storage.local.maxSizeGb | default 100 }}Gi
+              {{- end }}
+            - name: backup-config
+              configMap:
+                name: {{ include "snapfix-enterprise.fullname" . }}-backup-config
+            {{- if .Values.backup.storage.secondary.gcs.serviceAccountKey }}
+            - name: gcs-service-account
+              secret:
+                secretName: {{ include "snapfix-enterprise.fullname" . }}-backup-secrets
+                items:
+                  - key: gcs-service-account-key
+                    path: service-account.json
+            {{- end }}
+
+---
+{{- if .Values.backup.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-backup-storage
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.backup.persistence.accessMode | default "ReadWriteOnce" }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size | default "500Gi" }}
+  {{- if .Values.backup.persistence.storageClass }}
+  storageClassName: {{ .Values.backup.persistence.storageClass }}
+  {{- end }}
+{{- end }}
+
+---
+# Secret for backup credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-backup-secrets
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- if .Values.backup.encryption.key }}
+  encryption-key: {{ .Values.backup.encryption.key | b64enc }}
+  {{- end }}
+  {{- if .Values.backup.storage.primary.s3.accessKeyId }}
+  s3-access-key-id: {{ .Values.backup.storage.primary.s3.accessKeyId | b64enc }}
+  {{- end }}
+  {{- if .Values.backup.storage.primary.s3.secretAccessKey }}
+  s3-secret-access-key: {{ .Values.backup.storage.primary.s3.secretAccessKey | b64enc }}
+  {{- end }}
+  {{- if .Values.backup.storage.secondary.gcs.serviceAccountKey }}
+  gcs-service-account-key: {{ .Values.backup.storage.secondary.gcs.serviceAccountKey | b64enc }}
+  {{- end }}
+
+---
+# Disaster Recovery Controller Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-disaster-recovery
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: disaster-recovery
+spec:
+  replicas: {{ .Values.disasterRecovery.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: disaster-recovery
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/backup-disaster-recovery.yaml") . | sha256sum }}
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: disaster-recovery
+    spec:
+      serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+      containers:
+        - name: disaster-recovery-controller
+          image: "{{ .Values.disasterRecovery.image.repository }}:{{ .Values.disasterRecovery.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.disasterRecovery.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Disaster Recovery Configuration
+            - name: DR_ENABLED
+              value: "{{ .Values.disasterRecovery.enabled | default true }}"
+            - name: RTO_MINUTES
+              value: "{{ .Values.disasterRecovery.objectives.rtoMinutes | default 60 }}"
+            - name: RPO_MINUTES
+              value: "{{ .Values.disasterRecovery.objectives.rpoMinutes | default 15 }}"
+            
+            # Multi-Region Configuration
+            - name: MULTI_REGION_ENABLED
+              value: "{{ .Values.disasterRecovery.multiRegion.enabled | default true }}"
+            - name: PRIMARY_REGION
+              value: "{{ .Values.disasterRecovery.multiRegion.primaryRegion | default "us-east-1" }}"
+            - name: SECONDARY_REGIONS
+              value: "{{ join "," (.Values.disasterRecovery.multiRegion.secondaryRegions | default (list "us-west-2" "eu-west-1")) }}"
+            
+            # Failover Configuration
+            - name: AUTOMATIC_FAILOVER_ENABLED
+              value: "{{ .Values.disasterRecovery.failover.automatic.enabled | default true }}"
+            - name: HEALTH_CHECK_INTERVAL
+              value: "{{ .Values.disasterRecovery.failover.automatic.healthCheckIntervalSeconds | default 30 }}"
+            - name: FAILURE_THRESHOLD
+              value: "{{ .Values.disasterRecovery.failover.automatic.failureThreshold | default 3 }}"
+            
+            # Database Configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                  key: database-url
+            
+            # Notification Configuration
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-notification-secrets
+                  key: slack-webhook-url
+                  optional: true
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          
+          resources:
+            {{- toYaml .Values.disasterRecovery.resources | nindent 12 }}
+          
+          volumeMounts:
+            - name: backup-config
+              mountPath: /app/config
+              readOnly: true
+      
+      volumes:
+        - name: backup-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-backup-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-disaster-recovery
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: disaster-recovery
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: disaster-recovery

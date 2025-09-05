@@ -1,0 +1,1150 @@
+{{/*
+📊 Advanced Monitoring Stack Part 3 - Logstash, Kibana, Jaeger, Node Exporter
+
+This template completes the monitoring stack with:
+- Logstash for log processing and transformation
+- Kibana for log visualization and analysis
+- Jaeger for distributed tracing
+- Node Exporter for system metrics
+- Fluent Bit for log collection
+- Custom monitoring configurations
+*/}}
+
+{{- if .Values.monitoring.enabled }}
+{{/*
+📝 Logstash Configuration
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-logstash-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: logstash
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    path.config: /usr/share/logstash/pipeline
+    path.data: /usr/share/logstash/data
+    pipeline.workers: {{ .Values.monitoring.logstash.pipelineWorkers | default 2 }}
+    pipeline.batch.size: {{ .Values.monitoring.logstash.batchSize | default 125 }}
+    pipeline.batch.delay: {{ .Values.monitoring.logstash.batchDelay | default 50 }}
+    queue.type: persisted
+    queue.max_bytes: {{ .Values.monitoring.logstash.queueMaxBytes | default "1gb" }}
+    dead_letter_queue.enable: true
+    log.level: {{ .Values.monitoring.logstash.logLevel | default "info" }}
+    monitoring.enabled: true
+    monitoring.elasticsearch.hosts: ["http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"]
+  
+  pipelines.yml: |
+    - pipeline.id: snapfix-logs
+      path.config: "/usr/share/logstash/pipeline/snapfix-logs.conf"
+      pipeline.workers: {{ .Values.monitoring.logstash.pipelineWorkers | default 2 }}
+    - pipeline.id: kubernetes-logs
+      path.config: "/usr/share/logstash/pipeline/kubernetes-logs.conf"
+      pipeline.workers: {{ .Values.monitoring.logstash.pipelineWorkers | default 2 }}
+    - pipeline.id: nginx-logs
+      path.config: "/usr/share/logstash/pipeline/nginx-logs.conf"
+      pipeline.workers: 1
+  
+  # SnapFix Application Logs Pipeline
+  snapfix-logs.conf: |
+    input {
+      beats {
+        port => 5044
+        type => "snapfix-app"
+      }
+      
+      # Direct syslog input for application logs
+      syslog {
+        port => 5514
+        type => "snapfix-syslog"
+      }
+      
+      # HTTP input for application metrics
+      http {
+        port => 8080
+        type => "snapfix-metrics"
+      }
+    }
+    
+    filter {
+      # Parse JSON logs from SnapFix application
+      if [type] == "snapfix-app" {
+        json {
+          source => "message"
+        }
+        
+        # Parse timestamp
+        date {
+          match => [ "timestamp", "ISO8601" ]
+        }
+        
+        # Add environment and service tags
+        mutate {
+          add_field => {
+            "service" => "snapfix-enterprise"
+            "environment" => "{{ .Values.global.environment | default "production" }}"
+            "version" => "{{ .Chart.AppVersion }}"
+          }
+        }
+        
+        # Parse log level
+        if [level] {
+          mutate {
+            uppercase => [ "level" ]
+          }
+        }
+        
+        # Extract user information if present
+        if [user_id] {
+          mutate {
+            add_field => { "user_context" => "%{user_id}" }
+          }
+        }
+        
+        # Parse request information
+        if [request] {
+          mutate {
+            add_field => {
+              "request_method" => "%{[request][method]}"
+              "request_path" => "%{[request][path]}"
+              "request_ip" => "%{[request][ip]}"
+            }
+          }
+        }
+        
+        # Parse response information
+        if [response] {
+          mutate {
+            add_field => {
+              "response_status" => "%{[response][status]}"
+              "response_time" => "%{[response][time]}"
+            }
+          }
+          
+          # Convert response time to number
+          if [response_time] {
+            mutate {
+              convert => { "response_time" => "float" }
+            }
+          }
+        }
+        
+        # Parse error information
+        if [error] {
+          mutate {
+            add_field => {
+              "error_type" => "%{[error][type]}"
+              "error_message" => "%{[error][message]}"
+              "error_stack" => "%{[error][stack]}"
+            }
+          }
+          
+          # Add error severity
+          if [level] == "ERROR" or [level] == "FATAL" {
+            mutate {
+              add_field => { "alert_severity" => "high" }
+            }
+          }
+        }
+      }
+      
+      # Parse syslog format
+      if [type] == "snapfix-syslog" {
+        grok {
+          match => { "message" => "%{SYSLOGTIMESTAMP:syslog_timestamp} %{IPORHOST:syslog_server} %{DATA:syslog_program}(?:\[%{POSINT:syslog_pid}\])?: %{GREEDYDATA:syslog_message}" }
+        }
+        
+        date {
+          match => [ "syslog_timestamp", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss" ]
+        }
+      }
+      
+      # Common filters for all log types
+      # Remove empty fields
+      ruby {
+        code => "
+          event.to_hash.each { |k, v|
+            if v.nil? || (v.respond_to?(:empty?) && v.empty?)
+              event.remove(k)
+            end
+          }
+        "
+      }
+      
+      # Add geolocation for IP addresses
+      if [request_ip] {
+        geoip {
+          source => "request_ip"
+          target => "geoip"
+        }
+      }
+      
+      # Add fingerprint for deduplication
+      fingerprint {
+        source => ["message", "@timestamp", "host"]
+        target => "[@metadata][fingerprint]"
+        method => "MURMUR3"
+      }
+    }
+    
+    output {
+      # Send to Elasticsearch
+      elasticsearch {
+        hosts => ["http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"]
+        index => "snapfix-logs-%{+YYYY.MM.dd}"
+        document_id => "%{[@metadata][fingerprint]}"
+        template_name => "snapfix-logs"
+        template_pattern => "snapfix-logs-*"
+        template => {
+          "index_patterns" => ["snapfix-logs-*"]
+          "settings" => {
+            "number_of_shards" => 1
+            "number_of_replicas" => 1
+            "index.refresh_interval" => "5s"
+          }
+          "mappings" => {
+            "properties" => {
+              "@timestamp" => { "type" => "date" }
+              "level" => { "type" => "keyword" }
+              "message" => { "type" => "text", "analyzer" => "standard" }
+              "service" => { "type" => "keyword" }
+              "environment" => { "type" => "keyword" }
+              "user_id" => { "type" => "keyword" }
+              "request_method" => { "type" => "keyword" }
+              "request_path" => { "type" => "keyword" }
+              "response_status" => { "type" => "integer" }
+              "response_time" => { "type" => "float" }
+              "error_type" => { "type" => "keyword" }
+              "geoip.location" => { "type" => "geo_point" }
+            }
+          }
+        }
+      }
+      
+      # Send high-priority alerts to separate index
+      if [alert_severity] == "high" {
+        elasticsearch {
+          hosts => ["http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"]
+          index => "snapfix-alerts-%{+YYYY.MM.dd}"
+        }
+      }
+      
+      # Debug output (optional)
+      {{- if .Values.monitoring.logstash.debug }}
+      stdout {
+        codec => rubydebug
+      }
+      {{- end }}
+    }
+  
+  # Kubernetes Logs Pipeline
+  kubernetes-logs.conf: |
+    input {
+      beats {
+        port => 5045
+        type => "kubernetes"
+      }
+    }
+    
+    filter {
+      # Parse Kubernetes metadata
+      if [kubernetes] {
+        mutate {
+          add_field => {
+            "k8s_namespace" => "%{[kubernetes][namespace]}"
+            "k8s_pod" => "%{[kubernetes][pod][name]}"
+            "k8s_container" => "%{[kubernetes][container][name]}"
+            "k8s_node" => "%{[kubernetes][node][name]}"
+          }
+        }
+      }
+      
+      # Parse container logs
+      if [k8s_container] {
+        # Try to parse as JSON first
+        json {
+          source => "message"
+          skip_on_invalid_json => true
+        }
+        
+        # Parse common log formats
+        grok {
+          match => {
+            "message" => [
+              "%{TIMESTAMP_ISO8601:timestamp} %{LOGLEVEL:level} %{GREEDYDATA:log_message}",
+              "%{COMBINEDAPACHELOG}",
+              "%{GREEDYDATA:log_message}"
+            ]
+          }
+          tag_on_failure => ["_grokparsefailure_k8s"]
+        }
+      }
+    }
+    
+    output {
+      elasticsearch {
+        hosts => ["http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"]
+        index => "kubernetes-logs-%{+YYYY.MM.dd}"
+      }
+    }
+  
+  # Nginx Access Logs Pipeline
+  nginx-logs.conf: |
+    input {
+      beats {
+        port => 5046
+        type => "nginx"
+      }
+    }
+    
+    filter {
+      # Parse Nginx access logs
+      grok {
+        match => {
+          "message" => "%{COMBINEDAPACHELOG} %{QS:x_forwarded_for}"
+        }
+        tag_on_failure => ["_grokparsefailure_nginx"]
+      }
+      
+      # Parse timestamp
+      date {
+        match => [ "timestamp", "dd/MMM/yyyy:HH:mm:ss Z" ]
+      }
+      
+      # Convert response size and time to numbers
+      mutate {
+        convert => {
+          "response" => "integer"
+          "bytes" => "integer"
+        }
+      }
+      
+      # Add geolocation
+      if [clientip] {
+        geoip {
+          source => "clientip"
+          target => "geoip"
+        }
+      }
+      
+      # Parse user agent
+      useragent {
+        source => "agent"
+        target => "useragent"
+      }
+    }
+    
+    output {
+      elasticsearch {
+        hosts => ["http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"]
+        index => "nginx-logs-%{+YYYY.MM.dd}"
+      }
+    }
+
+---
+{{/*
+📝 Logstash Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-logstash
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: logstash
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.monitoring.logstash.replicas | default 2 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: logstash
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: logstash
+    spec:
+      containers:
+        - name: logstash
+          image: {{ .Values.monitoring.logstash.image.repository }}:{{ .Values.monitoring.logstash.image.tag | default "7.17.9" }}
+          imagePullPolicy: {{ .Values.monitoring.logstash.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: LS_JAVA_OPTS
+              value: "-Xms{{ .Values.monitoring.logstash.jvm.heapSize | default "1g" }} -Xmx{{ .Values.monitoring.logstash.jvm.heapSize | default "1g" }}"
+          ports:
+            - containerPort: 5044
+              name: beats
+              protocol: TCP
+            - containerPort: 5045
+              name: k8s-beats
+              protocol: TCP
+            - containerPort: 5046
+              name: nginx-beats
+              protocol: TCP
+            - containerPort: 5514
+              name: syslog
+              protocol: TCP
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+            - containerPort: 9600
+              name: monitoring
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: monitoring
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: monitoring
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.logstash.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/logstash/config
+            - name: pipeline
+              mountPath: /usr/share/logstash/pipeline
+            - name: data
+              mountPath: /usr/share/logstash/data
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-logstash-config
+            items:
+              - key: logstash.yml
+                path: logstash.yml
+              - key: pipelines.yml
+                path: pipelines.yml
+        - name: pipeline
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-logstash-config
+            items:
+              - key: snapfix-logs.conf
+                path: snapfix-logs.conf
+              - key: kubernetes-logs.conf
+                path: kubernetes-logs.conf
+              - key: nginx-logs.conf
+                path: nginx-logs.conf
+        - name: data
+          {{- if .Values.monitoring.logstash.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-logstash-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+
+---
+{{/*
+📝 Logstash Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-logstash
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: logstash
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: {{ .Values.monitoring.logstash.service.type | default "ClusterIP" }}
+  ports:
+    - port: 5044
+      targetPort: beats
+      protocol: TCP
+      name: beats
+    - port: 5045
+      targetPort: k8s-beats
+      protocol: TCP
+      name: k8s-beats
+    - port: 5046
+      targetPort: nginx-beats
+      protocol: TCP
+      name: nginx-beats
+    - port: 5514
+      targetPort: syslog
+      protocol: TCP
+      name: syslog
+    - port: 8080
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: 9600
+      targetPort: monitoring
+      protocol: TCP
+      name: monitoring
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: logstash
+
+---
+{{/*
+📝 Logstash PVC
+*/}}
+{{- if .Values.monitoring.logstash.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-logstash-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: logstash
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.monitoring.logstash.persistence.size | default "10Gi" }}
+  {{- if .Values.monitoring.logstash.persistence.storageClass }}
+  storageClassName: {{ .Values.monitoring.logstash.persistence.storageClass }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+📊 Kibana Configuration
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-kibana-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kibana
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  kibana.yml: |
+    server.name: {{ include "snapfix-enterprise.fullname" . }}-kibana
+    server.host: "0.0.0.0"
+    server.port: 5601
+    
+    # Elasticsearch configuration
+    elasticsearch.hosts: ["http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"]
+    elasticsearch.pingTimeout: 1500
+    elasticsearch.requestTimeout: 30000
+    elasticsearch.shardTimeout: 30000
+    elasticsearch.startupTimeout: 5000
+    
+    # Kibana configuration
+    kibana.index: ".kibana"
+    kibana.defaultAppId: "dashboard"
+    
+    # Logging
+    logging.level: {{ .Values.monitoring.kibana.logLevel | default "info" }}
+    logging.quiet: false
+    logging.verbose: false
+    
+    # Security
+    {{- if .Values.monitoring.kibana.security.enabled }}
+    xpack.security.enabled: true
+    elasticsearch.username: {{ .Values.monitoring.kibana.security.username | default "kibana" }}
+    elasticsearch.password: ${ELASTICSEARCH_PASSWORD}
+    {{- end }}
+    
+    # Monitoring
+    xpack.monitoring.enabled: true
+    xpack.monitoring.kibana.collection.enabled: true
+    
+    # Advanced settings
+    server.maxPayloadBytes: {{ .Values.monitoring.kibana.maxPayloadBytes | default 1048576 }}
+    server.compression.enabled: true
+    
+    # Custom branding
+    xpack.branding.logo: {{ .Values.monitoring.kibana.branding.logo | default "" }}
+    xpack.branding.faviconPNG: {{ .Values.monitoring.kibana.branding.faviconPNG | default "" }}
+    
+    # Index patterns and saved objects
+    kibana.autocompleteTimeout: 1000
+    kibana.autocompleteTerminateAfter: 100000
+    
+    # Performance settings
+    ops.interval: 30000
+    
+    # Map settings
+    map.includeElasticMapsService: true
+    map.proxyElasticMapsServiceInMaps: false
+    
+    # Telemetry
+    telemetry.enabled: {{ .Values.monitoring.kibana.telemetry.enabled | default false }}
+    telemetry.optIn: {{ .Values.monitoring.kibana.telemetry.optIn | default false }}
+
+---
+{{/*
+📊 Kibana Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-kibana
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kibana
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.monitoring.kibana.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: kibana
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: kibana
+    spec:
+      containers:
+        - name: kibana
+          image: {{ .Values.monitoring.kibana.image.repository }}:{{ .Values.monitoring.kibana.image.tag | default "7.17.9" }}
+          imagePullPolicy: {{ .Values.monitoring.kibana.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: ELASTICSEARCH_HOSTS
+              value: "http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"
+            {{- if .Values.monitoring.kibana.security.enabled }}
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-kibana-secret
+                  key: elasticsearch-password
+            {{- end }}
+          ports:
+            - containerPort: 5601
+              name: http
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.kibana.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/kibana/config/kibana.yml
+              subPath: kibana.yml
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-kibana-config
+
+---
+{{/*
+📊 Kibana Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-kibana
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kibana
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: {{ .Values.monitoring.kibana.service.type | default "ClusterIP" }}
+  ports:
+    - port: 5601
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kibana
+
+---
+{{/*
+📊 Kibana Secret
+*/}}
+{{- if .Values.monitoring.kibana.security.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-kibana-secret
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kibana
+    app.kubernetes.io/part-of: snapfix-enterprise
+type: Opaque
+data:
+  elasticsearch-password: {{ .Values.monitoring.kibana.security.password | default "kibana123" | b64enc }}
+{{- end }}
+
+---
+{{/*
+🔍 Jaeger Configuration
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-jaeger-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  # Jaeger Collector configuration
+  collector.yaml: |
+    receivers:
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:14250
+          thrift_http:
+            endpoint: 0.0.0.0:14268
+          thrift_compact:
+            endpoint: 0.0.0.0:6831
+          thrift_binary:
+            endpoint: 0.0.0.0:6832
+      zipkin:
+        endpoint: 0.0.0.0:9411
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    
+    processors:
+      batch:
+        timeout: 1s
+        send_batch_size: 1024
+      memory_limiter:
+        limit_mib: {{ .Values.monitoring.jaeger.collector.memoryLimitMiB | default 512 }}
+    
+    exporters:
+      elasticsearch:
+        endpoints: ["http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"]
+        index: jaeger-span-%{+yyyy.MM.dd}
+        mapping:
+          settings:
+            number_of_shards: 1
+            number_of_replicas: 1
+            index.refresh_interval: "1s"
+          mappings:
+            properties:
+              traceID:
+                type: keyword
+              spanID:
+                type: keyword
+              parentSpanID:
+                type: keyword
+              operationName:
+                type: keyword
+              startTime:
+                type: long
+              duration:
+                type: long
+              tags:
+                type: nested
+                properties:
+                  key:
+                    type: keyword
+                  value:
+                    type: text
+    
+    service:
+      pipelines:
+        traces:
+          receivers: [jaeger, zipkin, otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]
+      
+      extensions: [health_check, pprof, zpages]
+    
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      pprof:
+        endpoint: 0.0.0.0:1777
+      zpages:
+        endpoint: 0.0.0.0:55679
+  
+  # Jaeger Query configuration
+  query.yaml: |
+    span-storage:
+      type: elasticsearch
+    
+    es:
+      server-urls: http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200
+      index-prefix: jaeger
+      max-span-age: {{ .Values.monitoring.jaeger.query.maxSpanAge | default "72h" }}
+      num-shards: {{ .Values.monitoring.jaeger.query.numShards | default 1 }}
+      num-replicas: {{ .Values.monitoring.jaeger.query.numReplicas | default 1 }}
+    
+    query:
+      port: 16686
+      health-check-http-port: 16687
+      log-level: {{ .Values.monitoring.jaeger.query.logLevel | default "info" }}
+      max-clock-skew-adjustment: {{ .Values.monitoring.jaeger.query.maxClockSkewAdjustment | default "0s" }}
+
+---
+{{/*
+🔍 Jaeger Collector Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-jaeger-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger-collector
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.monitoring.jaeger.collector.replicas | default 2 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: jaeger-collector
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: jaeger-collector
+    spec:
+      containers:
+        - name: jaeger-collector
+          image: {{ .Values.monitoring.jaeger.collector.image.repository }}:{{ .Values.monitoring.jaeger.collector.image.tag | default "1.42.0" }}
+          imagePullPolicy: {{ .Values.monitoring.jaeger.collector.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - --config-file=/etc/jaeger/collector.yaml
+          env:
+            - name: SPAN_STORAGE_TYPE
+              value: elasticsearch
+            - name: ES_SERVER_URLS
+              value: "http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"
+          ports:
+            - containerPort: 14250
+              name: grpc
+              protocol: TCP
+            - containerPort: 14268
+              name: http-thrift
+              protocol: TCP
+            - containerPort: 6831
+              name: thrift-compact
+              protocol: UDP
+            - containerPort: 6832
+              name: thrift-binary
+              protocol: UDP
+            - containerPort: 9411
+              name: zipkin
+              protocol: TCP
+            - containerPort: 4317
+              name: otlp-grpc
+              protocol: TCP
+            - containerPort: 4318
+              name: otlp-http
+              protocol: TCP
+            - containerPort: 13133
+              name: health
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.jaeger.collector.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/jaeger
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-jaeger-config
+
+---
+{{/*
+🔍 Jaeger Query Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-jaeger-query
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger-query
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.monitoring.jaeger.query.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: jaeger-query
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: jaeger-query
+    spec:
+      containers:
+        - name: jaeger-query
+          image: {{ .Values.monitoring.jaeger.query.image.repository }}:{{ .Values.monitoring.jaeger.query.image.tag | default "1.42.0" }}
+          imagePullPolicy: {{ .Values.monitoring.jaeger.query.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - --config-file=/etc/jaeger/query.yaml
+          env:
+            - name: SPAN_STORAGE_TYPE
+              value: elasticsearch
+            - name: ES_SERVER_URLS
+              value: "http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"
+          ports:
+            - containerPort: 16686
+              name: http
+              protocol: TCP
+            - containerPort: 16687
+              name: health
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.jaeger.query.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/jaeger
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-jaeger-config
+
+---
+{{/*
+🔍 Jaeger Services
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-jaeger-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger-collector
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: {{ .Values.monitoring.jaeger.collector.service.type | default "ClusterIP" }}
+  ports:
+    - port: 14250
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: 14268
+      targetPort: http-thrift
+      protocol: TCP
+      name: http-thrift
+    - port: 6831
+      targetPort: thrift-compact
+      protocol: UDP
+      name: thrift-compact
+    - port: 6832
+      targetPort: thrift-binary
+      protocol: UDP
+      name: thrift-binary
+    - port: 9411
+      targetPort: zipkin
+      protocol: TCP
+      name: zipkin
+    - port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+      name: otlp-grpc
+    - port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+      name: otlp-http
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger-collector
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-jaeger-query
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger-query
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: {{ .Values.monitoring.jaeger.query.service.type | default "ClusterIP" }}
+  ports:
+    - port: 16686
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: jaeger-query
+
+---
+{{/*
+📊 Node Exporter DaemonSet
+*/}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-node-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-exporter
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: node-exporter
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: node-exporter
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: node-exporter
+          image: {{ .Values.monitoring.nodeExporter.image.repository }}:{{ .Values.monitoring.nodeExporter.image.tag | default "v1.5.0" }}
+          imagePullPolicy: {{ .Values.monitoring.nodeExporter.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host/root
+            - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)
+            - --web.listen-address=0.0.0.0:9100
+          ports:
+            - containerPort: 9100
+              name: metrics
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.nodeExporter.resources | nindent 12 }}
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: root
+              mountPath: /host/root
+              mountPropagation: HostToContainer
+              readOnly: true
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: root
+          hostPath:
+            path: /
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+        - effect: NoExecute
+          operator: Exists
+
+---
+{{/*
+📊 Node Exporter Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-node-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-exporter
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9100"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 9100
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: node-exporter
+
+{{- end }}

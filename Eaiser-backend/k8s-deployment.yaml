@@ -1,0 +1,534 @@
+# 🚀 Kubernetes Deployment for SnapFix - 1 Lakh Users Support
+# Auto-scaling, high availability, and production-ready configuration
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapfix
+  labels:
+    name: snapfix
+    environment: production
+
+---
+# ConfigMap for application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: snapfix-config
+  namespace: snapfix
+data:
+  MONGODB_URL: "mongodb://mongo-0.mongo-service:27017,mongo-1.mongo-service:27017,mongo-2.mongo-service:27017/snapfix?replicaSet=rs0"
+  REDIS_URL: "redis://redis-service:6379"
+  RABBITMQ_URL: "amqp://snapfix:snapfix123@rabbitmq-service:5672//"
+  LOG_LEVEL: "info"
+  ENVIRONMENT: "production"
+
+---
+# Secret for sensitive data
+apiVersion: v1
+kind: Secret
+metadata:
+  name: snapfix-secrets
+  namespace: snapfix
+type: Opaque
+data:
+  # Base64 encoded values
+  MONGODB_PASSWORD: c25hcGZpeDEyMw==  # snapfix123
+  REDIS_PASSWORD: c25hcGZpeDEyMw==     # snapfix123
+  RABBITMQ_PASSWORD: c25hcGZpeDEyMw==  # snapfix123
+  JWT_SECRET: c3VwZXJfc2VjcmV0X2tleV9mb3Jfc25hcGZpeA==  # super_secret_key_for_snapfix
+
+---
+# FastAPI Deployment with Auto-scaling
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapfix-api
+  namespace: snapfix
+  labels:
+    app: snapfix-api
+    tier: backend
+spec:
+  replicas: 10  # Start with 10 replicas, auto-scale up to 50
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      app: snapfix-api
+  template:
+    metadata:
+      labels:
+        app: snapfix-api
+        tier: backend
+    spec:
+      containers:
+      - name: snapfix-api
+        image: snapfix/api:latest
+        ports:
+        - containerPort: 10000
+          name: http
+        env:
+        - name: MONGODB_URL
+          valueFrom:
+            configMapKeyRef:
+              name: snapfix-config
+              key: MONGODB_URL
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: snapfix-config
+              key: REDIS_URL
+        - name: RABBITMQ_URL
+          valueFrom:
+            configMapKeyRef:
+              name: snapfix-config
+              key: RABBITMQ_URL
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: snapfix-secrets
+              key: JWT_SECRET
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 10000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 10000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: app-logs
+          mountPath: /app/logs
+      volumes:
+      - name: app-logs
+        emptyDir: {}
+      restartPolicy: Always
+
+---
+# FastAPI Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: snapfix-api-service
+  namespace: snapfix
+  labels:
+    app: snapfix-api
+spec:
+  selector:
+    app: snapfix-api
+  ports:
+  - port: 80
+    targetPort: 10000
+    protocol: TCP
+    name: http
+  type: ClusterIP
+
+---
+# Horizontal Pod Autoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: snapfix-api-hpa
+  namespace: snapfix
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: snapfix-api
+  minReplicas: 10
+  maxReplicas: 50  # Scale up to 50 pods for 1 lakh users
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+
+---
+# Nginx Load Balancer Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-lb
+  namespace: snapfix
+  labels:
+    app: nginx-lb
+    tier: frontend
+spec:
+  replicas: 3  # Multiple nginx instances for HA
+  selector:
+    matchLabels:
+      app: nginx-lb
+  template:
+    metadata:
+      labels:
+        app: nginx-lb
+        tier: frontend
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        - containerPort: 443
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+
+---
+# Nginx ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: snapfix
+data:
+  nginx.conf: |
+    events {
+        worker_connections 4096;
+        use epoll;
+        multi_accept on;
+    }
+    http {
+        upstream snapfix_backend {
+            least_conn;
+            server snapfix-api-service:80;
+        }
+        server {
+            listen 80;
+            location / {
+                proxy_pass http://snapfix_backend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+        }
+    }
+
+---
+# Nginx Service (LoadBalancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-lb-service
+  namespace: snapfix
+  labels:
+    app: nginx-lb
+spec:
+  selector:
+    app: nginx-lb
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  - port: 443
+    targetPort: 443
+    protocol: TCP
+    name: https
+  type: LoadBalancer
+
+---
+# MongoDB StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  namespace: snapfix
+spec:
+  serviceName: mongo-service
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      containers:
+      - name: mongo
+        image: mongo:7.0
+        ports:
+        - containerPort: 27017
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: admin
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: snapfix-secrets
+              key: MONGODB_PASSWORD
+        command:
+        - mongod
+        - --replSet
+        - rs0
+        - --bind_ip_all
+        volumeMounts:
+        - name: mongo-data
+          mountPath: /data/db
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+  volumeClaimTemplates:
+  - metadata:
+      name: mongo-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 100Gi
+
+---
+# MongoDB Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-service
+  namespace: snapfix
+spec:
+  selector:
+    app: mongo
+  ports:
+  - port: 27017
+    targetPort: 27017
+  clusterIP: None
+
+---
+# Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: snapfix
+spec:
+  replicas: 3  # Redis cluster
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.2-alpine
+        ports:
+        - containerPort: 6379
+        command:
+        - redis-server
+        - --appendonly
+        - "yes"
+        - --cluster-enabled
+        - "yes"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        emptyDir: {}
+
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: snapfix
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+  type: ClusterIP
+
+---
+# RabbitMQ Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  namespace: snapfix
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+      - name: rabbitmq
+        image: rabbitmq:3.12-management
+        ports:
+        - containerPort: 5672
+        - containerPort: 15672
+        env:
+        - name: RABBITMQ_DEFAULT_USER
+          value: snapfix
+        - name: RABBITMQ_DEFAULT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: snapfix-secrets
+              key: RABBITMQ_PASSWORD
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+---
+# RabbitMQ Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-service
+  namespace: snapfix
+spec:
+  selector:
+    app: rabbitmq
+  ports:
+  - port: 5672
+    targetPort: 5672
+    name: amqp
+  - port: 15672
+    targetPort: 15672
+    name: management
+  type: ClusterIP
+
+---
+# Celery Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: snapfix
+spec:
+  replicas: 10  # Multiple workers for background tasks
+  selector:
+    matchLabels:
+      app: celery-worker
+  template:
+    metadata:
+      labels:
+        app: celery-worker
+    spec:
+      containers:
+      - name: celery-worker
+        image: snapfix/api:latest
+        command: ["celery", "-A", "celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+        env:
+        - name: MONGODB_URL
+          valueFrom:
+            configMapKeyRef:
+              name: snapfix-config
+              key: MONGODB_URL
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: snapfix-config
+              key: REDIS_URL
+        - name: RABBITMQ_URL
+          valueFrom:
+            configMapKeyRef:
+              name: snapfix-config
+              key: RABBITMQ_URL
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+---
+# Network Policy for Security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: snapfix-network-policy
+  namespace: snapfix
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: snapfix
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: snapfix
+  - to: []  # Allow external traffic for APIs

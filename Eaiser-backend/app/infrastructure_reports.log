@@ -1,0 +1,51 @@
+2025-08-05 08:54:38,326 - services.mongodb_service - INFO - Using PyMongo version: 4.13.0
+2025-08-05 08:54:38,356 - main - INFO - SnapFix AI backend started successfully
+2025-08-05 08:55:08,930 - services.mongodb_service - INFO - Database connection established to snapfix
+2025-08-05 08:55:08,932 - services.ai_service - WARNING - Issue configurations file not found, using defaults
+2025-08-05 08:55:08,934 - services.ai_service - WARNING - Risk matrices file not found, using defaults
+2025-08-05 08:55:08,936 - services.ai_service - WARNING - SLA requirements file not found, using defaults
+2025-08-05 08:55:20,787 - services.ai_service - INFO - Advanced classification response: ```json
+{
+  "primary_issue_type": "fire",
+  "secondary_issues": ["property_damage", "environmental_impact", "public_safety_risk"],
+  "confidence_score": 100,
+  "visual_indicators": ["large flames", "smoke", "firefighters present", "burning vegetation"],
+  "severity_factors": {
+    "public_safety_risk": 10,
+    "structural_integrity": "Not applicable (wildland fire)",
+    "environmental_impact": 10,
+    "traffic_disruption": 7,  
+    "economic_impact": 9
+  },
+  "urgency_indicators": ["active flames", "potential for spread", "presence of emergency responders"],
+  "size_and_scope": {
+    "affected_area": "wildland/urban interface, significant portion of hillside",
+    "estimated_dimensions": "Difficult to estimate from image, likely hectares/acres",
+    "spread_potential": "high"
+  },
+  "weather_considerations": "Wind speed and direction critical, dry conditions exacerbate fire spread, high temperatures increase intensity.",
+  "accessibility_impact": "Evacuations likely in progress, road closures probable, emergency access routes essential.",
+  "regulatory_implications": ["Wildland fire management regulations", "Air quality standards", "Emergency evacuation protocols", "Building codes in fire-prone areas"],
+  "similar_incidents": "Depending on location and time of year, wildfires can be common in similar areas with dry vegetation and weather conditions.",
+  "root_cause_analysis": {
+    "probable_causes": ["Natural causes (lightning)", "Human activity (accidental or intentional)", "Power line malfunction"],
+    "contributing_factors": ["Dry vegetation", "High winds", "Difficult terrain", "Climate change (long-term drought)"],
+    "preventability": "Medium (depending on cause, public awareness campaigns and vegetation management can reduce risk)"
+  }
+}
+```
+
+2025-08-05 08:55:20,790 - services.ai_service - ERROR - Error calculating metrics: 'AdvancedInfrastructureAnalyzer' object has no attribute '_calculate_public_impact_score'
+2025-08-05 08:55:20,791 - services.ai_service - ERROR - Error determining severity: can't multiply sequence by non-int of type 'float'
+2025-08-05 08:55:22,479 - services.geocode_service - INFO - Geocoded zip code 37062: Fairview, TN 37062, USA, 35.98970500000001, -87.12233619999999
+2025-08-05 08:55:22,487 - services.ai_service - WARNING - Issue configurations file not found, using defaults
+2025-08-05 08:55:22,488 - services.ai_service - WARNING - Risk matrices file not found, using defaults
+2025-08-05 08:55:22,489 - services.ai_service - WARNING - SLA requirements file not found, using defaults
+2025-08-05 08:55:23,851 - services.ai_service - ERROR - Error generating professional report: 'AdvancedInfrastructureAnalyzer' object has no attribute '_generate_digital_signature'
+2025-08-05 08:55:23,851 - services.ai_service - ERROR - Enhanced report generation failed: 'AdvancedInfrastructureAnalyzer' object has no attribute '_generate_fallback_report'
+2025-08-05 08:55:23,852 - routes.issues - ERROR - Failed to generate report for issue b071655b-7486-4a7e-9e8e-64e65890023f: 'template_fields'
+Traceback (most recent call last):
+  File "C:\Users\chris\OneDrive\Desktop\Snapfix-AI\backend\app\routes\issues.py", line 882, in create_issue
+    report["template_fields"].pop("tracking_link", None)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'template_fields'

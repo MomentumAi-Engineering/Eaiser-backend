@@ -1,0 +1,197 @@
+# Multi-stage Dockerfile for Production - Optimized for 1 Lakh+ Users
+# This Dockerfile provides:
+# - Multi-stage build for smaller image size
+# - Python optimizations for performance
+# - Security hardening
+# - Health checks and monitoring
+# - Efficient dependency management
+
+# Stage 1: Build stage
+FROM python:3.11-slim as builder
+
+# Set build arguments
+ARG BUILD_DATE
+ARG VERSION
+ARG VCS_REF
+
+# Labels for metadata
+LABEL maintainer="Eaiser Team" \
+      version="${VERSION}" \
+      description="Eaiser Backend API - Production Optimized" \
+      build-date="${BUILD_DATE}" \
+      vcs-ref="${VCS_REF}"
+
+# Set environment variables for build
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VENV_IN_PROJECT=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
+
+# Install system dependencies for building
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    gcc \
+    g++ \
+    git \
+    libffi-dev \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry
+RUN pip install poetry==1.7.1
+
+# Set work directory
+WORKDIR /app
+
+# Copy dependency files
+COPY pyproject.toml poetry.lock* ./
+
+# Configure poetry and install dependencies
+RUN poetry config virtualenvs.create true && \
+    poetry config virtualenvs.in-project true && \
+    poetry install --only=main --no-dev && \
+    rm -rf $POETRY_CACHE_DIR
+
+# Stage 2: Production stage
+FROM python:3.11-slim as production
+
+# Set production environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    PATH="/app/.venv/bin:$PATH" \
+    ENV=production \
+    PORT=10000 \
+    WORKERS=4 \
+    MAX_CONNECTIONS=1000 \
+    KEEPALIVE=2 \
+    TIMEOUT=30 \
+    GRACEFUL_TIMEOUT=30
+
+# Create non-root user for security
+RUN groupadd -r eaiser && useradd -r -g eaiser eaiser
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    curl \
+    dumb-init \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Set work directory
+WORKDIR /app
+
+# Copy virtual environment from builder stage
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy application code
+COPY ./app /app/
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/temp /app/static && \
+    chown -R eaiser:eaiser /app && \
+    chmod -R 755 /app
+
+# Copy optimized configuration files
+COPY main_optimized.py /app/main.py
+COPY mongodb_optimized_service.py /app/services/mongodb_optimized_service.py
+COPY redis_cluster_service.py /app/services/redis_cluster_service.py
+COPY rate_limiter_service.py /app/services/rate_limiter_service.py
+COPY issues_optimized.py /app/routers/issues_optimized.py
+
+# Create startup script
+RUN cat > /app/start.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Function to handle graceful shutdown
+shutdown() {
+    echo "Received shutdown signal, gracefully stopping..."
+    kill -TERM "$child" 2>/dev/null
+    wait "$child"
+    exit 0
+}
+
+# Set up signal handlers
+trap shutdown SIGTERM SIGINT
+
+# Wait for dependencies
+echo "Waiting for dependencies..."
+until curl -f http://${REDIS_HOST:-redis-node-1}:${REDIS_PORT:-6379}/ping 2>/dev/null; do
+    echo "Waiting for Redis..."
+    sleep 2
+done
+
+echo "Starting Eaiser Backend API..."
+echo "Environment: ${ENV}"
+echo "Port: ${PORT}"
+echo "Workers: ${WORKERS}"
+echo "Max Connections: ${MAX_CONNECTIONS}"
+
+# Start the application with optimized settings
+exec uvicorn main:app \
+    --host 0.0.0.0 \
+    --port ${PORT} \
+    --workers ${WORKERS} \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
+    --timeout-keep-alive ${KEEPALIVE} \
+    --timeout-graceful-shutdown ${GRACEFUL_TIMEOUT} \
+    --access-log \
+    --log-level info \
+    --loop uvloop \
+    --http httptools &
+
+child=$!
+wait "$child"
+EOF
+
+# Make startup script executable
+RUN chmod +x /app/start.sh
+
+# Create health check script
+RUN cat > /app/healthcheck.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Health check with timeout
+timeout 10 curl -f http://localhost:${PORT}/health || exit 1
+
+# Check if process is running
+pgrep -f "uvicorn main:app" > /dev/null || exit 1
+
+echo "Health check passed"
+EOF
+
+RUN chmod +x /app/healthcheck.sh
+
+# Switch to non-root user
+USER eaiser
+
+# Expose port
+EXPOSE ${PORT}
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD /app/healthcheck.sh
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+
+# Start the application
+CMD ["/app/start.sh"]
+
+# Metadata
+LABEL org.opencontainers.image.title="Eaiser Backend API" \
+      org.opencontainers.image.description="High-performance FastAPI backend for 1 lakh+ users" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.vendor="Eaiser Team" \
+      org.opencontainers.image.licenses="MIT"

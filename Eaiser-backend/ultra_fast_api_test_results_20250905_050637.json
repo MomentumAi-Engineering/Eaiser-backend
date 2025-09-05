@@ -1,0 +1,54 @@
+{
+  "test_suite": "ultra_fast_api_comprehensive",
+  "timestamp": "2025-09-05T05:06:37.060094",
+  "total_test_time_seconds": 16.00647211074829,
+  "total_tests": 4,
+  "successful_tests": 2,
+  "failed_tests": 2,
+  "success_rate_percentage": 50.0,
+  "detailed_results": [
+    {
+      "test": "health_check",
+      "status": "success",
+      "response_time_ms": 11637.45665550232,
+      "health_status": "healthy",
+      "services": {
+        "redis": "connected",
+        "mongodb": "connected",
+        "background_processor": "inactive"
+      },
+      "queue_size": 0
+    },
+    {
+      "test": "processing_stats",
+      "status": "success",
+      "response_time_ms": 4089.254379272461,
+      "stats": {
+        "queue_size": 0,
+        "workers_active": false,
+        "total_processed_today": 0,
+        "average_processing_time_seconds": 0.0,
+        "timestamp": "2025-09-05T05:06:36.778601"
+      }
+    },
+    {
+      "test": "ultra_fast_issue_creation",
+      "status": "failed",
+      "response_time_ms": 6.55055046081543,
+      "error": "HTTP 500: {\"detail\":\"Failed to create issue: MotorCollection object is not callable. If you meant to call the 'insert_one' method on a MotorCollection object it is failing because no such method exists.\"}"
+    },
+    {
+      "test": "performance_benchmark",
+      "total_requests": 5,
+      "successful_requests": 0,
+      "failed_requests": 5,
+      "total_time_seconds": 0.2698667049407959,
+      "requests_per_second": 18.527665356483727,
+      "average_response_time_ms": 0,
+      "median_response_time_ms": 0,
+      "min_response_time_ms": 0,
+      "max_response_time_ms": 0,
+      "success_rate_percentage": 0.0
+    }
+  ]
+}

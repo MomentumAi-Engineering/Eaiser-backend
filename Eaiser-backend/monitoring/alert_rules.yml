@@ -1,0 +1,396 @@
+# 🚨 SnapFix Enterprise Alert Rules
+# Comprehensive alerting for 100,000+ concurrent users
+# Production-ready with intelligent thresholds and escalation
+
+groups:
+  # ========================================
+  # CRITICAL SYSTEM ALERTS
+  # ========================================
+  - name: critical_system_alerts
+    rules:
+      # Service availability
+      - alert: ServiceDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} on {{ $labels.instance }} has been down for more than 30 seconds."
+          runbook_url: "https://runbooks.snapfix.com/service-down"
+
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          (
+            rate(http_requests_total{status=~"5.."}[5m]) /
+            rate(http_requests_total[5m])
+          ) * 100 > 5
+        for: 2m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }}% for {{ $labels.job }} on {{ $labels.instance }}"
+          runbook_url: "https://runbooks.snapfix.com/high-error-rate"
+
+      # Response time degradation
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95, 
+            rate(http_request_duration_seconds_bucket[5m])
+          ) > 0.5
+        for: 3m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "High response time detected"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.job }}"
+          runbook_url: "https://runbooks.snapfix.com/high-latency"
+
+  # ========================================
+  # DATABASE PERFORMANCE ALERTS
+  # ========================================
+  - name: database_alerts
+    rules:
+      # MongoDB connection pool exhaustion
+      - alert: MongoDBConnectionPoolExhaustion
+        expr: |
+          mongodb_connections{state="current"} / 
+          mongodb_connections{state="available"} > 0.8
+        for: 2m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "MongoDB connection pool near exhaustion"
+          description: "Connection pool usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # MongoDB replication lag
+      - alert: MongoDBReplicationLag
+        expr: mongodb_replset_member_replication_lag > 10
+        for: 1m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "MongoDB replication lag detected"
+          description: "Replication lag is {{ $value }}s on {{ $labels.instance }}"
+
+      # MongoDB slow queries
+      - alert: MongoDBSlowQueries
+        expr: rate(mongodb_op_counters_total[5m]) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "High number of slow MongoDB queries"
+          description: "Slow query rate is {{ $value }} ops/sec on {{ $labels.instance }}"
+
+      # Database disk space
+      - alert: DatabaseDiskSpaceHigh
+        expr: |
+          (
+            node_filesystem_size_bytes{mountpoint="/data"} - 
+            node_filesystem_free_bytes{mountpoint="/data"}
+          ) / node_filesystem_size_bytes{mountpoint="/data"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Database disk space running low"
+          description: "Disk usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+  # ========================================
+  # REDIS CLUSTER ALERTS
+  # ========================================
+  - name: redis_alerts
+    rules:
+      # Redis memory usage
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 2m
+        labels:
+          severity: warning
+          team: cache
+        annotations:
+          summary: "Redis memory usage high"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # Redis cluster node down
+      - alert: RedisClusterNodeDown
+        expr: redis_up == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: cache
+        annotations:
+          summary: "Redis cluster node down"
+          description: "Redis node {{ $labels.instance }} is down"
+
+      # Redis hit rate low
+      - alert: RedisHitRateLow
+        expr: |
+          (
+            rate(redis_keyspace_hits_total[5m]) / 
+            (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m]))
+          ) < 0.8
+        for: 5m
+        labels:
+          severity: warning
+          team: cache
+        annotations:
+          summary: "Redis cache hit rate low"
+          description: "Hit rate is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+  # ========================================
+  # APPLICATION PERFORMANCE ALERTS
+  # ========================================
+  - name: application_alerts
+    rules:
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: |
+          (
+            1 - rate(node_cpu_seconds_total{mode="idle"}[5m])
+          ) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)
+          ) * 100 > 85
+        for: 3m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value }}% on {{ $labels.instance }}"
+
+      # Container restart frequency
+      - alert: ContainerRestartingFrequently
+        expr: rate(container_start_time_seconds[15m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Container restarting frequently"
+          description: "Container {{ $labels.name }} is restarting frequently on {{ $labels.instance }}"
+
+  # ========================================
+  # LOAD BALANCER ALERTS
+  # ========================================
+  - name: load_balancer_alerts
+    rules:
+      # Nginx high connection count
+      - alert: NginxHighConnections
+        expr: nginx_connections_active > 8000
+        for: 2m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Nginx active connections high"
+          description: "Active connections: {{ $value }} on {{ $labels.instance }}"
+
+      # Backend server down
+      - alert: BackendServerDown
+        expr: nginx_upstream_server_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Backend server down"
+          description: "Backend server {{ $labels.server }} is down in upstream {{ $labels.upstream }}"
+
+  # ========================================
+  # MESSAGE QUEUE ALERTS
+  # ========================================
+  - name: message_queue_alerts
+    rules:
+      # RabbitMQ queue length
+      - alert: RabbitMQQueueHigh
+        expr: rabbitmq_queue_messages > 10000
+        for: 5m
+        labels:
+          severity: warning
+          team: messaging
+        annotations:
+          summary: "RabbitMQ queue length high"
+          description: "Queue {{ $labels.queue }} has {{ $value }} messages"
+
+      # Celery worker down
+      - alert: CeleryWorkerDown
+        expr: celery_worker_up == 0
+        for: 2m
+        labels:
+          severity: warning
+          team: workers
+        annotations:
+          summary: "Celery worker down"
+          description: "Celery worker {{ $labels.instance }} is down"
+
+      # High task failure rate
+      - alert: CeleryHighFailureRate
+        expr: |
+          (
+            rate(celery_task_total{state="FAILURE"}[5m]) /
+            rate(celery_task_total[5m])
+          ) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          team: workers
+        annotations:
+          summary: "High Celery task failure rate"
+          description: "Task failure rate is {{ $value | humanizePercentage }}"
+
+  # ========================================
+  # BUSINESS LOGIC ALERTS
+  # ========================================
+  - name: business_alerts
+    rules:
+      # High user registration rate (potential attack)
+      - alert: HighUserRegistrationRate
+        expr: rate(user_registrations_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Unusually high user registration rate"
+          description: "Registration rate: {{ $value }} users/sec"
+
+      # API rate limit breaches
+      - alert: APIRateLimitBreaches
+        expr: rate(api_rate_limit_exceeded_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High API rate limit breaches"
+          description: "Rate limit breaches: {{ $value }}/sec"
+
+      # Failed login attempts
+      - alert: HighFailedLoginAttempts
+        expr: rate(failed_login_attempts_total[5m]) > 50
+        for: 2m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High failed login attempt rate"
+          description: "Failed login rate: {{ $value }}/sec"
+
+  # ========================================
+  # CAPACITY PLANNING ALERTS
+  # ========================================
+  - name: capacity_alerts
+    rules:
+      # Approaching concurrent user limit
+      - alert: HighConcurrentUsers
+        expr: current_active_users > 80000
+        for: 5m
+        labels:
+          severity: warning
+          team: capacity
+        annotations:
+          summary: "Approaching concurrent user limit"
+          description: "Current active users: {{ $value }} (80% of 100k limit)"
+
+      # Request rate approaching capacity
+      - alert: HighRequestRate
+        expr: rate(http_requests_total[5m]) > 40000
+        for: 3m
+        labels:
+          severity: warning
+          team: capacity
+        annotations:
+          summary: "High request rate detected"
+          description: "Request rate: {{ $value }} req/sec (80% of 50k RPS capacity)"
+
+      # Database connection pool near limit
+      - alert: DatabaseConnectionsHigh
+        expr: |
+          (
+            mongodb_connections{state="current"} / 
+            mongodb_connections{state="available"}
+          ) > 0.7
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "Database connections approaching limit"
+          description: "Connection usage: {{ $value | humanizePercentage }}"
+
+  # ========================================
+  # DISK AND STORAGE ALERTS
+  # ========================================
+  - name: storage_alerts
+    rules:
+      # Disk space running low
+      - alert: DiskSpaceLow
+        expr: |
+          (
+            node_filesystem_avail_bytes / node_filesystem_size_bytes
+          ) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Disk space running low"
+          description: "Available space: {{ $value }}% on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+
+      # High disk I/O
+      - alert: HighDiskIO
+        expr: rate(node_disk_io_time_seconds_total[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "High disk I/O detected"
+          description: "Disk I/O utilization: {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+# ========================================
+# ALERT CONFIGURATION NOTES
+# ========================================
+# Alert Severity Levels:
+# - critical: Immediate action required, service impact
+# - warning: Attention needed, potential future impact
+# - info: Informational, no immediate action needed
+#
+# Alert Routing:
+# - critical: PagerDuty + Slack + Email
+# - warning: Slack + Email
+# - info: Email only
+#
+# Thresholds are tuned for 100k concurrent users:
+# - Response time: 95th percentile < 500ms
+# - Error rate: < 5%
+# - CPU usage: < 80%
+# - Memory usage: < 85%
+# - Disk usage: > 15% free
+# - Connection pools: < 80% utilization
+#
+# Runbook URLs should point to detailed troubleshooting guides
+# for each alert type to enable quick resolution.

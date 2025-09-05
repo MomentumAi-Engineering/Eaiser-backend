@@ -1,0 +1,50 @@
+{
+  "test_suite": "ultra_fast_api_comprehensive",
+  "timestamp": "2025-09-05T05:05:30.250052",
+  "total_test_time_seconds": 12.851669073104858,
+  "total_tests": 4,
+  "successful_tests": 2,
+  "failed_tests": 2,
+  "success_rate_percentage": 50.0,
+  "detailed_results": [
+    {
+      "test": "health_check",
+      "status": "success",
+      "response_time_ms": 8463.327884674072,
+      "health_status": "unhealthy",
+      "services": {},
+      "queue_size": 0
+    },
+    {
+      "test": "processing_stats",
+      "status": "success",
+      "response_time_ms": 4086.545467376709,
+      "stats": {
+        "queue_size": 0,
+        "workers_active": false,
+        "total_processed_today": 0,
+        "average_processing_time_seconds": 0.0,
+        "timestamp": "2025-09-05T05:05:29.942356"
+      }
+    },
+    {
+      "test": "ultra_fast_issue_creation",
+      "status": "failed",
+      "response_time_ms": 16.905546188354492,
+      "error": "HTTP 500: {\"detail\":\"Failed to create issue: Database objects do not implement truth value testing or bool(). Please compare with None instead: database is not None\"}"
+    },
+    {
+      "test": "performance_benchmark",
+      "total_requests": 5,
+      "successful_requests": 0,
+      "failed_requests": 5,
+      "total_time_seconds": 0.2812230587005615,
+      "requests_per_second": 17.779480897133194,
+      "average_response_time_ms": 0,
+      "median_response_time_ms": 0,
+      "min_response_time_ms": 0,
+      "max_response_time_ms": 0,
+      "success_rate_percentage": 0.0
+    }
+  ]
+}

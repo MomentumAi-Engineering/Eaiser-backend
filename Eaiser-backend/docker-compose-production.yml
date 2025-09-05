@@ -1,0 +1,623 @@
+# Docker Compose for Production - 1 Lakh+ Users Support
+# This configuration provides:
+# - Multiple FastAPI backend instances
+# - Redis cluster for distributed caching
+# - MongoDB replica set for high availability
+# - Nginx load balancer
+# - Monitoring and logging
+# - Auto-scaling capabilities
+
+version: '3.8'
+
+services:
+  # Nginx Load Balancer
+  nginx:
+    image: nginx:alpine
+    container_name: eaiser-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Monitoring
+    volumes:
+      - ./nginx-optimized.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/ssl:ro
+      - nginx-cache:/var/cache/nginx
+      - nginx-logs:/var/log/nginx
+    depends_on:
+      - backend-1
+      - backend-2
+      - backend-3
+      - backend-4
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Backend API Instances (Horizontal Scaling)
+  backend-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: eaiser-backend-1
+    ports:
+      - "10000:10000"
+    environment:
+      - ENV=production
+      - PORT=10000
+      - INSTANCE_ID=backend-1
+      - REDIS_HOST=redis-cluster
+      - REDIS_PORT=6379
+      - MONGO_URI=mongodb://mongodb-primary:27017,mongodb-secondary-1:27017,mongodb-secondary-2:27017/eaiser?replicaSet=rs0
+      - MONGODB_NAME=eaiser
+      - WORKER_PROCESSES=4
+      - MAX_CONNECTIONS=1000
+    volumes:
+      - ./app:/app
+      - backend-logs:/app/logs
+    depends_on:
+      - mongodb-primary
+      - redis-node-1
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  backend-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: eaiser-backend-2
+    ports:
+      - "10001:10000"
+    environment:
+      - ENV=production
+      - PORT=10000
+      - INSTANCE_ID=backend-2
+      - REDIS_HOST=redis-cluster
+      - REDIS_PORT=6379
+      - MONGO_URI=mongodb://mongodb-primary:27017,mongodb-secondary-1:27017,mongodb-secondary-2:27017/eaiser?replicaSet=rs0
+      - MONGODB_NAME=eaiser
+      - WORKER_PROCESSES=4
+      - MAX_CONNECTIONS=1000
+    volumes:
+      - ./app:/app
+      - backend-logs:/app/logs
+    depends_on:
+      - mongodb-primary
+      - redis-node-1
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  backend-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: eaiser-backend-3
+    ports:
+      - "10002:10000"
+    environment:
+      - ENV=production
+      - PORT=10000
+      - INSTANCE_ID=backend-3
+      - REDIS_HOST=redis-cluster
+      - REDIS_PORT=6379
+      - MONGO_URI=mongodb://mongodb-primary:27017,mongodb-secondary-1:27017,mongodb-secondary-2:27017/eaiser?replicaSet=rs0
+      - MONGODB_NAME=eaiser
+      - WORKER_PROCESSES=4
+      - MAX_CONNECTIONS=1000
+    volumes:
+      - ./app:/app
+      - backend-logs:/app/logs
+    depends_on:
+      - mongodb-primary
+      - redis-node-1
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  backend-4:
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: eaiser-backend-4
+    ports:
+      - "10003:10000"
+    environment:
+      - ENV=production
+      - PORT=10000
+      - INSTANCE_ID=backend-4
+      - REDIS_HOST=redis-cluster
+      - REDIS_PORT=6379
+      - MONGO_URI=mongodb://mongodb-primary:27017,mongodb-secondary-1:27017,mongodb-secondary-2:27017/eaiser?replicaSet=rs0
+      - MONGODB_NAME=eaiser
+      - WORKER_PROCESSES=4
+      - MAX_CONNECTIONS=1000
+    volumes:
+      - ./app:/app
+      - backend-logs:/app/logs
+    depends_on:
+      - mongodb-primary
+      - redis-node-1
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis Cluster for Distributed Caching
+  redis-node-1:
+    image: redis:7-alpine
+    container_name: redis-node-1
+    ports:
+      - "6379:6379"
+      - "16379:16379"
+    command: >
+      redis-server
+      --cluster-enabled yes
+      --cluster-config-file nodes-6379.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 300
+    volumes:
+      - redis-1-data:/data
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  redis-node-2:
+    image: redis:7-alpine
+    container_name: redis-node-2
+    ports:
+      - "6380:6379"
+      - "16380:16379"
+    command: >
+      redis-server
+      --cluster-enabled yes
+      --cluster-config-file nodes-6380.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 300
+    volumes:
+      - redis-2-data:/data
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  redis-node-3:
+    image: redis:7-alpine
+    container_name: redis-node-3
+    ports:
+      - "6381:6379"
+      - "16381:16379"
+    command: >
+      redis-server
+      --cluster-enabled yes
+      --cluster-config-file nodes-6381.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 300
+    volumes:
+      - redis-3-data:/data
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Redis Cluster Setup (One-time initialization)
+  redis-cluster-init:
+    image: redis:7-alpine
+    container_name: redis-cluster-init
+    command: >
+      sh -c '
+        sleep 10 &&
+        redis-cli --cluster create
+        redis-node-1:6379
+        redis-node-2:6379
+        redis-node-3:6379
+        --cluster-replicas 0 --cluster-yes
+      '
+    depends_on:
+      - redis-node-1
+      - redis-node-2
+      - redis-node-3
+    networks:
+      - eaiser-network
+    restart: "no"
+
+  # MongoDB Replica Set
+  mongodb-primary:
+    image: mongo:7
+    container_name: mongodb-primary
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=eaiser123
+      - MONGO_INITDB_DATABASE=eaiser
+    command: >
+      mongod
+      --replSet rs0
+      --bind_ip_all
+      --wiredTigerCacheSizeGB 1
+      --wiredTigerCollectionBlockCompressor snappy
+      --wiredTigerIndexPrefixCompression true
+    volumes:
+      - mongodb-primary-data:/data/db
+      - mongodb-primary-config:/data/configdb
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  mongodb-secondary-1:
+    image: mongo:7
+    container_name: mongodb-secondary-1
+    ports:
+      - "27018:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=eaiser123
+    command: >
+      mongod
+      --replSet rs0
+      --bind_ip_all
+      --wiredTigerCacheSizeGB 1
+      --wiredTigerCollectionBlockCompressor snappy
+      --wiredTigerIndexPrefixCompression true
+    volumes:
+      - mongodb-secondary-1-data:/data/db
+      - mongodb-secondary-1-config:/data/configdb
+    depends_on:
+      - mongodb-primary
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  mongodb-secondary-2:
+    image: mongo:7
+    container_name: mongodb-secondary-2
+    ports:
+      - "27019:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=eaiser123
+    command: >
+      mongod
+      --replSet rs0
+      --bind_ip_all
+      --wiredTigerCacheSizeGB 1
+      --wiredTigerCollectionBlockCompressor snappy
+      --wiredTigerIndexPrefixCompression true
+    volumes:
+      - mongodb-secondary-2-data:/data/db
+      - mongodb-secondary-2-config:/data/configdb
+    depends_on:
+      - mongodb-primary
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # MongoDB Replica Set Initialization
+  mongodb-setup:
+    image: mongo:7
+    container_name: mongodb-setup
+    command: >
+      sh -c '
+        sleep 15 &&
+        mongosh --host mongodb-primary:27017 --eval "
+          rs.initiate({
+            _id: \"rs0\",
+            members: [
+              { _id: 0, host: \"mongodb-primary:27017\", priority: 2 },
+              { _id: 1, host: \"mongodb-secondary-1:27017\", priority: 1 },
+              { _id: 2, host: \"mongodb-secondary-2:27017\", priority: 1 }
+            ]
+          });
+          sleep(5000);
+          rs.status();
+        "
+      '
+    depends_on:
+      - mongodb-primary
+      - mongodb-secondary-1
+      - mongodb-secondary-2
+    networks:
+      - eaiser-network
+    restart: "no"
+
+  # Monitoring and Logging
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: eaiser-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: eaiser-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=eaiser123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+  # Log aggregation
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: eaiser-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: eaiser-logstash
+    volumes:
+      - ./monitoring/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - backend-logs:/var/log/backend:ro
+      - nginx-logs:/var/log/nginx:ro
+    depends_on:
+      - elasticsearch
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: eaiser-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - eaiser-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+# Networks
+networks:
+  eaiser-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# Volumes for data persistence
+volumes:
+  # MongoDB data
+  mongodb-primary-data:
+    driver: local
+  mongodb-primary-config:
+    driver: local
+  mongodb-secondary-1-data:
+    driver: local
+  mongodb-secondary-1-config:
+    driver: local
+  mongodb-secondary-2-data:
+    driver: local
+  mongodb-secondary-2-config:
+    driver: local
+  
+  # Redis data
+  redis-1-data:
+    driver: local
+  redis-2-data:
+    driver: local
+  redis-3-data:
+    driver: local
+  
+  # Nginx cache and logs
+  nginx-cache:
+    driver: local
+  nginx-logs:
+    driver: local
+  
+  # Backend logs
+  backend-logs:
+    driver: local
+  
+  # Monitoring data
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  elasticsearch-data:
+    driver: local

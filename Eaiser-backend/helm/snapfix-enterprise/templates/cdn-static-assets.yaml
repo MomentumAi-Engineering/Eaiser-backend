@@ -1,0 +1,856 @@
+{{/*
+🌐 CDN and Static Assets Configuration for SnapFix Enterprise
+
+This template creates configurations for:
+- CloudFlare CDN integration with edge caching
+- Static assets optimization and delivery
+- DDoS protection and security headers
+- Global content delivery network
+- Asset compression and optimization
+- Cache invalidation and purging
+*/}}
+
+{{- if .Values.cdn.enabled }}
+{{/*
+📦 Static Assets ConfigMap
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-cdn-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cdn
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  # Nginx configuration for static assets
+  nginx-static.conf: |
+    # ========================================
+    # NGINX STATIC ASSETS CONFIGURATION
+    # ========================================
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/json
+        application/javascript
+        application/xml+rss
+        application/atom+xml
+        image/svg+xml
+        font/truetype
+        font/opentype
+        application/vnd.ms-fontobject;
+    
+    # Brotli compression (if available)
+    brotli on;
+    brotli_comp_level 6;
+    brotli_types
+        text/plain
+        text/css
+        application/json
+        application/javascript
+        text/xml
+        application/xml
+        application/xml+rss
+        text/javascript
+        image/svg+xml
+        application/x-font-ttf
+        font/opentype;
+    
+    # Static assets server block
+    server {
+        listen 80;
+        server_name {{ .Values.cdn.domain | default "cdn.snapfix.com" }};
+        
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; media-src 'self'; object-src 'none'; frame-src 'none';" always;
+        
+        # CORS headers for cross-origin requests
+        add_header Access-Control-Allow-Origin "{{ .Values.app.domain | default "https://snapfix.com" }}" always;
+        add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control" always;
+        add_header Access-Control-Max-Age "86400" always;
+        
+        # Handle preflight requests
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+        
+        # Root directory for static assets
+        root /usr/share/nginx/html;
+        index index.html;
+        
+        # CSS files - long cache with versioning
+        location ~* \.css$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            add_header Vary "Accept-Encoding";
+            
+            # Enable compression
+            gzip_static on;
+            brotli_static on;
+        }
+        
+        # JavaScript files - long cache with versioning
+        location ~* \.js$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            add_header Vary "Accept-Encoding";
+            
+            # Enable compression
+            gzip_static on;
+            brotli_static on;
+        }
+        
+        # Images - long cache
+        location ~* \.(jpg|jpeg|png|gif|ico|svg|webp|avif)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            add_header Vary "Accept-Encoding";
+            
+            # Image optimization headers
+            add_header Accept-CH "DPR, Viewport-Width, Width";
+        }
+        
+        # Fonts - long cache
+        location ~* \.(woff|woff2|ttf|eot|otf)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            add_header Access-Control-Allow-Origin "*";
+        }
+        
+        # Videos and audio - medium cache
+        location ~* \.(mp4|webm|ogg|mp3|wav|flac|aac)$ {
+            expires 30d;
+            add_header Cache-Control "public";
+        }
+        
+        # Documents and archives - short cache
+        location ~* \.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip|rar|7z)$ {
+            expires 7d;
+            add_header Cache-Control "public";
+        }
+        
+        # API documentation assets
+        location /docs/ {
+            expires 1h;
+            add_header Cache-Control "public";
+        }
+        
+        # Health check endpoint
+        location /health {
+            access_log off;
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+        
+        # Deny access to hidden files
+        location ~ /\. {
+            deny all;
+            access_log off;
+            log_not_found off;
+        }
+        
+        # Custom error pages
+        error_page 404 /404.html;
+        error_page 500 502 503 504 /50x.html;
+        
+        location = /404.html {
+            internal;
+        }
+        
+        location = /50x.html {
+            internal;
+        }
+    }
+    
+  # CloudFlare configuration script
+  cloudflare-config.sh: |
+    #!/bin/bash
+    # ========================================
+    # CLOUDFLARE CDN CONFIGURATION SCRIPT
+    # ========================================
+    
+    set -e
+    
+    # CloudFlare API credentials
+    CF_API_TOKEN="${CLOUDFLARE_API_TOKEN}"
+    CF_ZONE_ID="${CLOUDFLARE_ZONE_ID}"
+    CF_EMAIL="${CLOUDFLARE_EMAIL}"
+    
+    # Domain configuration
+    DOMAIN="{{ .Values.cdn.domain | default "cdn.snapfix.com" }}"
+    ORIGIN_SERVER="{{ include "snapfix-enterprise.fullname" . }}-static-assets"
+    
+    echo "Configuring CloudFlare CDN for domain: $DOMAIN"
+    
+    # Function to make CloudFlare API calls
+    cf_api() {
+        local method="$1"
+        local endpoint="$2"
+        local data="$3"
+        
+        curl -s -X "$method" "https://api.cloudflare.com/client/v4$endpoint" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            ${data:+-d "$data"}
+    }
+    
+    # Create DNS record for CDN subdomain
+    echo "Creating DNS record for $DOMAIN..."
+    cf_api "POST" "/zones/$CF_ZONE_ID/dns_records" '{
+        "type": "CNAME",
+        "name": "'"$DOMAIN"'",
+        "content": "'"$ORIGIN_SERVER"'",
+        "ttl": 1,
+        "proxied": true
+    }'
+    
+    # Configure page rules for caching
+    echo "Setting up page rules for caching..."
+    
+    # Static assets - aggressive caching
+    cf_api "POST" "/zones/$CF_ZONE_ID/pagerules" '{
+        "targets": [{
+            "target": "url",
+            "constraint": {
+                "operator": "matches",
+                "value": "'"$DOMAIN"'/*.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|webp|avif)"
+            }
+        }],
+        "actions": [{
+            "id": "cache_level",
+            "value": "cache_everything"
+        }, {
+            "id": "edge_cache_ttl",
+            "value": 31536000
+        }, {
+            "id": "browser_cache_ttl",
+            "value": 31536000
+        }],
+        "priority": 1,
+        "status": "active"
+    }'
+    
+    # API endpoints - bypass cache
+    cf_api "POST" "/zones/$CF_ZONE_ID/pagerules" '{
+        "targets": [{
+            "target": "url",
+            "constraint": {
+                "operator": "matches",
+                "value": "'"$DOMAIN"'/api/*"
+            }
+        }],
+        "actions": [{
+            "id": "cache_level",
+            "value": "bypass"
+        }],
+        "priority": 2,
+        "status": "active"
+    }'
+    
+    # Configure security settings
+    echo "Configuring security settings..."
+    
+    # Enable DDoS protection
+    cf_api "PATCH" "/zones/$CF_ZONE_ID/settings/security_level" '{
+        "value": "high"
+    }'
+    
+    # Enable Bot Fight Mode
+    cf_api "PATCH" "/zones/$CF_ZONE_ID/settings/bot_fight_mode" '{
+        "value": "on"
+    }'
+    
+    # Enable Browser Integrity Check
+    cf_api "PATCH" "/zones/$CF_ZONE_ID/settings/browser_check" '{
+        "value": "on"
+    }'
+    
+    # Configure SSL settings
+    cf_api "PATCH" "/zones/$CF_ZONE_ID/settings/ssl" '{
+        "value": "strict"
+    }'
+    
+    # Enable Always Use HTTPS
+    cf_api "PATCH" "/zones/$CF_ZONE_ID/settings/always_use_https" '{
+        "value": "on"
+    }'
+    
+    # Configure caching settings
+    echo "Configuring caching settings..."
+    
+    # Set caching level
+    cf_api "PATCH" "/zones/$CF_ZONE_ID/settings/cache_level" '{
+        "value": "aggressive"
+    }'
+    
+    # Enable development mode (disable for production)
+    cf_api "PATCH" "/zones/$CF_ZONE_ID/settings/development_mode" '{
+        "value": "off"
+    }'
+    
+    echo "CloudFlare CDN configuration completed successfully!"
+    
+  # Cache purging script
+  cache-purge.sh: |
+    #!/bin/bash
+    # ========================================
+    # CLOUDFLARE CACHE PURGING SCRIPT
+    # ========================================
+    
+    set -e
+    
+    CF_API_TOKEN="${CLOUDFLARE_API_TOKEN}"
+    CF_ZONE_ID="${CLOUDFLARE_ZONE_ID}"
+    
+    # Function to purge cache
+    purge_cache() {
+        local purge_type="$1"
+        local files="$2"
+        
+        echo "Purging cache: $purge_type"
+        
+        if [ "$purge_type" = "all" ]; then
+            # Purge everything
+            curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d '{"purge_everything":true}'
+        elif [ "$purge_type" = "files" ] && [ -n "$files" ]; then
+            # Purge specific files
+            curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"files\":[$files]}"
+        elif [ "$purge_type" = "tags" ] && [ -n "$files" ]; then
+            # Purge by cache tags
+            curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"tags\":[$files]}"
+        fi
+    }
+    
+    # Parse command line arguments
+    case "$1" in
+        "all")
+            purge_cache "all"
+            ;;
+        "css")
+            purge_cache "files" '"https://{{ .Values.cdn.domain | default "cdn.snapfix.com" }}/*.css"'
+            ;;
+        "js")
+            purge_cache "files" '"https://{{ .Values.cdn.domain | default "cdn.snapfix.com" }}/*.js"'
+            ;;
+        "images")
+            purge_cache "files" '"https://{{ .Values.cdn.domain | default "cdn.snapfix.com" }}/*.png","https://{{ .Values.cdn.domain | default "cdn.snapfix.com" }}/*.jpg","https://{{ .Values.cdn.domain | default "cdn.snapfix.com" }}/*.jpeg","https://{{ .Values.cdn.domain | default "cdn.snapfix.com" }}/*.gif","https://{{ .Values.cdn.domain | default "cdn.snapfix.com" }}/*.svg"'
+            ;;
+        *)
+            echo "Usage: $0 {all|css|js|images}"
+            exit 1
+            ;;
+    esac
+    
+    echo "Cache purge completed!"
+    
+  # Asset optimization script
+  optimize-assets.sh: |
+    #!/bin/bash
+    # ========================================
+    # ASSET OPTIMIZATION SCRIPT
+    # ========================================
+    
+    set -e
+    
+    ASSETS_DIR="/usr/share/nginx/html"
+    
+    echo "Starting asset optimization..."
+    
+    # Create optimized directories
+    mkdir -p "$ASSETS_DIR/optimized/{css,js,images}"
+    
+    # Optimize CSS files
+    echo "Optimizing CSS files..."
+    find "$ASSETS_DIR" -name "*.css" -not -path "*/optimized/*" | while read -r file; do
+        filename=$(basename "$file")
+        # Minify CSS (using csso if available)
+        if command -v csso >/dev/null 2>&1; then
+            csso "$file" --output "$ASSETS_DIR/optimized/css/$filename"
+        else
+            cp "$file" "$ASSETS_DIR/optimized/css/$filename"
+        fi
+        
+        # Create gzipped version
+        gzip -9 -c "$ASSETS_DIR/optimized/css/$filename" > "$ASSETS_DIR/optimized/css/$filename.gz"
+        
+        # Create brotli version if available
+        if command -v brotli >/dev/null 2>&1; then
+            brotli -9 -c "$ASSETS_DIR/optimized/css/$filename" > "$ASSETS_DIR/optimized/css/$filename.br"
+        fi
+    done
+    
+    # Optimize JavaScript files
+    echo "Optimizing JavaScript files..."
+    find "$ASSETS_DIR" -name "*.js" -not -path "*/optimized/*" | while read -r file; do
+        filename=$(basename "$file")
+        # Minify JS (using terser if available)
+        if command -v terser >/dev/null 2>&1; then
+            terser "$file" --compress --mangle --output "$ASSETS_DIR/optimized/js/$filename"
+        else
+            cp "$file" "$ASSETS_DIR/optimized/js/$filename"
+        fi
+        
+        # Create gzipped version
+        gzip -9 -c "$ASSETS_DIR/optimized/js/$filename" > "$ASSETS_DIR/optimized/js/$filename.gz"
+        
+        # Create brotli version if available
+        if command -v brotli >/dev/null 2>&1; then
+            brotli -9 -c "$ASSETS_DIR/optimized/js/$filename" > "$ASSETS_DIR/optimized/js/$filename.br"
+        fi
+    done
+    
+    # Optimize images
+    echo "Optimizing images..."
+    find "$ASSETS_DIR" -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" \) -not -path "*/optimized/*" | while read -r file; do
+        filename=$(basename "$file")
+        extension="${filename##*.}"
+        
+        # Optimize based on file type
+        case "$extension" in
+            "png")
+                if command -v optipng >/dev/null 2>&1; then
+                    optipng -o7 -out "$ASSETS_DIR/optimized/images/$filename" "$file"
+                else
+                    cp "$file" "$ASSETS_DIR/optimized/images/$filename"
+                fi
+                ;;
+            "jpg"|"jpeg")
+                if command -v jpegoptim >/dev/null 2>&1; then
+                    jpegoptim --max=85 --strip-all --dest="$ASSETS_DIR/optimized/images" "$file"
+                else
+                    cp "$file" "$ASSETS_DIR/optimized/images/$filename"
+                fi
+                ;;
+        esac
+        
+        # Generate WebP version if available
+        if command -v cwebp >/dev/null 2>&1; then
+            cwebp -q 85 "$file" -o "$ASSETS_DIR/optimized/images/${filename%.*}.webp"
+        fi
+        
+        # Generate AVIF version if available
+        if command -v avifenc >/dev/null 2>&1; then
+            avifenc --min 0 --max 63 -a end-usage=q -a cq-level=23 -a tune=ssim "$file" "$ASSETS_DIR/optimized/images/${filename%.*}.avif"
+        fi
+    done
+    
+    echo "Asset optimization completed!"
+
+---
+{{/*
+🌐 Static Assets Nginx Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-static-assets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: static-assets
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.cdn.staticAssets.replicas | default 3 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: static-assets
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: static-assets
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/cdn-static-assets.yaml") . | sha256sum }}
+        {{- if .Values.monitoring.prometheus.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9113"
+        prometheus.io/path: "/metrics"
+        {{- end }}
+    spec:
+      {{- with .Values.cdn.staticAssets.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "snapfix-enterprise.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: static-assets
+                topologyKey: kubernetes.io/hostname
+      
+      initContainers:
+        - name: asset-optimization
+          image: "{{ .Values.cdn.optimization.image.repository }}:{{ .Values.cdn.optimization.image.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.cdn.optimization.image.pullPolicy | default "IfNotPresent" }}
+          
+          command:
+            - /bin/bash
+            - /scripts/optimize-assets.sh
+          
+          volumeMounts:
+            - name: static-assets
+              mountPath: /usr/share/nginx/html
+            - name: cdn-scripts
+              mountPath: /scripts
+          
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      
+      containers:
+        - name: nginx
+          image: "{{ .Values.cdn.staticAssets.image.repository }}:{{ .Values.cdn.staticAssets.image.tag | default "1.25-alpine" }}"
+          imagePullPolicy: {{ .Values.cdn.staticAssets.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+            - name: static-assets
+              mountPath: /usr/share/nginx/html
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.cdn.staticAssets.resources | nindent 12 }}
+        
+        {{- if .Values.monitoring.prometheus.enabled }}
+        - name: nginx-exporter
+          image: "{{ .Values.monitoring.nginxExporter.image.repository }}:{{ .Values.monitoring.nginxExporter.image.tag | default "0.11.0" }}"
+          imagePullPolicy: {{ .Values.monitoring.nginxExporter.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: metrics
+              containerPort: 9113
+              protocol: TCP
+          
+          args:
+            - -nginx.scrape-uri=http://localhost:80/nginx_status
+          
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+        {{- end }}
+      
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-cdn-config
+        - name: cdn-scripts
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-cdn-config
+            defaultMode: 0755
+        - name: static-assets
+          {{- if .Values.cdn.staticAssets.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-static-assets-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+
+---
+{{/*
+🌐 Static Assets Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-static-assets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: static-assets
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    {{- if .Values.monitoring.prometheus.enabled }}
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9113"
+    prometheus.io/path: "/metrics"
+    {{- end }}
+spec:
+  type: {{ .Values.cdn.staticAssets.service.type | default "ClusterIP" }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - name: metrics
+      port: 9113
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: static-assets
+
+---
+{{/*
+💾 Static Assets PVC (if persistence enabled)
+*/}}
+{{- if .Values.cdn.staticAssets.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-static-assets-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: static-assets
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # Storage provisioner annotations
+    volume.beta.kubernetes.io/storage-provisioner: {{ .Values.cdn.staticAssets.persistence.storageClass | default "fast-ssd" }}
+    
+    # Backup and retention policies
+    backup.velero.io/backup-volumes: "static-assets"
+    backup.velero.io/backup-volumes-excludes: "nginx-cache,nginx-run"
+    
+    # Performance annotations for fast-ssd storage class
+    {{- if eq (.Values.cdn.staticAssets.persistence.storageClass | default "fast-ssd") "fast-ssd" }}
+    volume.beta.kubernetes.io/storage-class: "fast-ssd"
+    volume.kubernetes.io/storage-provisioner: "kubernetes.io/gce-pd"
+    volume.kubernetes.io/storage-type: "ssd"
+    {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.cdn.staticAssets.persistence.accessModes | default (list "ReadWriteOnce") }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.cdn.staticAssets.persistence.size | default "10Gi" }}
+  {{- if .Values.cdn.staticAssets.persistence.storageClass }}
+  storageClassName: {{ .Values.cdn.staticAssets.persistence.storageClass }}
+  {{- end }}
+  {{- if .Values.cdn.staticAssets.persistence.selector }}
+  selector:
+    {{- toYaml .Values.cdn.staticAssets.persistence.selector | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+🔧 CloudFlare Configuration Job
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-cloudflare-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cloudflare-config
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cloudflare-config
+    spec:
+      restartPolicy: Never
+      
+      containers:
+        - name: cloudflare-config
+          image: curlimages/curl:8.4.0
+          imagePullPolicy: IfNotPresent
+          
+          env:
+            - name: CLOUDFLARE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-secrets
+                  key: cloudflare-api-token
+            - name: CLOUDFLARE_ZONE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-secrets
+                  key: cloudflare-zone-id
+            - name: CLOUDFLARE_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-secrets
+                  key: cloudflare-email
+          
+          command:
+            - /bin/sh
+            - /scripts/cloudflare-config.sh
+          
+          volumeMounts:
+            - name: cloudflare-scripts
+              mountPath: /scripts
+          
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      
+      volumes:
+        - name: cloudflare-scripts
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-cdn-config
+            defaultMode: 0755
+
+---
+{{/*
+🔄 Cache Purge CronJob
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-cache-purge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache-purge
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  schedule: {{ .Values.cdn.cachePurge.schedule | default "0 3 * * *" }}  # Daily at 3 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "snapfix-enterprise.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: cache-purge
+        spec:
+          restartPolicy: OnFailure
+          
+          containers:
+            - name: cache-purge
+              image: curlimages/curl:8.4.0
+              imagePullPolicy: IfNotPresent
+              
+              env:
+                - name: CLOUDFLARE_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-secrets
+                      key: cloudflare-api-token
+                - name: CLOUDFLARE_ZONE_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "snapfix-enterprise.fullname" . }}-secrets
+                      key: cloudflare-zone-id
+              
+              command:
+                - /bin/sh
+                - /scripts/cache-purge.sh
+                - {{ .Values.cdn.cachePurge.type | default "css" }}
+              
+              volumeMounts:
+                - name: cache-scripts
+                  mountPath: /scripts
+              
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+          
+          volumes:
+            - name: cache-scripts
+              configMap:
+                name: {{ include "snapfix-enterprise.fullname" . }}-cdn-config
+                defaultMode: 0755
+
+{{- end }}

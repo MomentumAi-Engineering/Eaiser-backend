@@ -1,0 +1,867 @@
+{{/*
+📊 Advanced Monitoring Stack Part 4 - Fluent Bit, ServiceMonitor, NetworkPolicies
+
+This template completes the monitoring stack with:
+- Fluent Bit for log collection from Kubernetes
+- ServiceMonitor for Prometheus service discovery
+- NetworkPolicies for monitoring security
+- Monitoring ingress configurations
+- Custom monitoring utilities
+*/}}
+
+{{- if .Values.monitoring.enabled }}
+{{/*
+📝 Fluent Bit Configuration
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         {{ .Values.monitoring.fluentBit.flush | default 1 }}
+        Log_Level     {{ .Values.monitoring.fluentBit.logLevel | default "info" }}
+        Daemon        off
+        Parsers_File  parsers.conf
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+        Health_Check  On
+        storage.path  /var/log/flb-storage/
+        storage.sync  normal
+        storage.checksum off
+        storage.backlog.mem_limit 5M
+    
+    @INCLUDE input-kubernetes.conf
+    @INCLUDE filter-kubernetes.conf
+    @INCLUDE output-logstash.conf
+  
+  input-kubernetes.conf: |
+    [INPUT]
+        Name              tail
+        Tag               kube.*
+        Path              /var/log/containers/*.log
+        Parser            cri
+        DB                /var/log/flb_kube.db
+        Mem_Buf_Limit     {{ .Values.monitoring.fluentBit.memBufLimit | default "50MB" }}
+        Skip_Long_Lines   On
+        Refresh_Interval  {{ .Values.monitoring.fluentBit.refreshInterval | default 10 }}
+        Rotate_Wait       30
+        storage.type      filesystem
+        Read_from_Head    {{ .Values.monitoring.fluentBit.readFromHead | default "false" }}
+    
+    [INPUT]
+        Name              systemd
+        Tag               host.*
+        Systemd_Filter    _SYSTEMD_UNIT=kubelet.service
+        Systemd_Filter    _SYSTEMD_UNIT=docker.service
+        Systemd_Filter    _SYSTEMD_UNIT=containerd.service
+        Read_From_Tail    On
+        Strip_Underscores On
+    
+    # SnapFix Enterprise application logs
+    [INPUT]
+        Name              tail
+        Tag               snapfix.app.*
+        Path              /var/log/snapfix/*.log
+        Parser            json
+        DB                /var/log/flb_snapfix.db
+        Mem_Buf_Limit     {{ .Values.monitoring.fluentBit.memBufLimit | default "50MB" }}
+        Skip_Long_Lines   On
+        Refresh_Interval  5
+        Read_from_Head    {{ .Values.monitoring.fluentBit.readFromHead | default "false" }}
+    
+    # Nginx access logs
+    [INPUT]
+        Name              tail
+        Tag               nginx.access
+        Path              /var/log/nginx/access.log
+        Parser            nginx
+        DB                /var/log/flb_nginx_access.db
+        Mem_Buf_Limit     {{ .Values.monitoring.fluentBit.memBufLimit | default "50MB" }}
+    
+    # Nginx error logs
+    [INPUT]
+        Name              tail
+        Tag               nginx.error
+        Path              /var/log/nginx/error.log
+        Parser            nginx_error
+        DB                /var/log/flb_nginx_error.db
+        Mem_Buf_Limit     {{ .Values.monitoring.fluentBit.memBufLimit | default "50MB" }}
+  
+  filter-kubernetes.conf: |
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Kube_URL            https://kubernetes.default.svc:443
+        Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+        Kube_Tag_Prefix     kube.var.log.containers.
+        Merge_Log           On
+        Merge_Log_Key       log_processed
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude Off
+        Annotations         Off
+        Labels              On
+        Buffer_Size         {{ .Values.monitoring.fluentBit.bufferSize | default "32k" }}
+    
+    # Parse SnapFix Enterprise logs
+    [FILTER]
+        Name                parser
+        Match               snapfix.app.*
+        Key_Name            log
+        Parser              snapfix_json
+        Reserve_Data        On
+    
+    # Add environment and service metadata
+    [FILTER]
+        Name                modify
+        Match               snapfix.*
+        Add                 environment {{ .Values.global.environment | default "production" }}
+        Add                 service snapfix-enterprise
+        Add                 version {{ .Chart.AppVersion }}
+        Add                 cluster {{ .Values.global.clusterName | default "snapfix-cluster" }}
+    
+    # Parse and enrich Kubernetes logs
+    [FILTER]
+        Name                modify
+        Match               kube.*
+        Add                 cluster {{ .Values.global.clusterName | default "snapfix-cluster" }}
+        Add                 environment {{ .Values.global.environment | default "production" }}
+    
+    # Filter out noisy logs
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Exclude             log /healthz
+    
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Exclude             log /metrics
+    
+    # Throttle high-volume logs
+    [FILTER]
+        Name                throttle
+        Match               kube.*
+        Rate                {{ .Values.monitoring.fluentBit.throttleRate | default 1000 }}
+        Window              {{ .Values.monitoring.fluentBit.throttleWindow | default 300 }}
+        Interval            {{ .Values.monitoring.fluentBit.throttleInterval | default "1m" }}
+    
+    # Multiline processing for stack traces
+    [FILTER]
+        Name                multiline
+        Match               snapfix.*
+        multiline.key_content log
+        multiline.parser    java, python, go
+  
+  output-logstash.conf: |
+    # Send SnapFix application logs to Logstash
+    [OUTPUT]
+        Name                forward
+        Match               snapfix.*
+        Host                {{ include "snapfix-enterprise.fullname" . }}-logstash
+        Port                5044
+        Time_as_Integer     On
+        Send_options        time
+        Require_ack_response On
+        storage.total_limit_size 5M
+    
+    # Send Kubernetes logs to Logstash
+    [OUTPUT]
+        Name                forward
+        Match               kube.*
+        Host                {{ include "snapfix-enterprise.fullname" . }}-logstash
+        Port                5045
+        Time_as_Integer     On
+        Send_options        time
+        Require_ack_response On
+        storage.total_limit_size 5M
+    
+    # Send Nginx logs to Logstash
+    [OUTPUT]
+        Name                forward
+        Match               nginx.*
+        Host                {{ include "snapfix-enterprise.fullname" . }}-logstash
+        Port                5046
+        Time_as_Integer     On
+        Send_options        time
+        Require_ack_response On
+        storage.total_limit_size 5M
+    
+    # Backup output to Elasticsearch (if Logstash is down)
+    [OUTPUT]
+        Name                es
+        Match               *
+        Host                {{ include "snapfix-enterprise.fullname" . }}-elasticsearch
+        Port                9200
+        Index               fluent-bit-backup
+        Type                _doc
+        Time_Key            @timestamp
+        Time_Key_Format     %Y-%m-%dT%H:%M:%S.%L%z
+        Retry_Limit         5
+        storage.total_limit_size 10M
+    
+    # Debug output (optional)
+    {{- if .Values.monitoring.fluentBit.debug }}
+    [OUTPUT]
+        Name                stdout
+        Match               *
+        Format              json_lines
+    {{- end }}
+  
+  parsers.conf: |
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+    
+    [PARSER]
+        Name        json
+        Format      json
+        Time_Key    timestamp
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+        Time_Keep   On
+    
+    [PARSER]
+        Name        snapfix_json
+        Format      json
+        Time_Key    timestamp
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+        Time_Keep   On
+        Decode_Field_As escaped_utf8 message do_next
+        Decode_Field_As json message
+    
+    [PARSER]
+        Name        nginx
+        Format      regex
+        Regex       ^(?<remote>[^ ]*) (?<host>[^ ]*) (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*?)(?: +\S*)?)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")
+        Time_Key    time
+        Time_Format %d/%b/%Y:%H:%M:%S %z
+    
+    [PARSER]
+        Name        nginx_error
+        Format      regex
+        Regex       ^(?<time>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \[(?<level>\w+)\] (?<pid>\d+).(?<tid>\d+): (?<message>.*)
+        Time_Key    time
+        Time_Format %Y/%m/%d %H:%M:%S
+    
+    [PARSER]
+        Name        docker
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L
+        Time_Keep   On
+    
+    [PARSER]
+        Name        syslog
+        Format      regex
+        Regex       ^\<(?<pri>[0-9]+)\>(?<time>[^ ]* {1,2}[^ ]* [^ ]*) (?<host>[^ ]*) (?<ident>[a-zA-Z0-9_\/\.\-]*)(?:\[(?<pid>[0-9]+)\])?(?:[^\:]*\:)? *(?<message>.*)$
+        Time_Key    time
+        Time_Format %b %d %H:%M:%S
+    
+    # Multiline parsers
+    [MULTILINE_PARSER]
+        name          java
+        type          regex
+        flush_timeout 1000
+        rule      "start_state"   "/^\d{4}-\d{2}-\d{2}/"  "cont"
+        rule      "cont"          "/^(?!\d{4}-\d{2}-\d{2})/"  "cont"
+    
+    [MULTILINE_PARSER]
+        name          python
+        type          regex
+        flush_timeout 1000
+        rule      "start_state"   "/^\d{4}-\d{2}-\d{2}/"  "cont"
+        rule      "cont"          "/^(?!\d{4}-\d{2}-\d{2})/"  "cont"
+    
+    [MULTILINE_PARSER]
+        name          go
+        type          regex
+        flush_timeout 1000
+        rule      "start_state"   "/^\d{4}/\d{2}/\d{2}/"  "cont"
+        rule      "cont"          "/^(?!\d{4}/\d{2}/\d{2})/"  "cont"
+
+---
+{{/*
+📝 Fluent Bit DaemonSet
+*/}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: fluent-bit
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: fluent-bit
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/monitoring-stack-part4.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit
+      containers:
+        - name: fluent-bit
+          image: {{ .Values.monitoring.fluentBit.image.repository }}:{{ .Values.monitoring.fluentBit.image.tag | default "2.0.10" }}
+          imagePullPolicy: {{ .Values.monitoring.fluentBit.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: FLUENT_CONF
+              value: fluent-bit.conf
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 2020
+              name: http
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.fluentBit.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /fluent-bit/etc
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: etcmachineid
+              mountPath: /etc/machine-id
+              readOnly: true
+            - name: storage
+              mountPath: /var/log/flb-storage
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit-config
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: etcmachineid
+          hostPath:
+            path: /etc/machine-id
+            type: File
+        - name: storage
+          {{- if .Values.monitoring.fluentBit.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit-storage
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+        - effect: NoExecute
+          operator: Exists
+      terminationGracePeriodSeconds: 30
+
+---
+{{/*
+📝 Fluent Bit ServiceAccount
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+    app.kubernetes.io/part-of: snapfix-enterprise
+
+---
+{{/*
+📝 Fluent Bit ClusterRole
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+    app.kubernetes.io/part-of: snapfix-enterprise
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - pods
+      - nodes
+      - nodes/proxy
+    verbs: ["get", "list", "watch"]
+
+---
+{{/*
+📝 Fluent Bit ClusterRoleBinding
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+    app.kubernetes.io/part-of: snapfix-enterprise
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit
+    namespace: {{ .Release.Namespace }}
+
+---
+{{/*
+📝 Fluent Bit Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "2020"
+    prometheus.io/path: "/api/v1/metrics/prometheus"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 2020
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+
+---
+{{/*
+📝 Fluent Bit PVC
+*/}}
+{{- if .Values.monitoring.fluentBit.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fluent-bit
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.monitoring.fluentBit.persistence.size | default "5Gi" }}
+  {{- if .Values.monitoring.fluentBit.persistence.storageClass }}
+  storageClassName: {{ .Values.monitoring.fluentBit.persistence.storageClass }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+📊 ServiceMonitor for Prometheus Service Discovery
+*/}}
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  selector:
+    matchLabels:
+      prometheus.io/scrape: "true"
+  endpoints:
+    # SnapFix Enterprise Application
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 8000
+    
+    # Prometheus itself
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 9090
+    
+    # Grafana
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 3000
+    
+    # Node Exporter
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 9100
+    
+    # Fluent Bit
+    - port: http
+      path: /api/v1/metrics/prometheus
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 2020
+    
+    # Redis Exporter
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 9121
+    
+    # MongoDB Exporter
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 9216
+    
+    # PostgreSQL Exporter
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 9187
+    
+    # RabbitMQ Exporter
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      targetPort: 15692
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+{{- end }}
+
+---
+{{/*
+🔒 NetworkPolicy for Monitoring Components
+*/}}
+{{- if .Values.monitoring.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring-network-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: snapfix-enterprise
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow Prometheus to scrape metrics
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 9100
+        - protocol: TCP
+          port: 2020
+    
+    # Allow Grafana access
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: grafana
+      ports:
+        - protocol: TCP
+          port: 3000
+    
+    # Allow Kibana access
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kibana
+      ports:
+        - protocol: TCP
+          port: 5601
+    
+    # Allow Jaeger Query access
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: jaeger-query
+      ports:
+        - protocol: TCP
+          port: 16686
+    
+    # Allow Logstash to receive logs
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: fluent-bit
+      ports:
+        - protocol: TCP
+          port: 5044
+        - protocol: TCP
+          port: 5045
+        - protocol: TCP
+          port: 5046
+    
+    # Allow Elasticsearch cluster communication
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 9300
+    
+    # Allow external access to monitoring dashboards
+    {{- if .Values.monitoring.networkPolicy.allowExternal }}
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 3000  # Grafana
+        - protocol: TCP
+          port: 5601  # Kibana
+        - protocol: TCP
+          port: 16686 # Jaeger
+    {{- end }}
+  
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # Allow communication within monitoring stack
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: snapfix-enterprise
+      ports:
+        - protocol: TCP
+          port: 9090  # Prometheus
+        - protocol: TCP
+          port: 3000  # Grafana
+        - protocol: TCP
+          port: 5601  # Kibana
+        - protocol: TCP
+          port: 9200  # Elasticsearch
+        - protocol: TCP
+          port: 9300  # Elasticsearch transport
+        - protocol: TCP
+          port: 5044  # Logstash
+        - protocol: TCP
+          port: 14250 # Jaeger collector
+        - protocol: TCP
+          port: 16686 # Jaeger query
+    
+    # Allow access to Kubernetes API
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    
+    # Allow access to external services (if needed)
+    {{- if .Values.monitoring.networkPolicy.allowExternalEgress }}
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    {{- end }}
+{{- end }}
+
+---
+{{/*
+🌐 Ingress for Monitoring Dashboards
+*/}}
+{{- if .Values.monitoring.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    {{- if .Values.monitoring.ingress.className }}
+    kubernetes.io/ingress.class: {{ .Values.monitoring.ingress.className }}
+    {{- end }}
+    {{- if .Values.monitoring.ingress.tls.enabled }}
+    cert-manager.io/cluster-issuer: {{ .Values.monitoring.ingress.tls.clusterIssuer | default "letsencrypt-prod" }}
+    {{- end }}
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "{{ .Values.monitoring.ingress.tls.enabled | default false }}"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "{{ .Values.monitoring.ingress.tls.enabled | default false }}"
+    {{- if .Values.monitoring.ingress.auth.enabled }}
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: {{ include "snapfix-enterprise.fullname" . }}-monitoring-auth
+    nginx.ingress.kubernetes.io/auth-realm: 'SnapFix Enterprise Monitoring'
+    {{- end }}
+    {{- with .Values.monitoring.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.monitoring.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.monitoring.ingress.grafana.host | default "grafana.snapfix.local" }}
+        - {{ .Values.monitoring.ingress.kibana.host | default "kibana.snapfix.local" }}
+        - {{ .Values.monitoring.ingress.jaeger.host | default "jaeger.snapfix.local" }}
+        - {{ .Values.monitoring.ingress.prometheus.host | default "prometheus.snapfix.local" }}
+      secretName: {{ include "snapfix-enterprise.fullname" . }}-monitoring-tls
+  {{- end }}
+  rules:
+    # Grafana Dashboard
+    - host: {{ .Values.monitoring.ingress.grafana.host | default "grafana.snapfix.local" }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}-grafana
+                port:
+                  number: 3000
+    
+    # Kibana Dashboard
+    - host: {{ .Values.monitoring.ingress.kibana.host | default "kibana.snapfix.local" }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}-kibana
+                port:
+                  number: 5601
+    
+    # Jaeger UI
+    - host: {{ .Values.monitoring.ingress.jaeger.host | default "jaeger.snapfix.local" }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}-jaeger-query
+                port:
+                  number: 16686
+    
+    # Prometheus UI (optional)
+    {{- if .Values.monitoring.ingress.prometheus.enabled }}
+    - host: {{ .Values.monitoring.ingress.prometheus.host | default "prometheus.snapfix.local" }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+                port:
+                  number: 9090
+    {{- end }}
+{{- end }}
+
+---
+{{/*
+🔐 Basic Auth Secret for Monitoring Ingress
+*/}}
+{{- if and .Values.monitoring.ingress.enabled .Values.monitoring.ingress.auth.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring-auth
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth
+    app.kubernetes.io/part-of: snapfix-enterprise
+type: Opaque
+data:
+  auth: {{ htpasswd .Values.monitoring.ingress.auth.username .Values.monitoring.ingress.auth.password | b64enc }}
+{{- end }}
+
+{{- end }}

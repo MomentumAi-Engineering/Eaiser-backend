@@ -1,0 +1,203 @@
+{
+  "test_suite": "ultra_fast_api_comprehensive",
+  "timestamp": "2025-09-05T05:08:18.201771",
+  "total_test_time_seconds": 68.26068067550659,
+  "total_tests": 6,
+  "successful_tests": 5,
+  "failed_tests": 1,
+  "success_rate_percentage": 83.33333333333334,
+  "detailed_results": [
+    {
+      "test": "health_check",
+      "status": "success",
+      "response_time_ms": 15272.510051727295,
+      "health_status": "healthy",
+      "services": {
+        "redis": "connected",
+        "mongodb": "connected",
+        "background_processor": "inactive"
+      },
+      "queue_size": 0
+    },
+    {
+      "test": "processing_stats",
+      "status": "success",
+      "response_time_ms": 4086.7743492126465,
+      "stats": {
+        "queue_size": 0,
+        "workers_active": false,
+        "total_processed_today": 0,
+        "average_processing_time_seconds": 0.0,
+        "timestamp": "2025-09-05T05:07:29.299351"
+      }
+    },
+    {
+      "test": "ultra_fast_issue_creation",
+      "status": "success",
+      "response_time_ms": 4082.3891162872314,
+      "server_processing_time_ms": 4077.84366607666,
+      "issue_id": "SNAPFIX-2025-103729",
+      "queue_position": 0,
+      "estimated_completion_seconds": 3,
+      "target_response_time_ms": 100,
+      "meets_target": false
+    },
+    {
+      "test": "status_tracking",
+      "status": "success",
+      "total_time_seconds": 10.289236545562744,
+      "status_updates": [
+        {
+          "timestamp": "2025-09-05T05:07:33.392387",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 7.221221923828125
+        },
+        {
+          "timestamp": "2025-09-05T05:07:33.910444",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 4.172801971435547
+        },
+        {
+          "timestamp": "2025-09-05T05:07:34.429317",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 4.7817230224609375
+        },
+        {
+          "timestamp": "2025-09-05T05:07:34.939320",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 3.2410621643066406
+        },
+        {
+          "timestamp": "2025-09-05T05:07:35.452834",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 4.401922225952148
+        },
+        {
+          "timestamp": "2025-09-05T05:07:35.966504",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 3.8869380950927734
+        },
+        {
+          "timestamp": "2025-09-05T05:07:36.482835",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 5.32984733581543
+        },
+        {
+          "timestamp": "2025-09-05T05:07:36.997057",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 4.7149658203125
+        },
+        {
+          "timestamp": "2025-09-05T05:07:37.511679",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 4.3697357177734375
+        },
+        {
+          "timestamp": "2025-09-05T05:07:38.031016",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 5.164861679077148
+        },
+        {
+          "timestamp": "2025-09-05T05:07:38.544359",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 5.813121795654297
+        },
+        {
+          "timestamp": "2025-09-05T05:07:39.059296",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 4.58836555480957
+        },
+        {
+          "timestamp": "2025-09-05T05:07:39.575046",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 5.771398544311523
+        },
+        {
+          "timestamp": "2025-09-05T05:07:40.091838",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 7.293701171875
+        },
+        {
+          "timestamp": "2025-09-05T05:07:40.606873",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 8.471250534057617
+        },
+        {
+          "timestamp": "2025-09-05T05:07:41.115649",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 4.4612884521484375
+        },
+        {
+          "timestamp": "2025-09-05T05:07:41.625956",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 5.966901779174805
+        },
+        {
+          "timestamp": "2025-09-05T05:07:42.140476",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 5.166292190551758
+        },
+        {
+          "timestamp": "2025-09-05T05:07:42.652918",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 5.594730377197266
+        },
+        {
+          "timestamp": "2025-09-05T05:07:43.164870",
+          "status": "queued",
+          "progress_percentage": 10,
+          "response_time_ms": 4.815101623535156
+        }
+      ],
+      "final_status": "queued",
+      "average_response_time_ms": 5.261361598968506
+    },
+    {
+      "test": "streaming_response",
+      "status": "success",
+      "total_time_seconds": 30.168681144714355,
+      "stream_events": [
+        {
+          "timestamp": "2025-09-05T05:08:13.842682",
+          "data": {
+            "status": "timeout",
+            "message": "Processing timeout"
+          }
+        }
+      ],
+      "events_received": 1
+    },
+    {
+      "test": "performance_benchmark",
+      "total_requests": 5,
+      "successful_requests": 2,
+      "failed_requests": 3,
+      "total_time_seconds": 4.357078790664673,
+      "requests_per_second": 1.1475578570469802,
+      "average_response_time_ms": 4237.211108207703,
+      "median_response_time_ms": 4237.211108207703,
+      "min_response_time_ms": 4121.6089725494385,
+      "max_response_time_ms": 4352.813243865967,
+      "success_rate_percentage": 40.0
+    }
+  ]
+}

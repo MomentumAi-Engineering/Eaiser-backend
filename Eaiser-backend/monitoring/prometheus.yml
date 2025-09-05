@@ -1,0 +1,265 @@
+# 🚀 SnapFix Enterprise Prometheus Configuration
+# Advanced monitoring for 100,000+ concurrent users
+# Production-ready with comprehensive metrics collection
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'snapfix-enterprise'
+    environment: 'production'
+    region: 'global'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+      timeout: 10s
+      api_version: v2
+
+# Load alerting rules
+rule_files:
+  - "alert_rules.yml"
+  - "recording_rules.yml"
+
+# Scrape configurations for all services
+scrape_configs:
+  # ========================================
+  # CORE APPLICATION METRICS
+  # ========================================
+  
+  # FastAPI application instances (20 instances)
+  - job_name: 'snapfix-api'
+    static_configs:
+      - targets:
+          - 'snapfix-api-1:8000'
+          - 'snapfix-api-2:8000'
+          - 'snapfix-api-3:8000'
+          - 'snapfix-api-4:8000'
+          - 'snapfix-api-5:8000'
+          - 'snapfix-api-6:8000'
+          - 'snapfix-api-7:8000'
+          - 'snapfix-api-8:8000'
+          - 'snapfix-api-9:8000'
+          - 'snapfix-api-10:8000'
+          - 'snapfix-api-11:8000'
+          - 'snapfix-api-12:8000'
+          - 'snapfix-api-13:8000'
+          - 'snapfix-api-14:8000'
+          - 'snapfix-api-15:8000'
+          - 'snapfix-api-16:8000'
+          - 'snapfix-api-17:8000'
+          - 'snapfix-api-18:8000'
+          - 'snapfix-api-19:8000'
+          - 'snapfix-api-20:8000'
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+    scrape_timeout: 5s
+    params:
+      format: ['prometheus']
+
+  # Nginx Load Balancer
+  - job_name: 'nginx-lb'
+    static_configs:
+      - targets: ['nginx:9113']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # ========================================
+  # DATABASE METRICS
+  # ========================================
+  
+  # MongoDB Sharded Cluster
+  - job_name: 'mongodb-shard1'
+    static_configs:
+      - targets:
+          - 'mongo-shard1-primary:9216'
+          - 'mongo-shard1-secondary1:9216'
+          - 'mongo-shard1-secondary2:9216'
+    scrape_interval: 30s
+    
+  - job_name: 'mongodb-shard2'
+    static_configs:
+      - targets:
+          - 'mongo-shard2-primary:9216'
+          - 'mongo-shard2-secondary1:9216'
+          - 'mongo-shard2-secondary2:9216'
+    scrape_interval: 30s
+    
+  - job_name: 'mongodb-shard3'
+    static_configs:
+      - targets:
+          - 'mongo-shard3-primary:9216'
+          - 'mongo-shard3-secondary1:9216'
+          - 'mongo-shard3-secondary2:9216'
+    scrape_interval: 30s
+
+  - job_name: 'mongodb-router'
+    static_configs:
+      - targets: ['mongo-router:9216']
+    scrape_interval: 30s
+
+  # ========================================
+  # REDIS CLUSTER METRICS
+  # ========================================
+  
+  - job_name: 'redis-cluster'
+    static_configs:
+      - targets:
+          - 'redis-node-1:9121'
+          - 'redis-node-2:9121'
+          - 'redis-node-3:9121'
+          - 'redis-node-4:9121'
+          - 'redis-node-5:9121'
+          - 'redis-node-6:9121'
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # ========================================
+  # MESSAGE QUEUE METRICS
+  # ========================================
+  
+  # RabbitMQ Cluster
+  - job_name: 'rabbitmq-cluster'
+    static_configs:
+      - targets:
+          - 'rabbitmq-1:15692'
+          - 'rabbitmq-2:15692'
+          - 'rabbitmq-3:15692'
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Celery Workers
+  - job_name: 'celery-workers'
+    static_configs:
+      - targets:
+          - 'celery-worker-1:9540'
+          - 'celery-worker-2:9540'
+          - 'celery-worker-3:9540'
+          - 'celery-worker-4:9540'
+          - 'celery-worker-5:9540'
+    scrape_interval: 20s
+
+  # ========================================
+  # INFRASTRUCTURE METRICS
+  # ========================================
+  
+  # Node Exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets:
+          - 'node-exporter-1:9100'
+          - 'node-exporter-2:9100'
+          - 'node-exporter-3:9100'
+    scrape_interval: 15s
+    
+  # cAdvisor for container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets:
+          - 'cadvisor-1:8080'
+          - 'cadvisor-2:8080'
+          - 'cadvisor-3:8080'
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # ========================================
+  # CUSTOM APPLICATION METRICS
+  # ========================================
+  
+  # Custom business metrics
+  - job_name: 'snapfix-business-metrics'
+    static_configs:
+      - targets: ['metrics-collector:8080']
+    scrape_interval: 30s
+    metrics_path: '/business-metrics'
+
+  # Performance testing metrics
+  - job_name: 'load-test-metrics'
+    static_configs:
+      - targets: ['load-test-exporter:9090']
+    scrape_interval: 60s
+    honor_labels: true
+
+  # ========================================
+  # SECURITY METRICS
+  # ========================================
+  
+  # Security monitoring
+  - job_name: 'security-metrics'
+    static_configs:
+      - targets: ['security-exporter:9200']
+    scrape_interval: 60s
+    metrics_path: '/security-metrics'
+
+  # ========================================
+  # PROMETHEUS SELF-MONITORING
+  # ========================================
+  
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+
+# ========================================
+# REMOTE STORAGE (Optional)
+# ========================================
+# Uncomment for long-term storage
+# remote_write:
+#   - url: "https://prometheus-remote-storage/api/v1/write"
+#     queue_config:
+#       max_samples_per_send: 10000
+#       max_shards: 200
+#       capacity: 100000
+
+# ========================================
+# STORAGE CONFIGURATION
+# ========================================
+storage:
+  tsdb:
+    retention.time: 30d
+    retention.size: 100GB
+    wal-compression: true
+
+# ========================================
+# PERFORMANCE TUNING
+# ========================================
+# Query timeout
+query:
+  timeout: 2m
+  max_concurrency: 20
+  max_samples: 50000000
+
+# ========================================
+# FEATURE FLAGS
+# ========================================
+# Enable advanced features
+feature_flags:
+  - "promql-at-modifier"
+  - "promql-negative-offset"
+  - "remote-write-receiver"
+
+# ========================================
+# CONFIGURATION NOTES
+# ========================================
+# This configuration monitors:
+# - 20 FastAPI application instances
+# - MongoDB sharded cluster (3 shards + router)
+# - Redis cluster (6 nodes)
+# - RabbitMQ cluster (3 nodes)
+# - Celery workers (5 instances)
+# - System and container metrics
+# - Custom business and security metrics
+# 
+# Expected metrics volume:
+# - ~50,000 time series
+# - ~1M samples/second at peak
+# - 30-day retention with compression
+# 
+# Performance targets:
+# - Query response: <2 seconds
+# - Ingestion rate: 1M+ samples/sec
+# - Storage efficiency: 70%+ compression
+# - Availability: 99.9% uptime

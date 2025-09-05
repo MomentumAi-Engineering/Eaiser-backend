@@ -1,0 +1,903 @@
+{{/*
+🍃 MongoDB Sharded Cluster Configuration for SnapFix Enterprise
+
+This template creates a MongoDB sharded cluster with:
+- 3 shards with replica sets (3 nodes each)
+- Config servers (3 nodes for high availability)
+- Mongos routers (2+ instances for load balancing)
+- Automatic sharding and balancing
+- Connection pooling and optimization
+*/}}
+
+{{- if .Values.mongodb.sharding.enabled }}
+{{/*
+📋 MongoDB Sharded Cluster ConfigMap
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb-config
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  mongod.conf: |
+    # ========================================
+    # MONGODB CONFIGURATION
+    # ========================================
+    
+    # Network settings
+    net:
+      port: {{ .Values.mongodb.port | default 27017 }}
+      bindIp: 0.0.0.0
+      maxIncomingConnections: {{ .Values.mongodb.maxConnections | default 20000 }}
+      
+    # Storage settings
+    storage:
+      dbPath: /data/db
+      journal:
+        enabled: true
+      wiredTiger:
+        engineConfig:
+          cacheSizeGB: {{ .Values.mongodb.cacheSize | default 2 }}
+          journalCompressor: {{ .Values.mongodb.journalCompressor | default "snappy" }}
+          directoryForIndexes: true
+        collectionConfig:
+          blockCompressor: {{ .Values.mongodb.blockCompressor | default "snappy" }}
+        indexConfig:
+          prefixCompression: true
+    
+    # Replication settings
+    replication:
+      replSetName: ${REPLICA_SET_NAME}
+      
+    # Sharding settings
+    sharding:
+      clusterRole: ${CLUSTER_ROLE}
+      
+    # Process management
+    processManagement:
+      fork: false
+      pidFilePath: /tmp/mongod.pid
+      
+    # Security settings
+    {{- if .Values.mongodb.auth.enabled }}
+    security:
+      authorization: enabled
+      keyFile: /etc/mongodb-keyfile/keyfile
+    {{- end }}
+    
+    # Logging
+    systemLog:
+      destination: file
+      path: /var/log/mongodb/mongod.log
+      logAppend: true
+      logRotate: reopen
+      component:
+        accessControl:
+          verbosity: {{ .Values.mongodb.logging.accessControl | default 0 }}
+        command:
+          verbosity: {{ .Values.mongodb.logging.command | default 0 }}
+        control:
+          verbosity: {{ .Values.mongodb.logging.control | default 0 }}
+        geo:
+          verbosity: {{ .Values.mongodb.logging.geo | default 0 }}
+        index:
+          verbosity: {{ .Values.mongodb.logging.index | default 0 }}
+        network:
+          verbosity: {{ .Values.mongodb.logging.network | default 0 }}
+        query:
+          verbosity: {{ .Values.mongodb.logging.query | default 0 }}
+        replication:
+          verbosity: {{ .Values.mongodb.logging.replication | default 0 }}
+        sharding:
+          verbosity: {{ .Values.mongodb.logging.sharding | default 1 }}
+        storage:
+          verbosity: {{ .Values.mongodb.logging.storage | default 0 }}
+        write:
+          verbosity: {{ .Values.mongodb.logging.write | default 0 }}
+    
+    # Performance settings
+    operationProfiling:
+      mode: {{ .Values.mongodb.profiling.mode | default "slowOp" }}
+      slowOpThresholdMs: {{ .Values.mongodb.profiling.slowOpThreshold | default 100 }}
+      
+  mongos.conf: |
+    # ========================================
+    # MONGOS ROUTER CONFIGURATION
+    # ========================================
+    
+    # Network settings
+    net:
+      port: {{ .Values.mongodb.port | default 27017 }}
+      bindIp: 0.0.0.0
+      maxIncomingConnections: {{ .Values.mongodb.mongos.maxConnections | default 10000 }}
+      
+    # Sharding settings
+    sharding:
+      configDB: {{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr/{{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr-0.{{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr.{{ .Release.Namespace }}.svc.cluster.local:27017,{{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr-1.{{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr.{{ .Release.Namespace }}.svc.cluster.local:27017,{{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr-2.{{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr.{{ .Release.Namespace }}.svc.cluster.local:27017
+      
+    # Process management
+    processManagement:
+      fork: false
+      pidFilePath: /tmp/mongos.pid
+      
+    # Security settings
+    {{- if .Values.mongodb.auth.enabled }}
+    security:
+      keyFile: /etc/mongodb-keyfile/keyfile
+    {{- end }}
+    
+    # Logging
+    systemLog:
+      destination: file
+      path: /var/log/mongodb/mongos.log
+      logAppend: true
+      logRotate: reopen
+      component:
+        sharding:
+          verbosity: 1
+        network:
+          verbosity: 0
+          
+  init-shard.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Initializing MongoDB Shard: ${SHARD_NAME}"
+    
+    # Wait for MongoDB to be ready
+    until mongo --host localhost:27017 --eval "print('MongoDB is ready')"; do
+      echo "Waiting for MongoDB to start..."
+      sleep 2
+    done
+    
+    # Initialize replica set
+    mongo --host localhost:27017 <<EOF
+    rs.initiate({
+      _id: "${REPLICA_SET_NAME}",
+      members: [
+        { _id: 0, host: "${POD_NAME}-0.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:27017" },
+        { _id: 1, host: "${POD_NAME}-1.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:27017" },
+        { _id: 2, host: "${POD_NAME}-2.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:27017" }
+      ]
+    });
+    EOF
+    
+    echo "Replica set ${REPLICA_SET_NAME} initialized successfully"
+    
+  init-configsvr.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Initializing MongoDB Config Server"
+    
+    # Wait for MongoDB to be ready
+    until mongo --host localhost:27017 --eval "print('MongoDB is ready')"; do
+      echo "Waiting for MongoDB to start..."
+      sleep 2
+    done
+    
+    # Initialize config server replica set
+    mongo --host localhost:27017 <<EOF
+    rs.initiate({
+      _id: "${REPLICA_SET_NAME}",
+      configsvr: true,
+      members: [
+        { _id: 0, host: "${SERVICE_NAME}-0.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:27017" },
+        { _id: 1, host: "${SERVICE_NAME}-1.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:27017" },
+        { _id: 2, host: "${SERVICE_NAME}-2.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:27017" }
+      ]
+    });
+    EOF
+    
+    echo "Config server replica set initialized successfully"
+    
+  init-sharding.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Initializing MongoDB Sharding"
+    
+    # Wait for mongos to be ready
+    until mongo --host ${MONGOS_HOST}:27017 --eval "print('Mongos is ready')"; do
+      echo "Waiting for Mongos to start..."
+      sleep 5
+    done
+    
+    # Add shards to the cluster
+    mongo --host ${MONGOS_HOST}:27017 <<EOF
+    
+    // Add shard 0
+    sh.addShard("{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard0/{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard0-0.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard0.{{ .Release.Namespace }}.svc.cluster.local:27017,{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard0-1.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard0.{{ .Release.Namespace }}.svc.cluster.local:27017,{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard0-2.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard0.{{ .Release.Namespace }}.svc.cluster.local:27017");
+    
+    // Add shard 1
+    sh.addShard("{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard1/{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard1-0.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard1.{{ .Release.Namespace }}.svc.cluster.local:27017,{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard1-1.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard1.{{ .Release.Namespace }}.svc.cluster.local:27017,{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard1-2.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard1.{{ .Release.Namespace }}.svc.cluster.local:27017");
+    
+    // Add shard 2
+    sh.addShard("{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard2/{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard2-0.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard2.{{ .Release.Namespace }}.svc.cluster.local:27017,{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard2-1.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard2.{{ .Release.Namespace }}.svc.cluster.local:27017,{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard2-2.{{ include "snapfix-enterprise.fullname" . }}-mongodb-shard2.{{ .Release.Namespace }}.svc.cluster.local:27017");
+    
+    // Enable sharding for the database
+    sh.enableSharding("{{ .Values.mongodb.database | default "snapfix" }}");
+    
+    // Shard collections
+    sh.shardCollection("{{ .Values.mongodb.database | default "snapfix" }}.users", { "_id": "hashed" });
+    sh.shardCollection("{{ .Values.mongodb.database | default "snapfix" }}.tickets", { "user_id": 1, "created_at": 1 });
+    sh.shardCollection("{{ .Values.mongodb.database | default "snapfix" }}.analytics", { "timestamp": 1 });
+    sh.shardCollection("{{ .Values.mongodb.database | default "snapfix" }}.logs", { "timestamp": 1 });
+    
+    // Set balancer settings
+    sh.setBalancerState(true);
+    
+    // Configure chunk size (default 64MB, can be adjusted)
+    use config;
+    db.settings.save({ _id: "chunksize", value: {{ .Values.mongodb.chunkSize | default 64 }} });
+    
+    EOF
+    
+    echo "MongoDB sharding initialized successfully"
+    
+    # Show cluster status
+    mongo --host ${MONGOS_HOST}:27017 --eval "sh.status()"
+
+---
+{{/*
+🍃 MongoDB Config Server Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb-configsvr
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  publishNotReadyAddresses: true
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+      protocol: TCP
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb-configsvr
+
+---
+{{/*
+🍃 MongoDB Config Server StatefulSet
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb-configsvr
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  serviceName: {{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr
+  replicas: 3
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mongodb-configsvr
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mongodb-configsvr
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/mongodb-sharded.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.mongodb.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "snapfix-enterprise.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: mongodb-configsvr
+                topologyKey: kubernetes.io/hostname
+      
+      initContainers:
+        - name: init-permissions
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 999:999 /data/db
+              chmod 755 /data/db
+          volumeMounts:
+            - name: mongodb-data
+              mountPath: /data/db
+          securityContext:
+            runAsUser: 0
+      
+      containers:
+        - name: mongodb
+          image: "{{ .Values.mongodb.image.repository }}:{{ .Values.mongodb.image.tag | default "7.0" }}"
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: mongodb
+              containerPort: 27017
+              protocol: TCP
+          
+          env:
+            - name: REPLICA_SET_NAME
+              value: {{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr
+            - name: CLUSTER_ROLE
+              value: "configsvr"
+            - name: SERVICE_NAME
+              value: {{ include "snapfix-enterprise.fullname" . }}-mongodb-configsvr
+            - name: NAMESPACE
+              value: {{ .Release.Namespace }}
+            {{- if .Values.mongodb.auth.enabled }}
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+                  key: mongodb-root-username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+                  key: mongodb-root-password
+            {{- end }}
+          
+          command:
+            - mongod
+            - --config
+            - /etc/mongodb/mongod.conf
+          
+          volumeMounts:
+            - name: mongodb-config
+              mountPath: /etc/mongodb
+            - name: mongodb-data
+              mountPath: /data/db
+            {{- if .Values.mongodb.auth.enabled }}
+            - name: mongodb-keyfile
+              mountPath: /etc/mongodb-keyfile
+              readOnly: true
+            {{- end }}
+          
+          livenessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.mongodb.configsvr.resources | nindent 12 }}
+      
+      volumes:
+        - name: mongodb-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-config
+        {{- if .Values.mongodb.auth.enabled }}
+        - name: mongodb-keyfile
+          secret:
+            secretName: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+            items:
+              - key: mongodb-keyfile
+                path: keyfile
+                mode: 0600
+        {{- end }}
+  
+  volumeClaimTemplates:
+    - metadata:
+        name: mongodb-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.mongodb.configsvr.persistence.storageClass }}
+        storageClassName: {{ .Values.mongodb.configsvr.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mongodb.configsvr.persistence.size | default "10Gi" }}
+
+{{/*
+🍃 MongoDB Shard Services and StatefulSets (3 shards)
+*/}}
+{{- range $shardIndex := until (int (.Values.mongodb.sharding.shards | default 3)) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-shard{{ $shardIndex }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: mongodb-shard{{ $shardIndex }}
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  publishNotReadyAddresses: true
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+      protocol: TCP
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: mongodb-shard{{ $shardIndex }}
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-shard{{ $shardIndex }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: mongodb-shard{{ $shardIndex }}
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  serviceName: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-shard{{ $shardIndex }}
+  replicas: {{ $.Values.mongodb.sharding.replicasPerShard | default 3 }}
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: mongodb-shard{{ $shardIndex }}
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: mongodb-shard{{ $shardIndex }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/mongodb-sharded.yaml") $ | sha256sum }}
+    spec:
+      {{- with $.Values.mongodb.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "snapfix-enterprise.selectorLabels" $ | nindent 20 }}
+                    app.kubernetes.io/component: mongodb-shard{{ $shardIndex }}
+                topologyKey: kubernetes.io/hostname
+      
+      initContainers:
+        - name: init-permissions
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 999:999 /data/db
+              chmod 755 /data/db
+          volumeMounts:
+            - name: mongodb-data
+              mountPath: /data/db
+          securityContext:
+            runAsUser: 0
+      
+      containers:
+        - name: mongodb
+          image: "{{ $.Values.mongodb.image.repository }}:{{ $.Values.mongodb.image.tag | default "7.0" }}"
+          imagePullPolicy: {{ $.Values.mongodb.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: mongodb
+              containerPort: 27017
+              protocol: TCP
+          
+          env:
+            - name: REPLICA_SET_NAME
+              value: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-shard{{ $shardIndex }}
+            - name: CLUSTER_ROLE
+              value: "shardsvr"
+            - name: SHARD_NAME
+              value: "shard{{ $shardIndex }}"
+            - name: SERVICE_NAME
+              value: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-shard{{ $shardIndex }}
+            - name: POD_NAME
+              value: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-shard{{ $shardIndex }}
+            - name: NAMESPACE
+              value: {{ $.Release.Namespace }}
+            {{- if $.Values.mongodb.auth.enabled }}
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-secret
+                  key: mongodb-root-username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-secret
+                  key: mongodb-root-password
+            {{- end }}
+          
+          command:
+            - mongod
+            - --config
+            - /etc/mongodb/mongod.conf
+          
+          volumeMounts:
+            - name: mongodb-config
+              mountPath: /etc/mongodb
+            - name: mongodb-data
+              mountPath: /data/db
+            {{- if $.Values.mongodb.auth.enabled }}
+            - name: mongodb-keyfile
+              mountPath: /etc/mongodb-keyfile
+              readOnly: true
+            {{- end }}
+          
+          livenessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml $.Values.mongodb.shard.resources | nindent 12 }}
+      
+      volumes:
+        - name: mongodb-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-config
+        {{- if $.Values.mongodb.auth.enabled }}
+        - name: mongodb-keyfile
+          secret:
+            secretName: {{ include "snapfix-enterprise.fullname" $ }}-mongodb-secret
+            items:
+              - key: mongodb-keyfile
+                path: keyfile
+                mode: 0600
+        {{- end }}
+  
+  volumeClaimTemplates:
+    - metadata:
+        name: mongodb-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $.Values.mongodb.shard.persistence.storageClass }}
+        storageClassName: {{ $.Values.mongodb.shard.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $.Values.mongodb.shard.persistence.size | default "100Gi" }}
+{{- end }}
+
+---
+{{/*
+🍃 MongoDB Mongos Router Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-mongos
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb-mongos
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    {{- if .Values.monitoring.prometheus.enabled }}
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "{{ .Values.mongodb.mongos.metricsPort | default 9216 }}"
+    prometheus.io/path: "/metrics"
+    {{- end }}
+spec:
+  type: {{ .Values.mongodb.mongos.service.type | default "ClusterIP" }}
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+      protocol: TCP
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - name: metrics
+      port: {{ .Values.mongodb.mongos.metricsPort | default 9216 }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb-mongos
+
+---
+{{/*
+🍃 MongoDB Mongos Router Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-mongos
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb-mongos
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.mongodb.mongos.replicas | default 2 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mongodb-mongos
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mongodb-mongos
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/mongodb-sharded.yaml") . | sha256sum }}
+        {{- if .Values.monitoring.prometheus.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.mongodb.mongos.metricsPort | default 9216 }}"
+        prometheus.io/path: "/metrics"
+        {{- end }}
+    spec:
+      {{- with .Values.mongodb.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "snapfix-enterprise.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: mongodb-mongos
+                topologyKey: kubernetes.io/hostname
+      
+      containers:
+        - name: mongos
+          image: "{{ .Values.mongodb.image.repository }}:{{ .Values.mongodb.image.tag | default "7.0" }}"
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: mongodb
+              containerPort: 27017
+              protocol: TCP
+          
+          env:
+            {{- if .Values.mongodb.auth.enabled }}
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+                  key: mongodb-root-username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+                  key: mongodb-root-password
+            {{- end }}
+          
+          command:
+            - mongos
+            - --config
+            - /etc/mongodb/mongos.conf
+          
+          volumeMounts:
+            - name: mongodb-config
+              mountPath: /etc/mongodb
+            {{- if .Values.mongodb.auth.enabled }}
+            - name: mongodb-keyfile
+              mountPath: /etc/mongodb-keyfile
+              readOnly: true
+            {{- end }}
+          
+          livenessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            exec:
+              command:
+                - mongo
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.mongodb.mongos.resources | nindent 12 }}
+        
+        {{- if .Values.monitoring.prometheus.enabled }}
+        # MongoDB Exporter for Prometheus metrics
+        - name: mongodb-exporter
+          image: "{{ .Values.mongodb.exporter.image.repository }}:{{ .Values.mongodb.exporter.image.tag | default "0.40.0" }}"
+          imagePullPolicy: {{ .Values.mongodb.exporter.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.mongodb.mongos.metricsPort | default 9216 }}
+              protocol: TCP
+          
+          env:
+            - name: MONGODB_URI
+              value: "mongodb://localhost:27017"
+            {{- if .Values.mongodb.auth.enabled }}
+            - name: MONGODB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+                  key: mongodb-root-username
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+                  key: mongodb-root-password
+            {{- end }}
+          
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          
+          resources:
+            {{- toYaml .Values.mongodb.exporter.resources | nindent 12 }}
+        {{- end }}
+      
+      volumes:
+        - name: mongodb-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-config
+        {{- if .Values.mongodb.auth.enabled }}
+        - name: mongodb-keyfile
+          secret:
+            secretName: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+            items:
+              - key: mongodb-keyfile
+                path: keyfile
+                mode: 0600
+        {{- end }}
+
+---
+{{/*
+🔧 MongoDB Sharding Initialization Job
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-init-sharding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongodb-init
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mongodb-init
+    spec:
+      restartPolicy: Never
+      
+      containers:
+        - name: init-sharding
+          image: "{{ .Values.mongodb.image.repository }}:{{ .Values.mongodb.image.tag | default "7.0" }}"
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy | default "IfNotPresent" }}
+          
+          env:
+            - name: MONGOS_HOST
+              value: {{ include "snapfix-enterprise.fullname" . }}-mongodb-mongos
+            {{- if .Values.mongodb.auth.enabled }}
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+                  key: mongodb-root-username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-secret
+                  key: mongodb-root-password
+            {{- end }}
+          
+          command:
+            - /bin/bash
+            - /scripts/init-sharding.sh
+          
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /scripts
+          
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-config
+            defaultMode: 0755
+
+{{- end }}

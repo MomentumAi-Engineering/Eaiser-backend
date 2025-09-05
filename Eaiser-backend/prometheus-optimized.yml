@@ -1,0 +1,170 @@
+# Prometheus Configuration for Eaiser Backend Monitoring
+# Optimized for 1 Lakh+ Users Performance Tracking
+# This configuration monitors:
+# - FastAPI application metrics
+# - Redis cluster performance
+# - MongoDB replica set health
+# - Nginx load balancer stats
+# - System resources and alerts
+
+global:
+  scrape_interval: 15s      # Set the scrape interval to every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+  external_labels:
+    cluster: 'eaiser-production'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "rules/*.yml"
+
+# Scrape configuration
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # FastAPI Backend Instances
+  - job_name: 'eaiser-backend'
+    static_configs:
+      - targets:
+          - 'backend-1:10000'
+          - 'backend-2:10000'
+          - 'backend-3:10000'
+          - 'backend-4:10000'
+    scrape_interval: 10s
+    metrics_path: /metrics
+    scrape_timeout: 5s
+    honor_labels: true
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [__address__]
+        regex: '([^:]+):(\d+)'
+        target_label: backend_instance
+        replacement: '${1}'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'python_.*'
+        action: drop  # Drop Python internal metrics to reduce cardinality
+
+  # Nginx Load Balancer Metrics
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:8080']
+    scrape_interval: 15s
+    metrics_path: /nginx-metrics
+    scrape_timeout: 5s
+
+  # Redis Cluster Monitoring
+  - job_name: 'redis-cluster'
+    static_configs:
+      - targets:
+          - 'redis-node-1:6379'
+          - 'redis-node-2:6379'
+          - 'redis-node-3:6379'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    scrape_timeout: 5s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: redis_instance
+
+  # MongoDB Replica Set Monitoring
+  - job_name: 'mongodb'
+    static_configs:
+      - targets:
+          - 'mongodb-primary:27017'
+          - 'mongodb-secondary-1:27017'
+          - 'mongodb-secondary-2:27017'
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: mongodb_instance
+
+  # Node Exporter for System Metrics (if deployed)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets:
+          - 'node-exporter:9100'
+    scrape_interval: 15s
+    metrics_path: /metrics
+
+  # cAdvisor for Container Metrics (if deployed)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets:
+          - 'cadvisor:8080'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'container_.*'
+        action: keep
+      - source_labels: [container_label_com_docker_compose_service]
+        target_label: service
+
+  # Custom Application Metrics
+  - job_name: 'eaiser-custom-metrics'
+    static_configs:
+      - targets:
+          - 'backend-1:10000'
+          - 'backend-2:10000'
+          - 'backend-3:10000'
+          - 'backend-4:10000'
+    scrape_interval: 10s
+    metrics_path: /api/metrics
+    scrape_timeout: 5s
+    honor_labels: true
+
+  # Health Check Endpoints
+  - job_name: 'health-checks'
+    static_configs:
+      - targets:
+          - 'backend-1:10000'
+          - 'backend-2:10000'
+          - 'backend-3:10000'
+          - 'backend-4:10000'
+    scrape_interval: 5s
+    metrics_path: /health
+    scrape_timeout: 3s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'up'
+        action: keep
+
+# Remote write configuration (for long-term storage)
+# remote_write:
+#   - url: "https://prometheus-remote-write-endpoint/api/v1/write"
+#     basic_auth:
+#       username: "your-username"
+#       password: "your-password"
+#     queue_config:
+#       max_samples_per_send: 1000
+#       max_shards: 200
+#       capacity: 2500
+
+# Storage configuration
+storage:
+  tsdb:
+    retention.time: 15d
+    retention.size: 10GB
+    wal-compression: true
+
+# Query configuration
+query:
+  max_concurrency: 20
+  timeout: 2m
+  max_samples: 50000000

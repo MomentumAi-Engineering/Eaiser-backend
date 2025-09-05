@@ -1,0 +1,493 @@
+{{/*
+🌐 SnapFix Enterprise - Advanced Ingress Template
+🚀 High-Performance Load Balancing, SSL Termination & Routing
+🛡️ Security Headers, Rate Limiting & DDoS Protection
+*/}}
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # ========================================
+    # NGINX INGRESS CONTROLLER ANNOTATIONS
+    # ========================================
+    
+    # Basic configuration
+    kubernetes.io/ingress.class: "{{ .Values.ingress.className | default "nginx" }}"
+    nginx.ingress.kubernetes.io/ssl-redirect: "{{ .Values.ingress.sslRedirect | default true }}"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "{{ .Values.ingress.forceSslRedirect | default true }}"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    
+    # ========================================
+    # PERFORMANCE OPTIMIZATIONS
+    # ========================================
+    
+    # Connection and timeout settings
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "{{ .Values.ingress.performance.proxyConnectTimeout | default "60" }}"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "{{ .Values.ingress.performance.proxySendTimeout | default "60" }}"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "{{ .Values.ingress.performance.proxyReadTimeout | default "60" }}"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "{{ .Values.ingress.performance.proxyNextUpstreamTimeout | default "0" }}"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "{{ .Values.ingress.performance.proxyRequestBuffering | default "on" }}"
+    
+    # Buffer sizes for high-concurrency
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "{{ .Values.ingress.performance.proxyBufferSize | default "16k" }}"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "{{ .Values.ingress.performance.proxyBuffersNumber | default "8" }}"
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "{{ .Values.ingress.performance.clientBodyBufferSize | default "1m" }}"
+    nginx.ingress.kubernetes.io/client-header-buffer-size: "{{ .Values.ingress.performance.clientHeaderBufferSize | default "4k" }}"
+    nginx.ingress.kubernetes.io/large-client-header-buffers: "{{ .Values.ingress.performance.largeClientHeaderBuffers | default "4 16k" }}"
+    
+    # Upload limits for photo editing
+    nginx.ingress.kubernetes.io/proxy-body-size: "{{ .Values.ingress.performance.proxyBodySize | default "100m" }}"
+    nginx.ingress.kubernetes.io/client-max-body-size: "{{ .Values.ingress.performance.clientMaxBodySize | default "100m" }}"
+    
+    # Compression for better performance
+    nginx.ingress.kubernetes.io/enable-compression: "{{ .Values.ingress.performance.enableCompression | default true }}"
+    nginx.ingress.kubernetes.io/compression-level: "{{ .Values.ingress.performance.compressionLevel | default "6" }}"
+    nginx.ingress.kubernetes.io/compression-types: "{{ .Values.ingress.performance.compressionTypes | default "text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml" }}"
+    
+    # Keep-alive for connection reuse
+    nginx.ingress.kubernetes.io/upstream-keepalive-connections: "{{ .Values.ingress.performance.upstreamKeepaliveConnections | default "100" }}"
+    nginx.ingress.kubernetes.io/upstream-keepalive-requests: "{{ .Values.ingress.performance.upstreamKeepaliveRequests | default "10000" }}"
+    nginx.ingress.kubernetes.io/upstream-keepalive-timeout: "{{ .Values.ingress.performance.upstreamKeepaliveTimeout | default "60" }}"
+    
+    # ========================================
+    # LOAD BALANCING & HEALTH CHECKS
+    # ========================================
+    
+    # Load balancing method
+    nginx.ingress.kubernetes.io/load-balance: "{{ .Values.ingress.loadBalancing.method | default "round_robin" }}"
+    nginx.ingress.kubernetes.io/upstream-hash-by: "{{ .Values.ingress.loadBalancing.hashBy | default "$remote_addr" }}"
+    
+    # Session affinity for stateful operations
+    nginx.ingress.kubernetes.io/affinity: "{{ .Values.ingress.sessionAffinity.type | default "cookie" }}"
+    nginx.ingress.kubernetes.io/affinity-mode: "{{ .Values.ingress.sessionAffinity.mode | default "persistent" }}"
+    nginx.ingress.kubernetes.io/session-cookie-name: "{{ .Values.ingress.sessionAffinity.cookieName | default "snapfix-session" }}"
+    nginx.ingress.kubernetes.io/session-cookie-expires: "{{ .Values.ingress.sessionAffinity.cookieExpires | default "86400" }}"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "{{ .Values.ingress.sessionAffinity.cookieMaxAge | default "86400" }}"
+    nginx.ingress.kubernetes.io/session-cookie-path: "{{ .Values.ingress.sessionAffinity.cookiePath | default "/" }}"
+    
+    # Health checks
+    nginx.ingress.kubernetes.io/upstream-fail-timeout: "{{ .Values.ingress.healthCheck.failTimeout | default "10s" }}"
+    nginx.ingress.kubernetes.io/upstream-max-fails: "{{ .Values.ingress.healthCheck.maxFails | default "3" }}"
+    
+    # ========================================
+    # SECURITY CONFIGURATIONS
+    # ========================================
+    
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=()";
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+      more_set_headers "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: https:; media-src 'self'; object-src 'none'; child-src 'none'; worker-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self';";
+      {{- if .Values.ingress.security.customHeaders }}
+      {{- range $key, $value := .Values.ingress.security.customHeaders }}
+      more_set_headers "{{ $key }}: {{ $value }}";
+      {{- end }}
+      {{- end }}
+    
+    # CORS configuration
+    nginx.ingress.kubernetes.io/enable-cors: "{{ .Values.ingress.cors.enabled | default true }}"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "{{ .Values.ingress.cors.allowOrigin | default "*" }}"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "{{ .Values.ingress.cors.allowMethods | default "GET, POST, PUT, DELETE, OPTIONS, PATCH" }}"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "{{ .Values.ingress.cors.allowHeaders | default "DNT,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization,X-API-Key,X-Client-Version" }}"
+    nginx.ingress.kubernetes.io/cors-expose-headers: "{{ .Values.ingress.cors.exposeHeaders | default "Content-Length,Content-Range,X-Total-Count,X-Rate-Limit-Remaining,X-Rate-Limit-Reset" }}"
+    nginx.ingress.kubernetes.io/cors-max-age: "{{ .Values.ingress.cors.maxAge | default "86400" }}"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "{{ .Values.ingress.cors.allowCredentials | default true }}"
+    
+    # ========================================
+    # RATE LIMITING & DDOS PROTECTION
+    # ========================================
+    
+    # Global rate limiting
+    nginx.ingress.kubernetes.io/rate-limit-rps: "{{ .Values.ingress.rateLimit.rps | default "100" }}"
+    nginx.ingress.kubernetes.io/rate-limit-rpm: "{{ .Values.ingress.rateLimit.rpm | default "6000" }}"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "{{ .Values.ingress.rateLimit.connections | default "20" }}"
+    
+    # Rate limiting by IP
+    nginx.ingress.kubernetes.io/limit-rps: "{{ .Values.ingress.rateLimit.perIp.rps | default "10" }}"
+    nginx.ingress.kubernetes.io/limit-rpm: "{{ .Values.ingress.rateLimit.perIp.rpm | default "600" }}"
+    nginx.ingress.kubernetes.io/limit-connections: "{{ .Values.ingress.rateLimit.perIp.connections | default "5" }}"
+    
+    # Whitelist for trusted IPs
+    {{- if .Values.ingress.rateLimit.whitelist }}
+    nginx.ingress.kubernetes.io/whitelist-source-range: "{{ join "," .Values.ingress.rateLimit.whitelist }}"
+    {{- end }}
+    
+    # ========================================
+    # SSL/TLS CONFIGURATION
+    # ========================================
+    
+    {{- if .Values.ingress.tls.enabled }}
+    # Cert-Manager annotations
+    cert-manager.io/issuer: "{{ .Values.ingress.tls.issuer | default "letsencrypt-prod" }}"
+    cert-manager.io/cluster-issuer: "{{ .Values.ingress.tls.clusterIssuer | default "letsencrypt-prod" }}"
+    cert-manager.io/acme-challenge-type: "{{ .Values.ingress.tls.acmeChallengeType | default "http01" }}"
+    
+    # SSL configuration
+    nginx.ingress.kubernetes.io/ssl-protocols: "{{ .Values.ingress.tls.protocols | default "TLSv1.2 TLSv1.3" }}"
+    nginx.ingress.kubernetes.io/ssl-ciphers: "{{ .Values.ingress.tls.ciphers | default "ECDHE-ECDSA-AES128-GCM-SHA256,ECDHE-RSA-AES128-GCM-SHA256,ECDHE-ECDSA-AES256-GCM-SHA384,ECDHE-RSA-AES256-GCM-SHA384" }}"
+    nginx.ingress.kubernetes.io/ssl-prefer-server-ciphers: "{{ .Values.ingress.tls.preferServerCiphers | default true }}"
+    {{- end }}
+    
+    # ========================================
+    # MONITORING & OBSERVABILITY
+    # ========================================
+    
+    # Prometheus metrics
+    nginx.ingress.kubernetes.io/enable-metrics: "{{ .Values.monitoring.prometheus.enabled | default true }}"
+    
+    # Access logging
+    nginx.ingress.kubernetes.io/enable-access-log: "{{ .Values.ingress.logging.accessLog | default true }}"
+    nginx.ingress.kubernetes.io/access-log-path: "{{ .Values.ingress.logging.accessLogPath | default "/var/log/nginx/access.log" }}"
+    
+    # Custom log format for better observability
+    nginx.ingress.kubernetes.io/log-format-escape-json: "true"
+    nginx.ingress.kubernetes.io/log-format-upstream: |
+      {
+        "timestamp": "$time_iso8601",
+        "remote_addr": "$remote_addr",
+        "x_forwarded_for": "$proxy_add_x_forwarded_for",
+        "request_id": "$req_id",
+        "remote_user": "$remote_user",
+        "request": "$request",
+        "status": $status,
+        "body_bytes_sent": $body_bytes_sent,
+        "request_time": $request_time,
+        "http_referrer": "$http_referer",
+        "http_user_agent": "$http_user_agent",
+        "upstream_addr": "$upstream_addr",
+        "upstream_response_time": $upstream_response_time,
+        "upstream_status": $upstream_status,
+        "host": "$host",
+        "scheme": "$scheme",
+        "server_name": "$server_name",
+        "server_port": $server_port,
+        "ssl_protocol": "$ssl_protocol",
+        "ssl_cipher": "$ssl_cipher"
+      }
+    
+    # ========================================
+    # CUSTOM ANNOTATIONS
+    # ========================================
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    {{- range .Values.ingress.hosts }}
+    - hosts:
+        - {{ .host | quote }}
+      secretName: {{ include "snapfix-enterprise.fullname" $ }}-tls-{{ .name | default "default" }}
+    {{- end }}
+  {{- end }}
+  
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          # ========================================
+          # API ROUTES
+          # ========================================
+          
+          # Main API endpoints
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          
+          # Health check endpoint (bypass rate limiting)
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          
+          # Metrics endpoint (restricted access)
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}-metrics
+                port:
+                  number: {{ $.Values.service.metricsPort | default 9090 }}
+          
+          # ========================================
+          # STATIC CONTENT & ASSETS
+          # ========================================
+          
+          # Static files with caching
+          - path: /static
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          
+          # Media files (images, videos)
+          - path: /media
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          
+          # ========================================
+          # WEBSOCKET CONNECTIONS
+          # ========================================
+          
+          # Real-time collaboration WebSocket
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          
+          # ========================================
+          # ADMIN & MONITORING INTERFACES
+          # ========================================
+          
+          {{- if $.Values.celery.flower.enabled }}
+          # Celery Flower monitoring
+          - path: /flower
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}-flower
+                port:
+                  number: {{ $.Values.celery.flower.service.port | default 5555 }}
+          {{- end }}
+          
+          # ========================================
+          # DOCUMENTATION
+          # ========================================
+          
+          # API documentation
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          
+          # ReDoc documentation
+          - path: /redoc
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          
+          # OpenAPI schema
+          - path: /openapi.json
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          
+          # ========================================
+          # CATCH-ALL ROUTE
+          # ========================================
+          
+          # Default route for SPA frontend
+          {{- if .catchAll | default true }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          {{- end }}
+    {{- end }}
+
+{{- end }}
+
+---
+{{/*
+🌐 API Gateway Ingress (Separate for API-only traffic)
+*/}}
+{{- if .Values.ingress.apiGateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api-gateway
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # API-specific optimizations
+    kubernetes.io/ingress.class: "{{ .Values.ingress.apiGateway.className | default "nginx" }}"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    
+    # Higher rate limits for API traffic
+    nginx.ingress.kubernetes.io/rate-limit-rps: "{{ .Values.ingress.apiGateway.rateLimit.rps | default "500" }}"
+    nginx.ingress.kubernetes.io/rate-limit-rpm: "{{ .Values.ingress.apiGateway.rateLimit.rpm | default "30000" }}"
+    
+    # API-specific timeouts
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "{{ .Values.ingress.apiGateway.timeout | default "300" }}"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "{{ .Values.ingress.apiGateway.timeout | default "300" }}"
+    
+    # Larger body size for file uploads
+    nginx.ingress.kubernetes.io/proxy-body-size: "{{ .Values.ingress.apiGateway.maxBodySize | default "500m" }}"
+    
+    # API versioning support
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    
+    {{- with .Values.ingress.apiGateway.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.apiGateway.className }}
+  ingressClassName: {{ .Values.ingress.apiGateway.className }}
+  {{- end }}
+  
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.apiGateway.host }}
+      secretName: {{ include "snapfix-enterprise.fullname" . }}-api-tls
+  {{- end }}
+  
+  rules:
+    - host: {{ .Values.ingress.apiGateway.host }}
+      http:
+        paths:
+          # API v1 routes
+          - path: /api/v1(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+          
+          # API v2 routes (future)
+          - path: /api/v2(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}-v2
+                port:
+                  number: {{ .Values.service.port }}
+          
+          # GraphQL endpoint
+          - path: /graphql
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}
+
+---
+{{/*
+🌐 WebSocket Ingress (Optimized for real-time connections)
+*/}}
+{{- if .Values.ingress.websocket.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-ws
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: websocket
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # WebSocket-specific configuration
+    kubernetes.io/ingress.class: "{{ .Values.ingress.websocket.className | default "nginx" }}"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    
+    # WebSocket upgrade headers
+    nginx.ingress.kubernetes.io/proxy-set-headers: "snapfix-enterprise/websocket-headers"
+    
+    # Longer timeouts for persistent connections
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "{{ .Values.ingress.websocket.timeout | default "3600" }}"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "{{ .Values.ingress.websocket.timeout | default "3600" }}"
+    
+    # Session affinity for WebSocket connections
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "snapfix-ws-session"
+    nginx.ingress.kubernetes.io/session-cookie-expires: "3600"
+    
+    # WebSocket configuration snippet
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_cache_bypass $http_upgrade;
+    
+    {{- with .Values.ingress.websocket.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.websocket.className }}
+  ingressClassName: {{ .Values.ingress.websocket.className }}
+  {{- end }}
+  
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.websocket.host }}
+      secretName: {{ include "snapfix-enterprise.fullname" . }}-ws-tls
+  {{- end }}
+  
+  rules:
+    - host: {{ .Values.ingress.websocket.host }}
+      http:
+        paths:
+          # WebSocket endpoints
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+          
+          # Socket.IO endpoints
+          - path: /socket.io
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "snapfix-enterprise.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

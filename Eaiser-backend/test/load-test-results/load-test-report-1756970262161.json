@@ -1,0 +1,114 @@
+{
+  "testSuite": "SnapFix Comprehensive Load Test",
+  "timestamp": "2025-09-04T07:17:42.161Z",
+  "configuration": {
+    "BASE_URL": "http://127.0.0.1:10000",
+    "DURATION": 60,
+    "CONNECTIONS": 200,
+    "WARMUP_DURATION": 10,
+    "RESULTS_DIR": "./load-test-results"
+  },
+  "results": [
+    {
+      "scenario": "Health Check Endpoint",
+      "url": "http://127.0.0.1:10000/health",
+      "duration": 60.03,
+      "connections": 200,
+      "requests": {
+        "total": 126480,
+        "average": 2108.27,
+        "min": 1907,
+        "max": 2291,
+        "p99": 2291,
+        "p90": 2253
+      },
+      "latency": {
+        "average": 94.27,
+        "min": 20,
+        "max": 445,
+        "p99": 252,
+        "p90": 193
+      },
+      "throughput": {
+        "average": 408998.4,
+        "min": 370031,
+        "max": 444474
+      },
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "timestamp": "2025-09-04T07:15:26.870Z"
+    },
+    {
+      "scenario": "Issues Health Check",
+      "url": "http://127.0.0.1:10000/api/issues/health",
+      "duration": 60.05,
+      "connections": 200,
+      "requests": {
+        "total": 168339,
+        "average": 2806.05,
+        "min": 918,
+        "max": 3430,
+        "p99": 3431,
+        "p90": 3255
+      },
+      "latency": {
+        "average": 70.64,
+        "min": 10,
+        "max": 548,
+        "p99": 274,
+        "p90": 141
+      },
+      "throughput": {
+        "average": 504021.34,
+        "min": 165352,
+        "max": 615946
+      },
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 168339,
+      "timestamp": "2025-09-04T07:16:31.933Z"
+    },
+    {
+      "scenario": "Get Issues List",
+      "url": "http://127.0.0.1:10000/api/issues",
+      "duration": 60.19,
+      "connections": 200,
+      "requests": {
+        "total": 26486,
+        "average": 441.44,
+        "min": 288,
+        "max": 575,
+        "p99": 575,
+        "p90": 512
+      },
+      "latency": {
+        "average": 451.94,
+        "min": 168,
+        "max": 1245,
+        "p99": 907,
+        "p90": 696
+      },
+      "throughput": {
+        "average": 16235861.34,
+        "min": 10592062,
+        "max": 21147350
+      },
+      "errors": 0,
+      "timeouts": 0,
+      "non2xx": 0,
+      "timestamp": "2025-09-04T07:17:37.150Z"
+    }
+  ],
+  "summary": {
+    "totalTests": 3,
+    "averageRPS": 1785.253333333333,
+    "averageLatency": 205.61666666666667,
+    "totalErrors": 0,
+    "recommendations": [
+      "Optimize database queries and add caching layer (Redis)",
+      "Consider implementing rate limiting for production deployment",
+      "Add monitoring and alerting (Prometheus/Grafana)"
+    ]
+  }
+}

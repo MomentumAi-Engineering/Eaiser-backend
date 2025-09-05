@@ -1,0 +1,560 @@
+{{/*
+🌐 SnapFix Enterprise - Advanced Service Template
+⚖️ Load Balancing & Service Discovery for 100,000+ Users
+🔍 Health Checks, Metrics & High Availability
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # Service discovery annotations
+    service.kubernetes.io/topology-aware-hints: "auto"
+    service.kubernetes.io/topology-mode: "Auto"
+    
+    # Load balancing annotations
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-connection-draining-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-connection-draining-timeout: "60"
+    
+    # Health check annotations
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold: "2"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold: "3"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "5"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "10"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/health/ready"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8000"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: "HTTP"
+    
+    # Prometheus monitoring
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+    
+    # Service mesh annotations
+    {{- if .Values.serviceMesh.istio.enabled }}
+    sidecar.istio.io/inject: "true"
+    {{- end }}
+    
+    # Custom annotations
+    {{- with .Values.app.service.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.app.service.type }}
+  
+  # Session affinity for sticky sessions
+  sessionAffinity: {{ .Values.app.service.sessionAffinity | default "None" }}
+  {{- if eq (.Values.app.service.sessionAffinity | default "None") "ClientIP" }}
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: {{ .Values.app.service.sessionAffinityTimeout | default 10800 }}
+  {{- end }}
+  
+  # External traffic policy
+  externalTrafficPolicy: {{ .Values.app.service.externalTrafficPolicy | default "Cluster" }}
+  
+  # Internal traffic policy
+  internalTrafficPolicy: {{ .Values.app.service.internalTrafficPolicy | default "Cluster" }}
+  
+  # IP families
+  ipFamilyPolicy: {{ .Values.app.service.ipFamilyPolicy | default "SingleStack" }}
+  ipFamilies:
+    - IPv4
+    {{- if .Values.app.service.ipv6Enabled }}
+    - IPv6
+    {{- end }}
+  
+  ports:
+    # Main HTTP port
+    - name: http
+      port: {{ .Values.app.service.port }}
+      targetPort: http
+      protocol: TCP
+      {{- if and (eq .Values.app.service.type "NodePort") .Values.app.service.nodePort }}
+      nodePort: {{ .Values.app.service.nodePort }}
+      {{- end }}
+    
+    # Metrics port
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+    
+    # Health check port (if different)
+    {{- if .Values.app.service.healthCheckPort }}
+    - name: health
+      port: {{ .Values.app.service.healthCheckPort }}
+      targetPort: {{ .Values.app.service.healthCheckPort }}
+      protocol: TCP
+    {{- end }}
+    
+    # Additional ports
+    {{- with .Values.app.service.additionalPorts }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+
+---
+{{/*
+📊 Metrics Service for Prometheus
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+    prometheus.io/scheme: "http"
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for direct pod access
+  
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+  
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+
+---
+{{/*
+🔄 Celery Workers Service
+*/}}
+{{- if .Values.celery.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+      protocol: TCP
+  
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker
+{{- end }}
+
+---
+{{/*
+🌸 Celery Flower Service
+*/}}
+{{- if and .Values.celery.enabled .Values.celery.flower.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-flower
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-flower
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: ClusterIP
+  
+  ports:
+    - name: http
+      port: 5555
+      targetPort: 5555
+      protocol: TCP
+  
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-flower
+{{- end }}
+
+---
+{{/*
+🔍 Service Monitor for Prometheus Operator
+*/}}
+{{- if .Values.monitoring.prometheus.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: snapfix-enterprise
+    # Labels for Prometheus operator selection
+    release: prometheus
+    prometheus: kube-prometheus
+spec:
+  # Service selector
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  
+  # Namespace selector
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  # Endpoints configuration
+  endpoints:
+    # Main application metrics
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      
+      # Metric relabeling
+      metricRelabelings:
+        # Add namespace label
+        - sourceLabels: [__name__]
+          targetLabel: namespace
+          replacement: {{ .Release.Namespace }}
+        
+        # Add service label
+        - sourceLabels: [__name__]
+          targetLabel: service
+          replacement: {{ include "snapfix-enterprise.fullname" . }}
+        
+        # Add environment label
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+      
+      # Target relabeling
+      relabelings:
+        # Add pod name
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        
+        # Add node name
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        
+        # Add container name
+        - sourceLabels: [__meta_kubernetes_pod_container_name]
+          targetLabel: container
+    
+    # Health check metrics
+    - port: http
+      path: /health/metrics
+      interval: 60s
+      scrapeTimeout: 5s
+      honorLabels: true
+  
+  # Job label
+  jobLabel: app.kubernetes.io/name
+  
+  # Target limit
+  targetLimit: 100
+  
+  # Sample limit
+  sampleLimit: 10000
+{{- end }}
+
+---
+{{/*
+🔍 Celery Workers Service Monitor
+*/}}
+{{- if and .Values.celery.enabled .Values.monitoring.prometheus.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker-monitoring
+    app.kubernetes.io/part-of: snapfix-enterprise
+    release: prometheus
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-worker
+  
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          targetLabel: namespace
+          replacement: {{ .Release.Namespace }}
+        - sourceLabels: [__name__]
+          targetLabel: service
+          replacement: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+  
+  jobLabel: app.kubernetes.io/name
+  targetLimit: 50
+  sampleLimit: 5000
+{{- end }}
+
+---
+{{/*
+🚨 Prometheus Rules for Alerting
+*/}}
+{{- if .Values.monitoring.prometheus.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: snapfix-enterprise
+    release: prometheus
+    prometheus: kube-prometheus
+spec:
+  groups:
+    # Application Health Alerts
+    - name: snapfix-enterprise.health
+      interval: 30s
+      rules:
+        # High error rate
+        - alert: SnapFixHighErrorRate
+          expr: |
+            (
+              rate(http_requests_total{job="{{ include "snapfix-enterprise.fullname" . }}",status=~"5.."}[5m]) /
+              rate(http_requests_total{job="{{ include "snapfix-enterprise.fullname" . }}"}[5m])
+            ) * 100 > 5
+          for: 2m
+          labels:
+            severity: critical
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "High error rate detected"
+            description: "Error rate is {{ "{{ $value }}" }}% for the last 5 minutes"
+        
+        # High response time
+        - alert: SnapFixHighResponseTime
+          expr: |
+            histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="{{ include "snapfix-enterprise.fullname" . }}"}[5m])) > 2
+          for: 5m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "High response time detected"
+            description: "95th percentile response time is {{ "{{ $value }}" }}s"
+        
+        # Pod crash looping
+        - alert: SnapFixPodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "snapfix-enterprise.fullname" . }}-.*"}[15m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "Pod is crash looping"
+            description: "Pod {{ "{{ $labels.pod }}" }} is restarting frequently"
+        
+        # Low pod availability
+        - alert: SnapFixLowPodAvailability
+          expr: |
+            (
+              kube_deployment_status_replicas_available{deployment="{{ include "snapfix-enterprise.fullname" . }}",namespace="{{ .Release.Namespace }}"} /
+              kube_deployment_spec_replicas{deployment="{{ include "snapfix-enterprise.fullname" . }}",namespace="{{ .Release.Namespace }}"}
+            ) * 100 < 80
+          for: 5m
+          labels:
+            severity: critical
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "Low pod availability"
+            description: "Only {{ "{{ $value }}" }}% of pods are available"
+    
+    # Resource Usage Alerts
+    - name: snapfix-enterprise.resources
+      interval: 30s
+      rules:
+        # High CPU usage
+        - alert: SnapFixHighCPUUsage
+          expr: |
+            (
+              rate(container_cpu_usage_seconds_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "snapfix-enterprise.fullname" . }}-.*",container!="POD"}[5m]) * 100
+            ) > 80
+          for: 10m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "High CPU usage detected"
+            description: "CPU usage is {{ "{{ $value }}" }}% for pod {{ "{{ $labels.pod }}" }}"
+        
+        # High memory usage
+        - alert: SnapFixHighMemoryUsage
+          expr: |
+            (
+              container_memory_working_set_bytes{namespace="{{ .Release.Namespace }}",pod=~"{{ include "snapfix-enterprise.fullname" . }}-.*",container!="POD"} /
+              container_spec_memory_limit_bytes{namespace="{{ .Release.Namespace }}",pod=~"{{ include "snapfix-enterprise.fullname" . }}-.*",container!="POD"}
+            ) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "High memory usage detected"
+            description: "Memory usage is {{ "{{ $value }}" }}% for pod {{ "{{ $labels.pod }}" }}"
+        
+        # Disk space low
+        - alert: SnapFixLowDiskSpace
+          expr: |
+            (
+              (node_filesystem_size_bytes{mountpoint="/"} - node_filesystem_free_bytes{mountpoint="/"}) /
+              node_filesystem_size_bytes{mountpoint="/"}
+            ) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "Low disk space"
+            description: "Disk usage is {{ "{{ $value }}" }}% on node {{ "{{ $labels.instance }}" }}"
+    
+    # Database Alerts
+    - name: snapfix-enterprise.database
+      interval: 30s
+      rules:
+        # High database connections
+        - alert: SnapFixHighDatabaseConnections
+          expr: |
+            pg_stat_activity_count{datname="snapfix"} > 800
+          for: 5m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "High database connections"
+            description: "Database has {{ "{{ $value }}" }} active connections"
+        
+        # Slow database queries
+        - alert: SnapFixSlowDatabaseQueries
+          expr: |
+            rate(pg_stat_statements_mean_time_ms[5m]) > 1000
+          for: 5m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "Slow database queries detected"
+            description: "Average query time is {{ "{{ $value }}" }}ms"
+    
+    # Cache Alerts
+    - name: snapfix-enterprise.cache
+      interval: 30s
+      rules:
+        # Low cache hit rate
+        - alert: SnapFixLowCacheHitRate
+          expr: |
+            (
+              redis_keyspace_hits_total /
+              (redis_keyspace_hits_total + redis_keyspace_misses_total)
+            ) * 100 < 80
+          for: 10m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "Low cache hit rate"
+            description: "Cache hit rate is {{ "{{ $value }}" }}%"
+        
+        # High Redis memory usage
+        - alert: SnapFixHighRedisMemoryUsage
+          expr: |
+            (redis_memory_used_bytes / redis_memory_max_bytes) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "High Redis memory usage"
+            description: "Redis memory usage is {{ "{{ $value }}" }}%"
+    
+    # Queue Alerts
+    - name: snapfix-enterprise.queue
+      interval: 30s
+      rules:
+        # High queue length
+        - alert: SnapFixHighQueueLength
+          expr: |
+            rabbitmq_queue_messages{queue=~"snapfix.*"} > 1000
+          for: 5m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "High queue length"
+            description: "Queue {{ "{{ $labels.queue }}" }} has {{ "{{ $value }}" }} messages"
+        
+        # Queue processing slow
+        - alert: SnapFixSlowQueueProcessing
+          expr: |
+            rate(rabbitmq_queue_messages_published_total{queue=~"snapfix.*"}[5m]) >
+            rate(rabbitmq_queue_messages_acked_total{queue=~"snapfix.*"}[5m]) * 1.5
+          for: 10m
+          labels:
+            severity: warning
+            service: snapfix-enterprise
+            environment: {{ .Values.global.environment }}
+          annotations:
+            summary: "Slow queue processing"
+            description: "Queue {{ "{{ $labels.queue }}" }} is processing messages slowly"
+{{- end }}

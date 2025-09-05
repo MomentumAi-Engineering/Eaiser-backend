@@ -1,0 +1,875 @@
+{{/*
+📊 Advanced Monitoring Stack for SnapFix Enterprise
+
+This template creates a comprehensive monitoring solution with:
+- Prometheus for metrics collection and alerting
+- Grafana for visualization and dashboards
+- Elasticsearch, Logstash, Kibana (ELK) for log management
+- Jaeger for distributed tracing
+- AlertManager for alert routing and management
+- Node Exporter for system metrics
+- Custom exporters for application metrics
+*/}}
+
+{{- if .Values.monitoring.enabled }}
+{{/*
+📊 Prometheus Configuration
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.monitoring.prometheus.scrapeInterval | default "15s" }}
+      evaluation_interval: {{ .Values.monitoring.prometheus.evaluationInterval | default "15s" }}
+      external_labels:
+        cluster: {{ .Values.monitoring.prometheus.clusterName | default "snapfix-enterprise" }}
+        environment: {{ .Values.global.environment | default "production" }}
+    
+    # Alertmanager configuration
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+              - {{ include "snapfix-enterprise.fullname" . }}-alertmanager:9093
+    
+    # Load rules once and periodically evaluate them
+    rule_files:
+      - "/etc/prometheus/rules/*.yml"
+    
+    # Scrape configurations
+    scrape_configs:
+      # Prometheus itself
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+      
+      # Kubernetes API server
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+          - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: default;kubernetes;https
+      
+      # Kubernetes nodes
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+          - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics
+      
+      # Kubernetes pods
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+      
+      # SnapFix Enterprise application
+      - job_name: 'snapfix-enterprise-app'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - {{ .Release.Namespace }}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: keep
+            regex: {{ include "snapfix-enterprise.name" . }}
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+      
+      # Redis Cluster
+      - job_name: 'redis-cluster'
+        static_configs:
+          - targets:
+            {{- range $i := until (int .Values.redis.cluster.replicas) }}
+            - {{ include "snapfix-enterprise.fullname" $ }}-redis-{{ $i }}.{{ include "snapfix-enterprise.fullname" $ }}-redis-headless:9121
+            {{- end }}
+        scrape_interval: 30s
+      
+      # MongoDB Sharded Cluster
+      - job_name: 'mongodb-sharded'
+        static_configs:
+          - targets:
+            # Config servers
+            {{- range $i := until 3 }}
+            - {{ include "snapfix-enterprise.fullname" $ }}-mongodb-configsvr-{{ $i }}.{{ include "snapfix-enterprise.fullname" $ }}-mongodb-configsvr-headless:9216
+            {{- end }}
+            # Shards
+            {{- range $shard := until 3 }}
+            {{- range $replica := until 3 }}
+            - {{ include "snapfix-enterprise.fullname" $ }}-mongodb-shard{{ $shard }}-{{ $replica }}.{{ include "snapfix-enterprise.fullname" $ }}-mongodb-shard{{ $shard }}-headless:9216
+            {{- end }}
+            {{- end }}
+            # Mongos routers
+            {{- range $i := until (int $.Values.mongodb.mongos.replicas) }}
+            - {{ include "snapfix-enterprise.fullname" $ }}-mongodb-mongos-{{ $i }}:9216
+            {{- end }}
+        scrape_interval: 30s
+      
+      # RabbitMQ Cluster
+      - job_name: 'rabbitmq-cluster'
+        static_configs:
+          - targets:
+            {{- range $i := until (int .Values.rabbitmq.replicas) }}
+            - {{ include "snapfix-enterprise.fullname" $ }}-rabbitmq-{{ $i }}.{{ include "snapfix-enterprise.fullname" $ }}-rabbitmq-headless:15692
+            {{- end }}
+        scrape_interval: 30s
+      
+      # PostgreSQL
+      - job_name: 'postgresql'
+        static_configs:
+          - targets:
+            - {{ .Values.postgresql.host | default "postgresql" }}:9187
+        scrape_interval: 30s
+      
+      # Nginx/Load Balancer
+      - job_name: 'nginx-ingress'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - {{ .Release.Namespace }}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: keep
+            regex: nginx-ingress
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            action: keep
+            regex: 10254
+      
+      # Node Exporter
+      - job_name: 'node-exporter'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: keep
+            regex: node-exporter
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            action: replace
+            target_label: instance
+      
+      # Jaeger
+      - job_name: 'jaeger'
+        static_configs:
+          - targets:
+            - {{ include "snapfix-enterprise.fullname" . }}-jaeger-query:16686
+            - {{ include "snapfix-enterprise.fullname" . }}-jaeger-collector:14269
+        scrape_interval: 30s
+      
+      # Elasticsearch
+      - job_name: 'elasticsearch'
+        static_configs:
+          - targets:
+            {{- range $i := until (int .Values.monitoring.elasticsearch.replicas) }}
+            - {{ include "snapfix-enterprise.fullname" $ }}-elasticsearch-{{ $i }}.{{ include "snapfix-enterprise.fullname" $ }}-elasticsearch-headless:9200
+            {{- end }}
+        scrape_interval: 30s
+        metrics_path: /_prometheus/metrics
+  
+  # Prometheus alerting rules
+  alert-rules.yml: |
+    groups:
+      # Application alerts
+      - name: snapfix-enterprise-app
+        rules:
+          - alert: HighErrorRate
+            expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.1
+            for: 5m
+            labels:
+              severity: critical
+              service: snapfix-enterprise
+            annotations:
+              summary: "High error rate detected"
+              description: "Error rate is {{ $value }} errors per second"
+          
+          - alert: HighResponseTime
+            expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+            for: 5m
+            labels:
+              severity: warning
+              service: snapfix-enterprise
+            annotations:
+              summary: "High response time detected"
+              description: "95th percentile response time is {{ $value }} seconds"
+          
+          - alert: HighMemoryUsage
+            expr: (container_memory_usage_bytes / container_spec_memory_limit_bytes) > 0.9
+            for: 5m
+            labels:
+              severity: warning
+              service: snapfix-enterprise
+            annotations:
+              summary: "High memory usage detected"
+              description: "Memory usage is {{ $value | humanizePercentage }}"
+          
+          - alert: HighCPUUsage
+            expr: rate(container_cpu_usage_seconds_total[5m]) > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              service: snapfix-enterprise
+            annotations:
+              summary: "High CPU usage detected"
+              description: "CPU usage is {{ $value | humanizePercentage }}"
+      
+      # Database alerts
+      - name: database-alerts
+        rules:
+          - alert: PostgreSQLDown
+            expr: up{job="postgresql"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              service: postgresql
+            annotations:
+              summary: "PostgreSQL is down"
+              description: "PostgreSQL database is not responding"
+          
+          - alert: MongoDBDown
+            expr: up{job="mongodb-sharded"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              service: mongodb
+            annotations:
+              summary: "MongoDB is down"
+              description: "MongoDB database is not responding"
+          
+          - alert: HighDatabaseConnections
+            expr: pg_stat_database_numbackends > 80
+            for: 5m
+            labels:
+              severity: warning
+              service: postgresql
+            annotations:
+              summary: "High database connections"
+              description: "Database has {{ $value }} active connections"
+      
+      # Redis alerts
+      - name: redis-alerts
+        rules:
+          - alert: RedisDown
+            expr: up{job="redis-cluster"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              service: redis
+            annotations:
+              summary: "Redis is down"
+              description: "Redis cluster node is not responding"
+          
+          - alert: RedisHighMemoryUsage
+            expr: (redis_memory_used_bytes / redis_memory_max_bytes) > 0.9
+            for: 5m
+            labels:
+              severity: warning
+              service: redis
+            annotations:
+              summary: "Redis high memory usage"
+              description: "Redis memory usage is {{ $value | humanizePercentage }}"
+      
+      # RabbitMQ alerts
+      - name: rabbitmq-alerts
+        rules:
+          - alert: RabbitMQDown
+            expr: up{job="rabbitmq-cluster"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              service: rabbitmq
+            annotations:
+              summary: "RabbitMQ is down"
+              description: "RabbitMQ cluster node is not responding"
+          
+          - alert: RabbitMQHighQueueDepth
+            expr: rabbitmq_queue_messages > 1000
+            for: 5m
+            labels:
+              severity: warning
+              service: rabbitmq
+            annotations:
+              summary: "RabbitMQ high queue depth"
+              description: "Queue {{ $labels.queue }} has {{ $value }} messages"
+      
+      # Infrastructure alerts
+      - name: infrastructure-alerts
+        rules:
+          - alert: NodeDown
+            expr: up{job="kubernetes-nodes"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              service: kubernetes
+            annotations:
+              summary: "Kubernetes node is down"
+              description: "Node {{ $labels.instance }} is not responding"
+          
+          - alert: HighNodeCPU
+            expr: (1 - rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              service: node
+            annotations:
+              summary: "High node CPU usage"
+              description: "Node {{ $labels.instance }} CPU usage is {{ $value | humanizePercentage }}"
+          
+          - alert: HighNodeMemory
+            expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.9
+            for: 5m
+            labels:
+              severity: warning
+              service: node
+            annotations:
+              summary: "High node memory usage"
+              description: "Node {{ $labels.instance }} memory usage is {{ $value | humanizePercentage }}"
+          
+          - alert: LowDiskSpace
+            expr: (1 - (node_filesystem_avail_bytes / node_filesystem_size_bytes)) > 0.9
+            for: 5m
+            labels:
+              severity: critical
+              service: node
+            annotations:
+              summary: "Low disk space"
+              description: "Node {{ $labels.instance }} disk usage is {{ $value | humanizePercentage }}"
+
+---
+{{/*
+📊 Prometheus Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.monitoring.prometheus.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: prometheus
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: prometheus
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+      securityContext:
+        fsGroup: 65534
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: prometheus
+          image: {{ .Values.monitoring.prometheus.image.repository }}:{{ .Values.monitoring.prometheus.image.tag | default "v2.45.0" }}
+          imagePullPolicy: {{ .Values.monitoring.prometheus.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.path=/prometheus/'
+            - '--web.console.libraries=/etc/prometheus/console_libraries'
+            - '--web.console.templates=/etc/prometheus/consoles'
+            - '--storage.tsdb.retention.time={{ .Values.monitoring.prometheus.retention | default "15d" }}'
+            - '--storage.tsdb.retention.size={{ .Values.monitoring.prometheus.retentionSize | default "10GB" }}'
+            - '--web.enable-lifecycle'
+            - '--web.enable-admin-api'
+            - '--query.max-concurrency={{ .Values.monitoring.prometheus.maxConcurrency | default 20 }}'
+            - '--query.timeout={{ .Values.monitoring.prometheus.queryTimeout | default "2m" }}'
+          ports:
+            - containerPort: 9090
+              name: http
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 4
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.monitoring.prometheus.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: storage
+              mountPath: /prometheus
+            - name: rules
+              mountPath: /etc/prometheus/rules
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-prometheus-config
+        - name: rules
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-prometheus-config
+            items:
+              - key: alert-rules.yml
+                path: alert-rules.yml
+        - name: storage
+          {{- if .Values.monitoring.prometheus.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-prometheus-storage
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+
+---
+{{/*
+📊 Prometheus Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  type: {{ .Values.monitoring.prometheus.service.type | default "ClusterIP" }}
+  ports:
+    - port: 9090
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+
+---
+{{/*
+📊 Prometheus ServiceAccount
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+    app.kubernetes.io/part-of: snapfix-enterprise
+
+---
+{{/*
+📊 Prometheus ClusterRole
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+    app.kubernetes.io/part-of: snapfix-enterprise
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/proxy
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions"]
+    resources:
+      - ingresses
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+
+---
+{{/*
+📊 Prometheus ClusterRoleBinding
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+    app.kubernetes.io/part-of: snapfix-enterprise
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.fullname" . }}-prometheus
+    namespace: {{ .Release.Namespace }}
+
+---
+{{/*
+📊 Prometheus PVC
+*/}}
+{{- if .Values.monitoring.prometheus.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: {{ .Values.monitoring.prometheus.persistence.storageClass | default "fast-ssd" }}
+    backup.velero.io/backup-volumes: "prometheus-storage"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.monitoring.prometheus.persistence.size | default "50Gi" }}
+  {{- if .Values.monitoring.prometheus.persistence.storageClass }}
+  storageClassName: {{ .Values.monitoring.prometheus.persistence.storageClass }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+🚨 AlertManager Configuration
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-alertmanager-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  alertmanager.yml: |
+    global:
+      smtp_smarthost: {{ .Values.monitoring.alertmanager.smtp.smarthost | default "localhost:587" }}
+      smtp_from: {{ .Values.monitoring.alertmanager.smtp.from | default "alerts@snapfix.com" }}
+      smtp_auth_username: {{ .Values.monitoring.alertmanager.smtp.username | default "" }}
+      smtp_auth_password: {{ .Values.monitoring.alertmanager.smtp.password | default "" }}
+      slack_api_url: {{ .Values.monitoring.alertmanager.slack.apiUrl | default "" }}
+    
+    # Templates
+    templates:
+      - '/etc/alertmanager/templates/*.tmpl'
+    
+    # Route tree
+    route:
+      group_by: ['alertname', 'cluster', 'service']
+      group_wait: {{ .Values.monitoring.alertmanager.groupWait | default "10s" }}
+      group_interval: {{ .Values.monitoring.alertmanager.groupInterval | default "10s" }}
+      repeat_interval: {{ .Values.monitoring.alertmanager.repeatInterval | default "1h" }}
+      receiver: 'default'
+      routes:
+        # Critical alerts
+        - match:
+            severity: critical
+          receiver: 'critical-alerts'
+          group_wait: 5s
+          repeat_interval: 5m
+        
+        # Database alerts
+        - match:
+            service: postgresql
+          receiver: 'database-team'
+        - match:
+            service: mongodb
+          receiver: 'database-team'
+        - match:
+            service: redis
+          receiver: 'database-team'
+        
+        # Infrastructure alerts
+        - match:
+            service: kubernetes
+          receiver: 'infrastructure-team'
+        - match:
+            service: node
+          receiver: 'infrastructure-team'
+        
+        # Application alerts
+        - match:
+            service: snapfix-enterprise
+          receiver: 'application-team'
+    
+    # Receivers
+    receivers:
+      - name: 'default'
+        email_configs:
+          - to: {{ .Values.monitoring.alertmanager.defaultEmail | default "admin@snapfix.com" }}
+            subject: '[SnapFix] Alert: {{ .GroupLabels.alertname }}'
+            body: |
+              {{ range .Alerts }}
+              Alert: {{ .Annotations.summary }}
+              Description: {{ .Annotations.description }}
+              Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+              {{ end }}
+      
+      - name: 'critical-alerts'
+        email_configs:
+          - to: {{ .Values.monitoring.alertmanager.criticalEmail | default "critical@snapfix.com" }}
+            subject: '[CRITICAL] SnapFix Alert: {{ .GroupLabels.alertname }}'
+            body: |
+              🚨 CRITICAL ALERT 🚨
+              
+              {{ range .Alerts }}
+              Alert: {{ .Annotations.summary }}
+              Description: {{ .Annotations.description }}
+              Severity: {{ .Labels.severity }}
+              Service: {{ .Labels.service }}
+              Time: {{ .StartsAt }}
+              {{ end }}
+        {{- if .Values.monitoring.alertmanager.slack.enabled }}
+        slack_configs:
+          - api_url: {{ .Values.monitoring.alertmanager.slack.apiUrl }}
+            channel: {{ .Values.monitoring.alertmanager.slack.criticalChannel | default "#alerts-critical" }}
+            title: '🚨 Critical Alert: {{ .GroupLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              *Alert:* {{ .Annotations.summary }}
+              *Description:* {{ .Annotations.description }}
+              *Severity:* {{ .Labels.severity }}
+              *Service:* {{ .Labels.service }}
+              {{ end }}
+        {{- end }}
+      
+      - name: 'database-team'
+        email_configs:
+          - to: {{ .Values.monitoring.alertmanager.databaseTeamEmail | default "database@snapfix.com" }}
+            subject: '[Database] SnapFix Alert: {{ .GroupLabels.alertname }}'
+        {{- if .Values.monitoring.alertmanager.slack.enabled }}
+        slack_configs:
+          - api_url: {{ .Values.monitoring.alertmanager.slack.apiUrl }}
+            channel: {{ .Values.monitoring.alertmanager.slack.databaseChannel | default "#alerts-database" }}
+            title: '💾 Database Alert: {{ .GroupLabels.alertname }}'
+        {{- end }}
+      
+      - name: 'infrastructure-team'
+        email_configs:
+          - to: {{ .Values.monitoring.alertmanager.infrastructureTeamEmail | default "infrastructure@snapfix.com" }}
+            subject: '[Infrastructure] SnapFix Alert: {{ .GroupLabels.alertname }}'
+        {{- if .Values.monitoring.alertmanager.slack.enabled }}
+        slack_configs:
+          - api_url: {{ .Values.monitoring.alertmanager.slack.apiUrl }}
+            channel: {{ .Values.monitoring.alertmanager.slack.infrastructureChannel | default "#alerts-infrastructure" }}
+            title: '🏗️ Infrastructure Alert: {{ .GroupLabels.alertname }}'
+        {{- end }}
+      
+      - name: 'application-team'
+        email_configs:
+          - to: {{ .Values.monitoring.alertmanager.applicationTeamEmail | default "application@snapfix.com" }}
+            subject: '[Application] SnapFix Alert: {{ .GroupLabels.alertname }}'
+        {{- if .Values.monitoring.alertmanager.slack.enabled }}
+        slack_configs:
+          - api_url: {{ .Values.monitoring.alertmanager.slack.apiUrl }}
+            channel: {{ .Values.monitoring.alertmanager.slack.applicationChannel | default "#alerts-application" }}
+            title: '🚀 Application Alert: {{ .GroupLabels.alertname }}'
+        {{- end }}
+    
+    # Inhibit rules
+    inhibit_rules:
+      - source_match:
+          severity: 'critical'
+        target_match:
+          severity: 'warning'
+        equal: ['alertname', 'cluster', 'service']
+  
+  # Alert templates
+  alert-templates.tmpl: |
+    {{ define "slack.default.title" }}
+    [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .GroupLabels.SortedPairs.Values | join " " }} {{ if gt (len .GroupLabels) 0 }}({{ range .GroupLabels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}){{ end }}
+    {{ end }}
+    
+    {{ define "slack.default.text" }}
+    {{ range .Alerts }}
+    *Alert:* {{ .Annotations.title }}{{ if .Labels.severity }} - `{{ .Labels.severity }}`{{ end }}
+    *Description:* {{ .Annotations.description }}
+    *Details:*
+      {{ range .Labels.SortedPairs }} • *{{ .Name }}:* `{{ .Value }}`
+      {{ end }}
+    {{ end }}
+    {{ end }}
+
+---
+{{/*
+🚨 AlertManager Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-alertmanager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.monitoring.alertmanager.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: alertmanager
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: alertmanager
+    spec:
+      securityContext:
+        fsGroup: 65534
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: alertmanager
+          image: {{ .Values.monitoring.alertmanager.image.repository }}:{{ .Values.monitoring.alertmanager.image.tag | default "v0.25.0" }}
+          imagePullPolicy: {{ .Values.monitoring.alertmanager.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - '--config.file=/etc/alertmanager/alertmanager.yml'
+            - '--storage.path=/alertmanager'
+            - '--web.external-url=http://{{ include "snapfix-enterprise.fullname" . }}-alertmanager:9093'
+            - '--cluster.listen-address=0.0.0.0:9094'
+            - '--log.level={{ .Values.monitoring.alertmanager.logLevel | default "info" }}'
+          ports:
+            - containerPort: 9093
+              name: http
+              protocol: TCP
+            - containerPort: 9094
+              name: cluster
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.monitoring.alertmanager.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: storage
+              mountPath: /alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-alertmanager-config
+        - name: storage
+          {{- if .Values.monitoring.alertmanager.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-alertmanager-storage
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+
+---
+{{/*
+🚨 AlertManager Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-alertmanager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: {{ .Values.monitoring.alertmanager.service.type | default "ClusterIP" }}
+  ports:
+    - port: 9093
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: 9094
+      targetPort: cluster
+      protocol: TCP
+      name: cluster
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+
+{{- end }}

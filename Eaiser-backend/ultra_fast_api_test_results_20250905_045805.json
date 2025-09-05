@@ -1,0 +1,42 @@
+{
+  "test_suite": "ultra_fast_api_comprehensive",
+  "timestamp": "2025-09-05T04:58:05.154755",
+  "total_test_time_seconds": 9.256736278533936,
+  "total_tests": 4,
+  "successful_tests": 0,
+  "failed_tests": 4,
+  "success_rate_percentage": 0.0,
+  "detailed_results": [
+    {
+      "test": "health_check",
+      "status": "error",
+      "response_time_ms": 2340.3022289276123,
+      "error": "Cannot connect to host localhost:10000 ssl:default [The remote computer refused the network connection]"
+    },
+    {
+      "test": "processing_stats",
+      "status": "error",
+      "response_time_ms": 2313.2617473602295,
+      "error": "Cannot connect to host localhost:10000 ssl:default [The remote computer refused the network connection]"
+    },
+    {
+      "test": "ultra_fast_issue_creation",
+      "status": "error",
+      "response_time_ms": 2312.4213218688965,
+      "error": "Cannot connect to host localhost:10000 ssl:default [The remote computer refused the network connection]"
+    },
+    {
+      "test": "performance_benchmark",
+      "total_requests": 5,
+      "successful_requests": 0,
+      "failed_requests": 5,
+      "total_time_seconds": 2.2880632877349854,
+      "requests_per_second": 2.185254239601752,
+      "average_response_time_ms": 0,
+      "median_response_time_ms": 0,
+      "min_response_time_ms": 0,
+      "max_response_time_ms": 0,
+      "success_rate_percentage": 0.0
+    }
+  ]
+}

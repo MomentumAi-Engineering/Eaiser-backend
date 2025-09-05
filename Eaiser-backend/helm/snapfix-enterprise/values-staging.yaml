@@ -1,0 +1,705 @@
+# 🚀 SnapFix Enterprise - Staging Environment
+# 📊 Production-Like Configuration for Testing
+# ☸️ Moderate Resources with Full Feature Testing
+
+# ========================================
+# GLOBAL OVERRIDES FOR STAGING
+# ========================================
+global:
+  environment: staging
+  domain: staging.snapfix.enterprise.com
+  
+  # Use SSD storage for staging
+  storageClass: gp3-encrypted
+  
+  # Production-like security for staging
+  podSecurityStandards:
+    enforce: restricted
+    audit: restricted
+    warn: restricted
+
+# ========================================
+# APPLICATION CONFIGURATION
+# ========================================
+app:
+  # Moderate replicas for staging
+  replicaCount: 5
+  
+  # Moderate resources for staging
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+      ephemeral-storage: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+      ephemeral-storage: "2Gi"
+  
+  # Staging environment variables
+  env:
+    - name: APP_ENV
+      value: "staging"
+    - name: LOG_LEVEL
+      value: "INFO"
+    - name: WORKERS
+      value: "3"
+    - name: MAX_CONNECTIONS
+      value: "500"
+    - name: DEBUG
+      value: "false"
+    - name: RELOAD
+      value: "false"
+    
+    # Database configuration
+    - name: DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-database-secret-staging
+          key: database-url
+    
+    # Redis configuration
+    - name: REDIS_URL
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-redis-secret-staging
+          key: redis-url
+    
+    # MongoDB configuration
+    - name: MONGODB_URL
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-mongodb-secret-staging
+          key: mongodb-url
+    
+    # RabbitMQ configuration
+    - name: RABBITMQ_URL
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-rabbitmq-secret-staging
+          key: rabbitmq-url
+    
+    # Security settings
+    - name: JWT_SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-security-secret-staging
+          key: jwt-secret
+  
+  # Production-like health checks
+  livenessProbe:
+    httpGet:
+      path: /health/live
+      port: 8000
+    initialDelaySeconds: 20
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    httpGet:
+      path: /health/ready
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8000
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+      prometheus.io/path: "/metrics"
+
+# ========================================
+# AUTO-SCALING (MODERATE FOR STAGING)
+# ========================================
+autoscaling:
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    
+    # Enable custom metrics for staging testing
+    customMetrics:
+      enabled: true
+      metrics:
+        - type: Pods
+          pods:
+            metric:
+              name: http_requests_per_second
+            target:
+              type: AverageValue
+              averageValue: "500"
+    
+    # Moderate scaling behavior
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 180
+        policies:
+          - type: Percent
+            value: 20
+            periodSeconds: 60
+      scaleUp:
+        stabilizationWindowSeconds: 60
+        policies:
+          - type: Percent
+            value: 30
+            periodSeconds: 60
+  
+  # Enable VPA for staging
+  vpa:
+    enabled: true
+    updateMode: "Auto"
+    resourcePolicy:
+      containerPolicies:
+        - containerName: snapfix-enterprise
+          minAllowed:
+            cpu: "100m"
+            memory: "256Mi"
+          maxAllowed:
+            cpu: "2000m"
+            memory: "4Gi"
+  
+  # Enable KEDA for staging
+  keda:
+    enabled: true
+    scaledObjects:
+      - name: rabbitmq-scaler
+        scaleTargetRef:
+          name: snapfix-enterprise
+        minReplicaCount: 3
+        maxReplicaCount: 15
+        triggers:
+          - type: rabbitmq
+            metadata:
+              protocol: amqp
+              queueName: snapfix-tasks
+              queueLength: "5"
+              host: "amqp://guest:guest@rabbitmq:5672/"
+
+# ========================================
+# INGRESS CONFIGURATION
+# ========================================
+ingress:
+  enabled: true
+  className: nginx
+  
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    
+    # Moderate performance optimizations
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    
+    # Moderate rate limiting
+    nginx.ingress.kubernetes.io/rate-limit: "500"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "50"
+    
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+  
+  hosts:
+    - host: staging.snapfix.enterprise.com
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: api.staging.snapfix.enterprise.com
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    - secretName: snapfix-staging-tls-secret
+      hosts:
+        - staging.snapfix.enterprise.com
+        - api.staging.snapfix.enterprise.com
+
+# ========================================
+# DATABASE CONFIGURATION (MODERATE)
+# ========================================
+# PostgreSQL - With read replica for staging
+postgresql:
+  enabled: true
+  architecture: replication
+  
+  auth:
+    postgresPassword: ""  # Will be generated
+    username: snapfix_staging
+    password: ""  # Will be generated
+    database: snapfix_staging
+    existingSecret: "snapfix-postgresql-secret-staging"
+  
+  primary:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+    
+    persistence:
+      enabled: true
+      size: 100Gi
+      storageClass: gp3-encrypted
+    
+    configuration: |
+      max_connections = 500
+      shared_buffers = 1GB
+      effective_cache_size = 3GB
+      work_mem = 8MB
+      maintenance_work_mem = 256MB
+      wal_level = replica
+      max_wal_senders = 5
+      max_replication_slots = 5
+      log_statement = 'ddl'
+      log_min_duration_statement = 1000
+  
+  readReplicas:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+    
+    persistence:
+      enabled: true
+      size: 100Gi
+      storageClass: gp3-encrypted
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# MongoDB - Replica set for staging
+mongodb:
+  enabled: true
+  architecture: replicaset
+  replicaCount: 2
+  
+  auth:
+    enabled: true
+    rootPassword: ""  # Will be generated
+    username: snapfix_staging
+    password: ""  # Will be generated
+    database: snapfix_staging
+    existingSecret: "snapfix-mongodb-secret-staging"
+  
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: gp3-encrypted
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# ========================================
+# CACHING CONFIGURATION (MODERATE)
+# ========================================
+# Redis - With replication for staging
+redis:
+  enabled: true
+  architecture: replication
+  
+  auth:
+    enabled: true
+    password: ""  # Will be generated
+    existingSecret: "snapfix-redis-secret-staging"
+    existingSecretPasswordKey: "redis-password"
+  
+  master:
+    count: 2
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+    
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: gp3-encrypted
+  
+  replica:
+    replicaCount: 2
+    resources:
+      requests:
+        cpu: "125m"
+        memory: "256Mi"
+      limits:
+        cpu: "250m"
+        memory: "512Mi"
+    
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: gp3-encrypted
+  
+  sentinel:
+    enabled: true
+    masterSet: mymaster
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# ========================================
+# MESSAGE QUEUE (MODERATE)
+# ========================================
+# RabbitMQ - Cluster for staging
+rabbitmq:
+  enabled: true
+  replicaCount: 2
+  
+  auth:
+    username: snapfix_staging
+    password: ""  # Will be generated
+    existingPasswordSecret: "snapfix-rabbitmq-secret-staging"
+    existingSecretPasswordKey: "rabbitmq-password"
+  
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: gp3-encrypted
+  
+  clustering:
+    enabled: true
+    forceBoot: false
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# ========================================
+# MONITORING (FULL STACK)
+# ========================================
+monitoring:
+  prometheus:
+    enabled: true
+  
+  grafana:
+    enabled: true
+    adminPassword: ""  # Will be generated
+
+# Full Prometheus stack for staging
+kube-prometheus-stack:
+  enabled: true
+  
+  prometheus:
+    prometheusSpec:
+      retention: 15d
+      retentionSize: 50GB
+      
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "2Gi"
+        limits:
+          cpu: "1000m"
+          memory: "4Gi"
+      
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp3-encrypted
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 50Gi
+  
+  grafana:
+    enabled: true
+    adminPassword: "admin123!@#"  # Change in production
+    
+    resources:
+      requests:
+        cpu: "125m"
+        memory: "256Mi"
+      limits:
+        cpu: "250m"
+        memory: "512Mi"
+    
+    persistence:
+      enabled: true
+      size: 5Gi
+      storageClassName: gp3-encrypted
+  
+  alertmanager:
+    enabled: true
+    
+    alertmanagerSpec:
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "128Mi"
+        limits:
+          cpu: "100m"
+          memory: "256Mi"
+      
+      storage:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp3-encrypted
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 2Gi
+
+# ========================================
+# LOGGING (ENABLED FOR STAGING)
+# ========================================
+logging:
+  elasticsearch:
+    enabled: true
+    master:
+      replicaCount: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "1Gi"
+        limits:
+          cpu: "500m"
+          memory: "2Gi"
+      
+      persistence:
+        enabled: true
+        size: 20Gi
+        storageClass: gp3-encrypted
+    
+    data:
+      replicaCount: 2
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "2Gi"
+        limits:
+          cpu: "1000m"
+          memory: "4Gi"
+      
+      persistence:
+        enabled: true
+        size: 100Gi
+        storageClass: gp3-encrypted
+  
+  kibana:
+    enabled: true
+    resources:
+      requests:
+        cpu: "125m"
+        memory: "512Mi"
+      limits:
+        cpu: "250m"
+        memory: "1Gi"
+
+# ========================================
+# TRACING (ENABLED FOR STAGING)
+# ========================================
+tracing:
+  jaeger:
+    enabled: true
+    
+    collector:
+      resources:
+        requests:
+          cpu: "125m"
+          memory: "256Mi"
+        limits:
+          cpu: "250m"
+          memory: "512Mi"
+    
+    query:
+      resources:
+        requests:
+          cpu: "125m"
+          memory: "256Mi"
+        limits:
+          cpu: "250m"
+          memory: "512Mi"
+    
+    storage:
+      type: elasticsearch
+      elasticsearch:
+        host: elasticsearch-master
+        port: 9200
+
+# ========================================
+# SECURITY (PRODUCTION-LIKE)
+# ========================================
+security:
+  # Enable network policies for staging
+  networkPolicies:
+    enabled: true
+    defaultDenyIngress: true
+  
+  # Enable pod security policies
+  podSecurityPolicy:
+    enabled: true
+  
+  # Full RBAC
+  rbac:
+    enabled: true
+  
+  # Enable cert manager for staging
+  certManager:
+    enabled: true
+    clusterIssuer:
+      enabled: true
+      name: letsencrypt-staging
+      email: devops@snapfix.enterprise.com
+      server: https://acme-staging-v02.api.letsencrypt.org/directory
+  
+  # Enable external secrets for staging
+  externalSecrets:
+    enabled: true
+    secretStore:
+      name: vault-secret-store-staging
+      provider:
+        vault:
+          server: "https://vault-staging.snapfix.enterprise.com"
+          path: "secret"
+          version: "v2"
+
+# ========================================
+# BACKUP (ENABLED FOR STAGING)
+# ========================================
+backup:
+  velero:
+    enabled: true
+    configuration:
+      provider: aws
+      backupStorageLocation:
+        bucket: snapfix-enterprise-backups-staging
+        config:
+          region: us-west-2
+    
+    schedules:
+      daily:
+        schedule: "0 3 * * *"
+        template:
+          ttl: "168h"  # 7 days
+          includedNamespaces:
+            - snapfix-enterprise-staging
+
+# ========================================
+# GITOPS (ENABLED FOR STAGING)
+# ========================================
+gitops:
+  argocd:
+    enabled: false  # Usually deployed separately
+
+# ========================================
+# SERVICE MESH (OPTIONAL FOR STAGING)
+# ========================================
+serviceMesh:
+  istio:
+    enabled: false  # Can be enabled for testing
+
+# ========================================
+# CELERY (MODERATE FOR STAGING)
+# ========================================
+celery:
+  enabled: true
+  
+  workers:
+    replicaCount: 5
+    
+    resources:
+      requests:
+        cpu: "125m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+    
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 15
+      targetCPUUtilizationPercentage: 70
+  
+  beat:
+    enabled: true
+    
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "100m"
+        memory: "256Mi"
+  
+  flower:
+    enabled: true
+    
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "100m"
+        memory: "256Mi"
+    
+    ingress:
+      enabled: true
+      hosts:
+        - host: flower.staging.snapfix.enterprise.com
+          paths:
+            - path: /
+              pathType: Prefix
+      tls:
+        - secretName: snapfix-flower-staging-tls
+          hosts:
+            - flower.staging.snapfix.enterprise.com
+
+# ========================================
+# DEVELOPMENT TOOLS (DISABLED FOR STAGING)
+# ========================================
+development:
+  enabled: false
+  
+  debugTools:
+    enabled: false
+  
+  seedData:
+    enabled: false

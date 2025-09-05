@@ -1,0 +1,473 @@
+# 🚀 SnapFix Enterprise - Development Environment
+# 📊 Optimized for Development and Testing
+# ☸️ Minimal Resource Usage with Essential Features
+
+# ========================================
+# GLOBAL OVERRIDES FOR DEVELOPMENT
+# ========================================
+global:
+  environment: development
+  domain: dev.snapfix.local
+  
+  # Use local storage for development
+  storageClass: standard
+  
+  # Relaxed security for development
+  podSecurityStandards:
+    enforce: baseline
+    audit: baseline
+    warn: baseline
+
+# ========================================
+# APPLICATION CONFIGURATION
+# ========================================
+app:
+  # Minimal replicas for development
+  replicaCount: 2
+  
+  # Reduced resources for development
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+      ephemeral-storage: "1Gi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+      ephemeral-storage: "2Gi"
+  
+  # Development environment variables
+  env:
+    - name: APP_ENV
+      value: "development"
+    - name: LOG_LEVEL
+      value: "DEBUG"
+    - name: WORKERS
+      value: "2"
+    - name: MAX_CONNECTIONS
+      value: "100"
+    - name: DEBUG
+      value: "true"
+    - name: RELOAD
+      value: "true"
+  
+  # Faster health checks for development
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
+  
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 5
+  
+  # Service configuration
+  service:
+    type: NodePort
+    port: 8000
+    nodePort: 30080
+
+# ========================================
+# AUTO-SCALING (MINIMAL FOR DEV)
+# ========================================
+autoscaling:
+  hpa:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 85
+    
+    # Disable custom metrics for development
+    customMetrics:
+      enabled: false
+  
+  # Disable VPA for development
+  vpa:
+    enabled: false
+  
+  # Disable KEDA for development
+  keda:
+    enabled: false
+
+# ========================================
+# INGRESS CONFIGURATION
+# ========================================
+ingress:
+  enabled: true
+  className: nginx
+  
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    
+    # Relaxed rate limiting for development
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+  
+  hosts:
+    - host: dev.snapfix.local
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: api.dev.snapfix.local
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  # No TLS for development
+  tls: []
+
+# ========================================
+# DATABASE CONFIGURATION (MINIMAL)
+# ========================================
+# PostgreSQL - Single instance for development
+postgresql:
+  enabled: true
+  architecture: standalone
+  
+  auth:
+    postgresPassword: "dev123"
+    username: snapfix_dev
+    password: "dev123"
+    database: snapfix_dev
+  
+  primary:
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+    
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: standard
+    
+    # Minimal configuration for development
+    configuration: |
+      max_connections = 100
+      shared_buffers = 128MB
+      effective_cache_size = 512MB
+      work_mem = 4MB
+      maintenance_work_mem = 64MB
+      log_statement = 'all'
+      log_min_duration_statement = 0
+  
+  # No read replicas for development
+  readReplicas:
+    replicaCount: 0
+  
+  metrics:
+    enabled: false
+
+# MongoDB - Single instance for development
+mongodb:
+  enabled: true
+  architecture: standalone
+  
+  auth:
+    enabled: true
+    rootPassword: "dev123"
+    username: snapfix_dev
+    password: "dev123"
+    database: snapfix_dev
+  
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: standard
+  
+  metrics:
+    enabled: false
+
+# ========================================
+# CACHING CONFIGURATION (MINIMAL)
+# ========================================
+# Redis - Single instance for development
+redis:
+  enabled: true
+  architecture: standalone
+  
+  auth:
+    enabled: true
+    password: "dev123"
+  
+  master:
+    count: 1
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "250m"
+        memory: "512Mi"
+    
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: standard
+  
+  # No replicas for development
+  replica:
+    replicaCount: 0
+  
+  # No sentinel for development
+  sentinel:
+    enabled: false
+  
+  metrics:
+    enabled: false
+
+# ========================================
+# MESSAGE QUEUE (MINIMAL)
+# ========================================
+# RabbitMQ - Single instance for development
+rabbitmq:
+  enabled: true
+  replicaCount: 1
+  
+  auth:
+    username: snapfix_dev
+    password: "dev123"
+  
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClass: standard
+  
+  # No clustering for development
+  clustering:
+    enabled: false
+  
+  metrics:
+    enabled: false
+
+# ========================================
+# MONITORING (MINIMAL)
+# ========================================
+monitoring:
+  prometheus:
+    enabled: true
+  
+  grafana:
+    enabled: true
+    adminPassword: "admin123"
+
+# Minimal Prometheus stack for development
+kube-prometheus-stack:
+  enabled: true
+  
+  prometheus:
+    prometheusSpec:
+      retention: 7d
+      retentionSize: 5GB
+      
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "512Mi"
+        limits:
+          cpu: "500m"
+          memory: "2Gi"
+      
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: standard
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 5Gi
+  
+  grafana:
+    enabled: true
+    adminPassword: "admin123"
+    
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
+    
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClassName: standard
+  
+  alertmanager:
+    enabled: false  # Disable alerting for development
+
+# ========================================
+# LOGGING (DISABLED FOR DEV)
+# ========================================
+logging:
+  elasticsearch:
+    enabled: false
+  
+  kibana:
+    enabled: false
+
+# ========================================
+# TRACING (DISABLED FOR DEV)
+# ========================================
+tracing:
+  jaeger:
+    enabled: false
+
+# ========================================
+# SECURITY (RELAXED FOR DEV)
+# ========================================
+security:
+  # Relaxed network policies for development
+  networkPolicies:
+    enabled: false
+  
+  # Relaxed pod security policies
+  podSecurityPolicy:
+    enabled: false
+  
+  # Basic RBAC
+  rbac:
+    enabled: true
+  
+  # No cert manager for development
+  certManager:
+    enabled: false
+  
+  # No external secrets for development
+  externalSecrets:
+    enabled: false
+
+# ========================================
+# BACKUP (DISABLED FOR DEV)
+# ========================================
+backup:
+  velero:
+    enabled: false
+
+# ========================================
+# GITOPS (DISABLED FOR DEV)
+# ========================================
+gitops:
+  argocd:
+    enabled: false
+
+# ========================================
+# SERVICE MESH (DISABLED FOR DEV)
+# ========================================
+serviceMesh:
+  istio:
+    enabled: false
+
+# ========================================
+# CELERY (MINIMAL FOR DEV)
+# ========================================
+celery:
+  enabled: true
+  
+  workers:
+    replicaCount: 2
+    
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "250m"
+        memory: "512Mi"
+    
+    autoscaling:
+      enabled: false
+  
+  beat:
+    enabled: true
+    
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"
+  
+  flower:
+    enabled: true
+    
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"
+    
+    ingress:
+      enabled: true
+      hosts:
+        - host: flower.dev.snapfix.local
+          paths:
+            - path: /
+              pathType: Prefix
+      tls: []
+
+# ========================================
+# DEVELOPMENT TOOLS
+# ========================================
+development:
+  enabled: true
+  
+  # Enable debug tools for development
+  debugTools:
+    enabled: true
+    
+    # Redis Commander for Redis management
+    redisCommander:
+      enabled: true
+    
+    # PgAdmin for PostgreSQL management
+    pgAdmin:
+      enabled: true
+    
+    # Mongo Express for MongoDB management
+    mongoExpress:
+      enabled: true
+  
+  # Enable test data seeding
+  seedData:
+    enabled: true
+    job:
+      image:
+        repository: ghcr.io/snapfix/data-seeder
+        tag: "dev"
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "128Mi"
+        limits:
+          cpu: "200m"
+          memory: "512Mi"

@@ -1,0 +1,569 @@
+# API Versioning and Advanced Security Middleware for SnapFix Enterprise
+# This template provides comprehensive API versioning, security middleware, and advanced protection features
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-api-versioning-config
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+data:
+  api-versioning.conf: |
+    # API Versioning Configuration
+    api_versioning:
+      # Version Detection Strategy
+      detection:
+        # Priority order: header > query_param > url_path > accept_header
+        strategies:
+          - type: "header"
+            key: "{{ .Values.api.versioning.versionHeader | default "X-API-Version" }}"
+          - type: "query_param"
+            key: "{{ .Values.api.versioning.versionQueryParam | default "version" }}"
+          - type: "url_path"
+            pattern: "/api/(v\\d+)/.*"
+          - type: "accept_header"
+            pattern: "application/vnd\.snapfix\.(v\\d+)\+json"
+      
+      # Supported Versions
+      versions:
+        v1:
+          status: "stable"
+          deprecated: false
+          sunset_date: null
+          description: "Initial API version with core functionality"
+          routes:
+            - "/api/v1/auth/*"
+            - "/api/v1/users/*"
+            - "/api/v1/images/*"
+            - "/api/v1/repairs/*"
+        
+        v2:
+          status: "stable"
+          deprecated: false
+          sunset_date: null
+          description: "Enhanced API with improved performance and new features"
+          routes:
+            - "/api/v2/auth/*"
+            - "/api/v2/users/*"
+            - "/api/v2/images/*"
+            - "/api/v2/repairs/*"
+            - "/api/v2/analytics/*"
+            - "/api/v2/notifications/*"
+        
+        v3:
+          status: "beta"
+          deprecated: false
+          sunset_date: null
+          description: "Next generation API with GraphQL support"
+          routes:
+            - "/api/v3/graphql"
+            - "/api/v3/auth/*"
+            - "/api/v3/users/*"
+      
+      # Default Settings
+      default_version: "{{ .Values.api.versioning.defaultVersion | default "v2" }}"
+      fallback_version: "{{ .Values.api.versioning.fallbackVersion | default "v1" }}"
+      
+      # Deprecation Handling
+      deprecation:
+        warnings_enabled: {{ .Values.api.versioning.deprecationWarnings | default true }}
+        warning_header: "Deprecation"
+        sunset_header: "Sunset"
+        link_header: "Link"
+      
+      # Version Compatibility
+      compatibility:
+        backward_compatible_versions:
+          v2: ["v1"]
+          v3: ["v2", "v1"]
+        forward_compatible_versions: {}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-security-middleware-config
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+data:
+  security-middleware.conf: |
+    # Advanced Security Middleware Configuration
+    security:
+      # Input Validation
+      input_validation:
+        max_request_size: "{{ .Values.security.inputValidation.maxRequestSize | default "10MB" }}"
+        max_json_depth: {{ .Values.security.inputValidation.maxJsonDepth | default 10 }}
+        max_array_length: {{ .Values.security.inputValidation.maxArrayLength | default 1000 }}
+        allowed_content_types:
+          - "application/json"
+          - "application/x-www-form-urlencoded"
+          - "multipart/form-data"
+          - "text/plain"
+        
+        # SQL Injection Protection
+        sql_injection:
+          enabled: {{ .Values.security.sqlInjection.enabled | default true }}
+          patterns:
+            - "(?i)(union|select|insert|update|delete|drop|create|alter|exec|execute)"
+            - "(?i)(script|javascript|vbscript|onload|onerror|onclick)"
+            - "(?i)(<|>|&lt;|&gt;|%3c|%3e)"
+        
+        # XSS Protection
+        xss_protection:
+          enabled: {{ .Values.security.xssProtection.enabled | default true }}
+          sanitize_html: {{ .Values.security.xssProtection.sanitizeHtml | default true }}
+          allowed_tags: ["b", "i", "u", "strong", "em"]
+          blocked_patterns:
+            - "(?i)<script[^>]*>.*?</script>"
+            - "(?i)javascript:"
+            - "(?i)on\\w+\\s*="
+      
+      # Authentication & Authorization
+      auth:
+        # JWT Configuration
+        jwt:
+          verify_signature: {{ .Values.security.auth.jwt.verifySignature | default true }}
+          verify_expiration: {{ .Values.security.auth.jwt.verifyExpiration | default true }}
+          verify_issuer: {{ .Values.security.auth.jwt.verifyIssuer | default true }}
+          verify_audience: {{ .Values.security.auth.jwt.verifyAudience | default true }}
+          clock_skew_seconds: {{ .Values.security.auth.jwt.clockSkewSeconds | default 60 }}
+        
+        # Role-Based Access Control (RBAC)
+        rbac:
+          enabled: {{ .Values.security.auth.rbac.enabled | default true }}
+          roles:
+            admin:
+              permissions: ["*"]
+              description: "Full system access"
+            user:
+              permissions: ["read:profile", "write:profile", "read:images", "write:images", "read:repairs", "write:repairs"]
+              description: "Standard user access"
+            guest:
+              permissions: ["read:public"]
+              description: "Limited read-only access"
+            technician:
+              permissions: ["read:repairs", "write:repairs", "read:images", "write:images", "read:analytics"]
+              description: "Repair technician access"
+        
+        # API Key Authentication
+        api_key:
+          enabled: {{ .Values.security.auth.apiKey.enabled | default true }}
+          header_name: "{{ .Values.security.auth.apiKey.headerName | default "X-API-Key" }}"
+          query_param: "{{ .Values.security.auth.apiKey.queryParam | default "api_key" }}"
+          rate_limit_per_key: {{ .Values.security.auth.apiKey.rateLimitPerKey | default 10000 }}
+      
+      # Rate Limiting (Advanced)
+      rate_limiting:
+        # Global Rate Limiting
+        global:
+          enabled: {{ .Values.security.rateLimiting.global.enabled | default true }}
+          requests_per_minute: {{ .Values.security.rateLimiting.global.requestsPerMinute | default 60000 }}
+          burst_size: {{ .Values.security.rateLimiting.global.burstSize | default 10000 }}
+        
+        # Per-User Rate Limiting
+        per_user:
+          enabled: {{ .Values.security.rateLimiting.perUser.enabled | default true }}
+          requests_per_minute: {{ .Values.security.rateLimiting.perUser.requestsPerMinute | default 1000 }}
+          burst_size: {{ .Values.security.rateLimiting.perUser.burstSize | default 100 }}
+        
+        # Per-IP Rate Limiting
+        per_ip:
+          enabled: {{ .Values.security.rateLimiting.perIp.enabled | default true }}
+          requests_per_minute: {{ .Values.security.rateLimiting.perIp.requestsPerMinute | default 300 }}
+          burst_size: {{ .Values.security.rateLimiting.perIp.burstSize | default 50 }}
+        
+        # Endpoint-Specific Rate Limiting
+        endpoints:
+          "/api/*/auth/login":
+            requests_per_minute: 10
+            burst_size: 2
+          "/api/*/auth/register":
+            requests_per_minute: 5
+            burst_size: 1
+          "/api/*/images/upload":
+            requests_per_minute: 100
+            burst_size: 10
+          "/api/*/repairs/create":
+            requests_per_minute: 50
+            burst_size: 5
+      
+      # DDoS Protection
+      ddos_protection:
+        enabled: {{ .Values.security.ddosProtection.enabled | default true }}
+        
+        # Connection Limiting
+        connection_limiting:
+          max_connections_per_ip: {{ .Values.security.ddosProtection.maxConnectionsPerIp | default 100 }}
+          max_connections_global: {{ .Values.security.ddosProtection.maxConnectionsGlobal | default 10000 }}
+        
+        # Request Pattern Analysis
+        pattern_analysis:
+          enabled: {{ .Values.security.ddosProtection.patternAnalysis.enabled | default true }}
+          suspicious_patterns:
+            - "rapid_requests": # More than 100 requests in 10 seconds
+                threshold: 100
+                window_seconds: 10
+                action: "block_temporary"
+            - "identical_requests": # Same request repeated more than 50 times
+                threshold: 50
+                window_seconds: 60
+                action: "block_temporary"
+            - "error_rate": # More than 50% error rate
+                threshold: 0.5
+                window_seconds: 60
+                action: "throttle"
+      
+      # Content Security
+      content_security:
+        # File Upload Security
+        file_upload:
+          max_file_size: "{{ .Values.security.contentSecurity.fileUpload.maxFileSize | default "50MB" }}"
+          allowed_extensions: {{ .Values.security.contentSecurity.fileUpload.allowedExtensions | default (list ".jpg" ".jpeg" ".png" ".gif" ".pdf" ".doc" ".docx") | toJson }}
+          scan_for_malware: {{ .Values.security.contentSecurity.fileUpload.scanForMalware | default true }}
+          quarantine_suspicious: {{ .Values.security.contentSecurity.fileUpload.quarantineSuspicious | default true }}
+        
+        # Content Filtering
+        content_filtering:
+          enabled: {{ .Values.security.contentSecurity.contentFiltering.enabled | default true }}
+          profanity_filter: {{ .Values.security.contentSecurity.contentFiltering.profanityFilter | default true }}
+          spam_detection: {{ .Values.security.contentSecurity.contentFiltering.spamDetection | default true }}
+          
+      # Audit Logging
+      audit_logging:
+        enabled: {{ .Values.security.auditLogging.enabled | default true }}
+        log_level: "{{ .Values.security.auditLogging.logLevel | default "INFO" }}"
+        
+        # Events to Log
+        events:
+          authentication: {{ .Values.security.auditLogging.events.authentication | default true }}
+          authorization: {{ .Values.security.auditLogging.events.authorization | default true }}
+          data_access: {{ .Values.security.auditLogging.events.dataAccess | default true }}
+          data_modification: {{ .Values.security.auditLogging.events.dataModification | default true }}
+          admin_actions: {{ .Values.security.auditLogging.events.adminActions | default true }}
+          security_violations: {{ .Values.security.auditLogging.events.securityViolations | default true }}
+        
+        # Log Retention
+        retention:
+          days: {{ .Values.security.auditLogging.retention.days | default 90 }}
+          max_size_gb: {{ .Values.security.auditLogging.retention.maxSizeGb | default 10 }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-security-middleware
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: security-middleware
+spec:
+  replicas: {{ .Values.securityMiddleware.replicaCount | default 3 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: security-middleware
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/api-versioning-security.yaml") . | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: security-middleware
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: security-middleware
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.securityMiddleware.image.repository }}:{{ .Values.securityMiddleware.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.securityMiddleware.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # API Versioning Configuration
+            - name: API_VERSION_HEADER
+              value: "{{ .Values.api.versioning.versionHeader | default "X-API-Version" }}"
+            - name: API_VERSION_QUERY_PARAM
+              value: "{{ .Values.api.versioning.versionQueryParam | default "version" }}"
+            - name: API_DEFAULT_VERSION
+              value: "{{ .Values.api.versioning.defaultVersion | default "v2" }}"
+            - name: API_FALLBACK_VERSION
+              value: "{{ .Values.api.versioning.fallbackVersion | default "v1" }}"
+            
+            # Security Configuration
+            - name: SECURITY_ENABLED
+              value: "{{ .Values.security.enabled | default true }}"
+            - name: RATE_LIMITING_ENABLED
+              value: "{{ .Values.security.rateLimiting.enabled | default true }}"
+            - name: DDOS_PROTECTION_ENABLED
+              value: "{{ .Values.security.ddosProtection.enabled | default true }}"
+            - name: AUDIT_LOGGING_ENABLED
+              value: "{{ .Values.security.auditLogging.enabled | default true }}"
+            
+            # Redis Configuration for Rate Limiting
+            - name: REDIS_URL
+              value: "redis://{{ include "snapfix-enterprise.fullname" . }}-redis-cluster:6379"
+            
+            # Database Configuration for Audit Logs
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                  key: database-url
+            
+            # JWT Configuration
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-secrets
+                  key: jwt-secret-key
+            
+            # Monitoring Configuration
+            - name: PROMETHEUS_ENABLED
+              value: "{{ .Values.monitoring.prometheus.enabled | default true }}"
+            - name: JAEGER_ENABLED
+              value: "{{ .Values.monitoring.jaeger.enabled | default true }}"
+            - name: JAEGER_ENDPOINT
+              value: "http://{{ include "snapfix-enterprise.fullname" . }}-jaeger-collector:14268/api/traces"
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.securityMiddleware.resources | nindent 12 }}
+          
+          volumeMounts:
+            - name: api-versioning-config
+              mountPath: /app/config/api-versioning
+              readOnly: true
+            - name: security-middleware-config
+              mountPath: /app/config/security
+              readOnly: true
+      
+      volumes:
+        - name: api-versioning-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-api-versioning-config
+        - name: security-middleware-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-security-middleware-config
+      
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-security-middleware
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: security-middleware
+spec:
+  type: {{ .Values.securityMiddleware.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.securityMiddleware.service.port | default 80 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.securityMiddleware.service.grpcPort | default 9090 }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: security-middleware
+
+---
+# HorizontalPodAutoscaler for Security Middleware
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-security-middleware-hpa
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "snapfix-enterprise.fullname" . }}-security-middleware
+  minReplicas: {{ .Values.securityMiddleware.autoscaling.minReplicas | default 3 }}
+  maxReplicas: {{ .Values.securityMiddleware.autoscaling.maxReplicas | default 20 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.securityMiddleware.autoscaling.targetCPUUtilizationPercentage | default 70 }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.securityMiddleware.autoscaling.targetMemoryUtilizationPercentage | default 80 }}
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "100"
+    {{- end }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Max
+
+---
+# ServiceMonitor for Prometheus to scrape security middleware metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-security-middleware
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: security-middleware
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: security-middleware
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+
+---
+# NetworkPolicy for security middleware
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-security-middleware
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: security-middleware
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from API Gateway
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow access to Redis for rate limiting
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow access to database for audit logs
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: database
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow access to auth service
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: auth-service
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+    # Allow access to Jaeger for tracing
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: jaeger
+      ports:
+        - protocol: TCP
+          port: 14268

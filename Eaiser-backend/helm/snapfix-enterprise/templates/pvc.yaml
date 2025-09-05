@@ -1,0 +1,510 @@
+{{/*
+💾 SnapFix Enterprise - Advanced Persistent Volume Claims
+🗄️ Storage Management for 100,000+ Concurrent Users
+📊 High-Performance Storage with Backup & Monitoring
+*/}}
+{{- if .Values.persistence.enabled }}
+# ========================================
+# PVC - APPLICATION DATA STORAGE
+# ========================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-app-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: application-data
+  annotations:
+    # Storage metadata
+    storage.kubernetes.io/provisioner: "{{ .Values.persistence.app.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.persistence.app.backupPolicy | default "daily" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.persistence.app.retentionPolicy | default "30d" }}"
+    # Volume expansion annotation
+    {{- if .Values.persistence.app.allowVolumeExpansion }}
+    volume.beta.kubernetes.io/storage-provisioner: "{{ .Values.persistence.app.storageClass }}"
+    {{- end }}
+    # Backup annotations
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "app-data"
+    backup.velero.io/backup-volumes-excludes: "tmp,cache"
+    {{- end }}
+    # Performance annotations
+    {{- if eq .Values.persistence.app.storageClass "fast-ssd" }}
+    storage.kubernetes.io/iops: "{{ .Values.persistence.app.iops | default "3000" }}"
+    storage.kubernetes.io/throughput: "{{ .Values.persistence.app.throughput | default "125" }}"
+    {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.persistence.app.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.app.size }}
+  {{- if .Values.persistence.app.storageClass }}
+  storageClassName: {{ .Values.persistence.app.storageClass }}
+  {{- end }}
+  {{- if .Values.persistence.app.selector }}
+  selector:
+    {{- toYaml .Values.persistence.app.selector | nindent 4 }}
+  {{- end }}
+  {{- if .Values.persistence.app.volumeMode }}
+  volumeMode: {{ .Values.persistence.app.volumeMode }}
+  {{- end }}
+
+---
+# ========================================
+# PVC - APPLICATION LOGS STORAGE
+# ========================================
+{{- if .Values.persistence.logs.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-app-logs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: application-logs
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.persistence.logs.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.persistence.logs.backupPolicy | default "weekly" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.persistence.logs.retentionPolicy | default "90d" }}"
+    # Log rotation annotations
+    logging.kubernetes.io/rotation-policy: "{{ .Values.persistence.logs.rotationPolicy | default "size:100Mi" }}"
+    logging.kubernetes.io/compression: "{{ .Values.persistence.logs.compression | default "gzip" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "app-logs"
+    {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.persistence.logs.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.logs.size }}
+  {{- if .Values.persistence.logs.storageClass }}
+  storageClassName: {{ .Values.persistence.logs.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - MEDIA/UPLOADS STORAGE
+# ========================================
+{{- if .Values.persistence.media.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-media
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: media-uploads
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.persistence.media.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.persistence.media.backupPolicy | default "daily" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.persistence.media.retentionPolicy | default "365d" }}"
+    # Media-specific annotations
+    media.kubernetes.io/content-types: "image/*,video/*,audio/*,application/pdf"
+    media.kubernetes.io/max-file-size: "{{ .Values.persistence.media.maxFileSize | default "100Mi" }}"
+    media.kubernetes.io/virus-scan: "{{ .Values.persistence.media.virusScan | default "enabled" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "media"
+    backup.velero.io/backup-volumes-excludes: "tmp,cache,thumbnails"
+    {{- end }}
+    # CDN integration
+    {{- if .Values.cdn.enabled }}
+    cdn.kubernetes.io/sync-enabled: "true"
+    cdn.kubernetes.io/sync-pattern: "*.jpg,*.png,*.gif,*.mp4,*.pdf"
+    {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.persistence.media.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.media.size }}
+  {{- if .Values.persistence.media.storageClass }}
+  storageClassName: {{ .Values.persistence.media.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - CACHE STORAGE (Redis Persistence)
+# ========================================
+{{- if and .Values.redis.enabled .Values.redis.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-redis-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: cache-data
+    app.kubernetes.io/name: redis
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.redis.persistence.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.redis.persistence.backupPolicy | default "hourly" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.redis.persistence.retentionPolicy | default "7d" }}"
+    # Redis-specific annotations
+    redis.kubernetes.io/persistence-mode: "{{ .Values.redis.persistence.mode | default "rdb" }}"
+    redis.kubernetes.io/save-policy: "{{ .Values.redis.persistence.savePolicy | default "900 1 300 10 60 10000" }}"
+    redis.kubernetes.io/maxmemory-policy: "{{ .Values.redis.persistence.maxmemoryPolicy | default "allkeys-lru" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "redis-data"
+    {{- end }}
+    # Performance annotations for high-IOPS storage
+    {{- if eq .Values.redis.persistence.storageClass "fast-ssd" }}
+    storage.kubernetes.io/iops: "{{ .Values.redis.persistence.iops | default "5000" }}"
+    storage.kubernetes.io/throughput: "{{ .Values.redis.persistence.throughput | default "250" }}"
+    {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.redis.persistence.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size }}
+  {{- if .Values.redis.persistence.storageClass }}
+  storageClassName: {{ .Values.redis.persistence.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - DATABASE STORAGE (PostgreSQL)
+# ========================================
+{{- if and .Values.postgresql.enabled .Values.postgresql.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-postgresql-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: database-data
+    app.kubernetes.io/name: postgresql
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.postgresql.persistence.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.postgresql.persistence.backupPolicy | default "daily" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.postgresql.persistence.retentionPolicy | default "30d" }}"
+    # PostgreSQL-specific annotations
+    postgresql.kubernetes.io/version: "{{ .Values.postgresql.image.tag | default "15" }}"
+    postgresql.kubernetes.io/wal-level: "{{ .Values.postgresql.walLevel | default "replica" }}"
+    postgresql.kubernetes.io/max-connections: "{{ .Values.postgresql.maxConnections | default "1000" }}"
+    postgresql.kubernetes.io/shared-buffers: "{{ .Values.postgresql.sharedBuffers | default "256MB" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "postgresql-data"
+    backup.velero.io/backup-volumes-excludes: "pg_log,pg_stat_tmp"
+    {{- end }}
+    # Performance annotations for database storage
+    storage.kubernetes.io/iops: "{{ .Values.postgresql.persistence.iops | default "3000" }}"
+    storage.kubernetes.io/throughput: "{{ .Values.postgresql.persistence.throughput | default "125" }}"
+    # Encryption annotation
+    {{- if .Values.postgresql.persistence.encryption.enabled }}
+    storage.kubernetes.io/encryption: "{{ .Values.postgresql.persistence.encryption.type | default "aes-256" }}"
+    {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.postgresql.persistence.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.postgresql.persistence.size }}
+  {{- if .Values.postgresql.persistence.storageClass }}
+  storageClassName: {{ .Values.postgresql.persistence.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - MONGODB STORAGE
+# ========================================
+{{- if and .Values.mongodb.enabled .Values.mongodb.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: document-database
+    app.kubernetes.io/name: mongodb
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.mongodb.persistence.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.mongodb.persistence.backupPolicy | default "daily" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.mongodb.persistence.retentionPolicy | default "30d" }}"
+    # MongoDB-specific annotations
+    mongodb.kubernetes.io/version: "{{ .Values.mongodb.image.tag | default "7.0" }}"
+    mongodb.kubernetes.io/storage-engine: "{{ .Values.mongodb.storageEngine | default "wiredTiger" }}"
+    mongodb.kubernetes.io/cache-size: "{{ .Values.mongodb.cacheSize | default "1GB" }}"
+    mongodb.kubernetes.io/journal: "{{ .Values.mongodb.journal | default "true" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "mongodb-data"
+    backup.velero.io/backup-volumes-excludes: "diagnostic.data,mongod.lock"
+    {{- end }}
+    # Performance annotations
+    storage.kubernetes.io/iops: "{{ .Values.mongodb.persistence.iops | default "3000" }}"
+    storage.kubernetes.io/throughput: "{{ .Values.mongodb.persistence.throughput | default "125" }}"
+    # Sharding annotations
+    {{- if .Values.mongodb.sharding.enabled }}
+    mongodb.kubernetes.io/sharding: "enabled"
+    mongodb.kubernetes.io/shard-count: "{{ .Values.mongodb.sharding.shards }}"
+    {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.mongodb.persistence.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.mongodb.persistence.size }}
+  {{- if .Values.mongodb.persistence.storageClass }}
+  storageClassName: {{ .Values.mongodb.persistence.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - RABBITMQ STORAGE
+# ========================================
+{{- if and .Values.rabbitmq.enabled .Values.rabbitmq.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: message-queue
+    app.kubernetes.io/name: rabbitmq
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.rabbitmq.persistence.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.rabbitmq.persistence.backupPolicy | default "daily" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.rabbitmq.persistence.retentionPolicy | default "7d" }}"
+    # RabbitMQ-specific annotations
+    rabbitmq.kubernetes.io/version: "{{ .Values.rabbitmq.image.tag | default "3.12" }}"
+    rabbitmq.kubernetes.io/cluster-formation: "{{ .Values.rabbitmq.clustering.enabled | default "true" }}"
+    rabbitmq.kubernetes.io/disk-free-limit: "{{ .Values.rabbitmq.diskFreeLimit | default "2GB" }}"
+    rabbitmq.kubernetes.io/vm-memory-high-watermark: "{{ .Values.rabbitmq.memoryHighWatermark | default "0.4" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "rabbitmq-data"
+    backup.velero.io/backup-volumes-excludes: "log,crash.dump"
+    {{- end }}
+    # Performance annotations
+    storage.kubernetes.io/iops: "{{ .Values.rabbitmq.persistence.iops | default "2000" }}"
+    storage.kubernetes.io/throughput: "{{ .Values.rabbitmq.persistence.throughput | default "100" }}"
+spec:
+  accessModes:
+    {{- range .Values.rabbitmq.persistence.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.rabbitmq.persistence.size }}
+  {{- if .Values.rabbitmq.persistence.storageClass }}
+  storageClassName: {{ .Values.rabbitmq.persistence.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - ELASTICSEARCH STORAGE
+# ========================================
+{{- if and .Values.elasticsearch.enabled .Values.elasticsearch.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-elasticsearch-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: search-engine
+    app.kubernetes.io/name: elasticsearch
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.elasticsearch.persistence.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.elasticsearch.persistence.backupPolicy | default "daily" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.elasticsearch.persistence.retentionPolicy | default "30d" }}"
+    # Elasticsearch-specific annotations
+    elasticsearch.kubernetes.io/version: "{{ .Values.elasticsearch.image.tag | default "8.11" }}"
+    elasticsearch.kubernetes.io/cluster-name: "{{ .Values.elasticsearch.clusterName | default "snapfix-logs" }}"
+    elasticsearch.kubernetes.io/node-roles: "{{ .Values.elasticsearch.nodeRoles | default "master,data,ingest" }}"
+    elasticsearch.kubernetes.io/heap-size: "{{ .Values.elasticsearch.heapSize | default "1g" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "elasticsearch-data"
+    backup.velero.io/backup-volumes-excludes: "logs,tmp"
+    {{- end }}
+    # Performance annotations for search workloads
+    storage.kubernetes.io/iops: "{{ .Values.elasticsearch.persistence.iops | default "4000" }}"
+    storage.kubernetes.io/throughput: "{{ .Values.elasticsearch.persistence.throughput | default "200" }}"
+    # Index lifecycle management
+    elasticsearch.kubernetes.io/ilm-policy: "{{ .Values.elasticsearch.ilmPolicy | default "snapfix-logs-policy" }}"
+spec:
+  accessModes:
+    {{- range .Values.elasticsearch.persistence.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.elasticsearch.persistence.size }}
+  {{- if .Values.elasticsearch.persistence.storageClass }}
+  storageClassName: {{ .Values.elasticsearch.persistence.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - PROMETHEUS STORAGE
+# ========================================
+{{- if and .Values.prometheus.enabled .Values.prometheus.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-prometheus-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: metrics-storage
+    app.kubernetes.io/name: prometheus
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.prometheus.persistence.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.prometheus.persistence.backupPolicy | default "weekly" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.prometheus.persistence.retentionPolicy | default "15d" }}"
+    # Prometheus-specific annotations
+    prometheus.kubernetes.io/version: "{{ .Values.prometheus.image.tag | default "v2.48" }}
+    prometheus.kubernetes.io/retention-time: "{{ .Values.prometheus.retentionTime | default "15d" }}"
+    prometheus.kubernetes.io/retention-size: "{{ .Values.prometheus.retentionSize | default "10GB" }}"
+    prometheus.kubernetes.io/scrape-interval: "{{ .Values.prometheus.scrapeInterval | default "15s" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "prometheus-data"
+    backup.velero.io/backup-volumes-excludes: "wal,chunks_head"
+    {{- end }}
+    # Performance annotations for time-series data
+    storage.kubernetes.io/iops: "{{ .Values.prometheus.persistence.iops | default "3000" }}"
+    storage.kubernetes.io/throughput: "{{ .Values.prometheus.persistence.throughput | default "150" }}"
+spec:
+  accessModes:
+    {{- range .Values.prometheus.persistence.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.prometheus.persistence.size }}
+  {{- if .Values.prometheus.persistence.storageClass }}
+  storageClassName: {{ .Values.prometheus.persistence.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - GRAFANA STORAGE
+# ========================================
+{{- if and .Values.grafana.enabled .Values.grafana.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-grafana-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: dashboard-storage
+    app.kubernetes.io/name: grafana
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.grafana.persistence.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.grafana.persistence.backupPolicy | default "daily" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.grafana.persistence.retentionPolicy | default "90d" }}"
+    # Grafana-specific annotations
+    grafana.kubernetes.io/version: "{{ .Values.grafana.image.tag | default "10.2" }}"
+    grafana.kubernetes.io/database-type: "{{ .Values.grafana.database.type | default "sqlite3" }}"
+    {{- if .Values.backup.velero.enabled }}
+    backup.velero.io/backup-volumes: "grafana-data"
+    backup.velero.io/backup-volumes-excludes: "logs,tmp"
+    {{- end }}
+spec:
+  accessModes:
+    {{- range .Values.grafana.persistence.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.grafana.persistence.size }}
+  {{- if .Values.grafana.persistence.storageClass }}
+  storageClassName: {{ .Values.grafana.persistence.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# PVC - BACKUP STORAGE
+# ========================================
+{{- if and .Values.backup.enabled .Values.backup.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-backup-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+    storage.kubernetes.io/type: backup-storage
+  annotations:
+    storage.kubernetes.io/provisioner: "{{ .Values.backup.persistence.storageClass }}"
+    storage.kubernetes.io/backup-policy: "{{ .Values.backup.persistence.backupPolicy | default "none" }}"
+    storage.kubernetes.io/retention-policy: "{{ .Values.backup.persistence.retentionPolicy | default "365d" }}"
+    # Backup-specific annotations
+    backup.kubernetes.io/encryption: "{{ .Values.backup.encryption.enabled | default "true" }}"
+    backup.kubernetes.io/compression: "{{ .Values.backup.compression | default "gzip" }}"
+    backup.kubernetes.io/schedule: "{{ .Values.backup.schedule | default "0 2 * * *" }}"
+    # Exclude from backup (backup storage itself)
+    backup.velero.io/backup-volumes-excludes: "backup-storage"
+spec:
+  accessModes:
+    {{- range .Values.backup.persistence.accessModes }}
+    - {{ . }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+  {{- if .Values.backup.persistence.storageClass }}
+  storageClassName: {{ .Values.backup.persistence.storageClass }}
+  {{- end }}
+
+{{- end }}
+
+{{- end }}

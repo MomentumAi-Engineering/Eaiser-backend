@@ -1,0 +1,695 @@
+{{/*
+🔒 SnapFix Enterprise - Advanced Network Security Policies
+🛡️ Zero-Trust Network Architecture for 100,000+ Concurrent Users
+🚫 Micro-segmentation & Traffic Control
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+# ========================================
+# APPLICATION NETWORK POLICY
+# ========================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-security
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # Network policy metadata
+    network-policy.kubernetes.io/version: "v1"
+    network-policy.kubernetes.io/type: "application"
+    network-policy.kubernetes.io/environment: "{{ .Values.global.environment }}"
+    # Security annotations
+    security.kubernetes.io/policy-type: "zero-trust"
+    security.kubernetes.io/compliance: "pci-dss,hipaa,gdpr"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+      app.kubernetes.io/component: app
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  # ----------------------------------------
+  # INGRESS RULES (Incoming Traffic)
+  # ----------------------------------------
+  ingress:
+    # Allow traffic from Ingress Controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.networkPolicy.ingress.ingressNamespace | default "ingress-nginx" }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Values.networkPolicy.ingress.ingressController | default "ingress-nginx" }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port | default 8000 }}
+    
+    # Allow traffic from Load Balancer
+    {{- if .Values.networkPolicy.ingress.allowLoadBalancer }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.networkPolicy.ingress.loadBalancerNamespace | default "kube-system" }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port | default 8000 }}
+    {{- end }}
+    
+    # Allow Prometheus scraping
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.monitoring.prometheus.namespace | default "monitoring" }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.metricsPort | default 9090 }}
+    {{- end }}
+    
+    # Allow health checks from Kubernetes
+    - from: []
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.healthPort | default 8080 }}
+    
+    # Allow inter-pod communication (same namespace)
+    {{- if .Values.networkPolicy.ingress.allowSameNamespace }}
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port | default 8000 }}
+    {{- end }}
+    
+    # Custom ingress rules
+    {{- range .Values.networkPolicy.ingress.customRules }}
+    - from:
+        {{- if .namespaceSelector }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .namespaceSelector | nindent 14 }}
+        {{- end }}
+        {{- if .podSelector }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml .podSelector | nindent 14 }}
+        {{- end }}
+        {{- if .ipBlock }}
+        - ipBlock:
+            cidr: {{ .ipBlock.cidr }}
+            {{- if .ipBlock.except }}
+            except:
+              {{- toYaml .ipBlock.except | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      ports:
+        {{- range .ports }}
+        - protocol: {{ .protocol | default "TCP" }}
+          port: {{ .port }}
+        {{- end }}
+    {{- end }}
+  
+  # ----------------------------------------
+  # EGRESS RULES (Outgoing Traffic)
+  # ----------------------------------------
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # Allow HTTPS traffic (external APIs)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    
+    # Allow HTTP traffic (if needed)
+    {{- if .Values.networkPolicy.egress.allowHTTP }}
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
+    
+    # Allow PostgreSQL connection
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.primary.service.ports.postgresql | default 5432 }}
+    {{- end }}
+    
+    # Allow MongoDB connection
+    {{- if .Values.mongodb.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongodb
+      ports:
+        - protocol: TCP
+          port: {{ .Values.mongodb.service.ports.mongodb | default 27017 }}
+    {{- end }}
+    
+    # Allow Redis connection
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.master.service.ports.redis | default 6379 }}
+    {{- end }}
+    
+    # Allow RabbitMQ connection
+    {{- if .Values.rabbitmq.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rabbitmq
+      ports:
+        - protocol: TCP
+          port: {{ .Values.rabbitmq.service.ports.amqp | default 5672 }}
+        - protocol: TCP
+          port: {{ .Values.rabbitmq.service.ports.management | default 15672 }}
+    {{- end }}
+    
+    # Allow Celery worker communication
+    {{- if .Values.celery.worker.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+              app.kubernetes.io/component: celery-worker
+      ports:
+        - protocol: TCP
+          port: 8000
+    {{- end }}
+    
+    # Custom egress rules
+    {{- range .Values.networkPolicy.egress.customRules }}
+    - to:
+        {{- if .namespaceSelector }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .namespaceSelector | nindent 14 }}
+        {{- end }}
+        {{- if .podSelector }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml .podSelector | nindent 14 }}
+        {{- end }}
+        {{- if .ipBlock }}
+        - ipBlock:
+            cidr: {{ .ipBlock.cidr }}
+            {{- if .ipBlock.except }}
+            except:
+              {{- toYaml .ipBlock.except | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      ports:
+        {{- range .ports }}
+        - protocol: {{ .protocol | default "TCP" }}
+          port: {{ .port }}
+        {{- end }}
+    {{- end }}
+
+---
+# ========================================
+# DATABASE NETWORK POLICY
+# ========================================
+{{- if .Values.postgresql.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-postgresql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database-security
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow connections from application pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.primary.service.ports.postgresql | default 5432 }}
+    
+    # Allow connections from Celery workers
+    {{- if .Values.celery.worker.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+              app.kubernetes.io/component: celery-worker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.primary.service.ports.postgresql | default 5432 }}
+    {{- end }}
+    
+    # Allow monitoring
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.monitoring.prometheus.namespace | default "monitoring" }}
+      ports:
+        - protocol: TCP
+          port: 9187  # postgres_exporter
+    {{- end }}
+  
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+{{- end }}
+
+---
+# ========================================
+# REDIS NETWORK POLICY
+# ========================================
+{{- if .Values.redis.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache-security
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow connections from application pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.master.service.ports.redis | default 6379 }}
+    
+    # Allow connections from Celery workers
+    {{- if .Values.celery.worker.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+              app.kubernetes.io/component: celery-worker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.master.service.ports.redis | default 6379 }}
+    {{- end }}
+    
+    # Allow Redis cluster communication
+    {{- if .Values.redis.cluster.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.master.service.ports.redis | default 6379 }}
+        - protocol: TCP
+          port: 16379  # Redis cluster bus
+    {{- end }}
+    
+    # Allow monitoring
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.monitoring.prometheus.namespace | default "monitoring" }}
+      ports:
+        - protocol: TCP
+          port: 9121  # redis_exporter
+    {{- end }}
+  
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # Allow Redis cluster communication
+    {{- if .Values.redis.cluster.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.master.service.ports.redis | default 6379 }}
+        - protocol: TCP
+          port: 16379  # Redis cluster bus
+    {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# RABBITMQ NETWORK POLICY
+# ========================================
+{{- if .Values.rabbitmq.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: queue-security
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow connections from application pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.rabbitmq.service.ports.amqp | default 5672 }}
+    
+    # Allow connections from Celery workers
+    {{- if .Values.celery.worker.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+              app.kubernetes.io/component: celery-worker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.rabbitmq.service.ports.amqp | default 5672 }}
+    {{- end }}
+    
+    # Allow management UI access (restricted)
+    {{- if .Values.rabbitmq.management.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.networkPolicy.management.allowedNamespace | default "monitoring" }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.rabbitmq.service.ports.management | default 15672 }}
+    {{- end }}
+    
+    # Allow RabbitMQ clustering
+    {{- if .Values.rabbitmq.clustering.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rabbitmq
+      ports:
+        - protocol: TCP
+          port: {{ .Values.rabbitmq.service.ports.amqp | default 5672 }}
+        - protocol: TCP
+          port: 25672  # RabbitMQ clustering
+        - protocol: TCP
+          port: 4369   # EPMD
+    {{- end }}
+    
+    # Allow monitoring
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.monitoring.prometheus.namespace | default "monitoring" }}
+      ports:
+        - protocol: TCP
+          port: 15692  # rabbitmq_prometheus
+    {{- end }}
+  
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # Allow RabbitMQ clustering
+    {{- if .Values.rabbitmq.clustering.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rabbitmq
+      ports:
+        - protocol: TCP
+          port: {{ .Values.rabbitmq.service.ports.amqp | default 5672 }}
+        - protocol: TCP
+          port: 25672  # RabbitMQ clustering
+        - protocol: TCP
+          port: 4369   # EPMD
+    {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# CELERY WORKER NETWORK POLICY
+# ========================================
+{{- if .Values.celery.worker.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-security
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+      app.kubernetes.io/component: celery-worker
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow monitoring
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.monitoring.prometheus.namespace | default "monitoring" }}
+      ports:
+        - protocol: TCP
+          port: 9540  # celery_exporter
+    {{- end }}
+    
+    # Allow health checks
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8080
+  
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # Allow HTTPS traffic (external APIs)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    
+    # Allow PostgreSQL connection
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.primary.service.ports.postgresql | default 5432 }}
+    {{- end }}
+    
+    # Allow Redis connection
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.master.service.ports.redis | default 6379 }}
+    {{- end }}
+    
+    # Allow RabbitMQ connection
+    {{- if .Values.rabbitmq.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rabbitmq
+      ports:
+        - protocol: TCP
+          port: {{ .Values.rabbitmq.service.ports.amqp | default 5672 }}
+    {{- end }}
+
+{{- end }}
+
+---
+# ========================================
+# MONITORING NETWORK POLICY
+# ========================================
+{{- if .Values.monitoring.prometheus.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring
+  namespace: {{ .Values.monitoring.prometheus.namespace | default "monitoring" }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring-security
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow Grafana access
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+      ports:
+        - protocol: TCP
+          port: 9090
+    
+    # Allow AlertManager access
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: alertmanager
+      ports:
+        - protocol: TCP
+          port: 9090
+    
+    # Allow external access (if enabled)
+    {{- if .Values.monitoring.prometheus.externalAccess.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.networkPolicy.ingress.ingressNamespace | default "ingress-nginx" }}
+      ports:
+        - protocol: TCP
+          port: 9090
+    {{- end }}
+  
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # Allow scraping metrics from all namespaces
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 9090  # metrics port
+        - protocol: TCP
+          port: 8080  # health port
+        - protocol: TCP
+          port: 9121  # redis_exporter
+        - protocol: TCP
+          port: 9187  # postgres_exporter
+        - protocol: TCP
+          port: 15692 # rabbitmq_prometheus
+        - protocol: TCP
+          port: 9540  # celery_exporter
+
+{{- end }}
+
+---
+# ========================================
+# DENY ALL DEFAULT POLICY (Optional)
+# ========================================
+{{- if .Values.networkPolicy.denyAllDefault }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-deny-all
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: default-deny
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress/egress rules = deny all
+
+{{- end }}
+{{- end }}

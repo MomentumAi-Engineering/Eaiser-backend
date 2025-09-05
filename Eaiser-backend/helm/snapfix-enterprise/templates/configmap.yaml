@@ -1,0 +1,574 @@
+{{/*
+⚙️ SnapFix Enterprise - Advanced Configuration Template
+📋 Application Configuration, Environment Variables & Settings
+🔧 Multi-Environment Support with Feature Flags
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: configuration
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # Configuration versioning
+    config.kubernetes.io/version: "{{ .Values.app.version }}"
+    config.kubernetes.io/environment: "{{ .Values.global.environment }}"
+    config.kubernetes.io/last-updated: "{{ now | date "2006-01-02T15:04:05Z" }}"
+data:
+  # ========================================
+  # APPLICATION CONFIGURATION
+  # ========================================
+  
+  # Environment settings
+  APP_ENV: "{{ .Values.global.environment }}"
+  APP_NAME: "{{ .Values.app.name }}"
+  APP_VERSION: "{{ .Values.app.version }}"
+  APP_DEBUG: "{{ .Values.app.debug | default false }}"
+  
+  # Server configuration
+  HOST: "0.0.0.0"
+  PORT: "8000"
+  WORKERS: "{{ .Values.app.workers | default 4 }}"
+  WORKER_CLASS: "uvicorn.workers.UvicornWorker"
+  WORKER_CONNECTIONS: "{{ .Values.app.workerConnections | default 1000 }}"
+  MAX_REQUESTS: "{{ .Values.app.maxRequests | default 10000 }}"
+  MAX_REQUESTS_JITTER: "{{ .Values.app.maxRequestsJitter | default 1000 }}"
+  TIMEOUT: "{{ .Values.app.timeout | default 30 }}"
+  KEEPALIVE: "{{ .Values.app.keepalive | default 5 }}"
+  
+  # Logging configuration
+  LOG_LEVEL: "{{ .Values.app.logLevel | default "INFO" }}"
+  LOG_FORMAT: "{{ .Values.app.logFormat | default "json" }}"
+  LOG_FILE: "/app/logs/snapfix.log"
+  LOG_MAX_SIZE: "{{ .Values.app.logMaxSize | default "100MB" }}"
+  LOG_BACKUP_COUNT: "{{ .Values.app.logBackupCount | default 5 }}"
+  ACCESS_LOG: "{{ .Values.app.accessLog | default true }}"
+  ERROR_LOG: "/app/logs/error.log"
+  
+  # Security configuration
+  ALLOWED_HOSTS: "{{ .Values.app.allowedHosts | default "*" }}"
+  CORS_ORIGINS: "{{ .Values.app.corsOrigins | default "*" }}"
+  CORS_METHODS: "{{ .Values.app.corsMethods | default "GET,POST,PUT,DELETE,OPTIONS,PATCH" }}"
+  CORS_HEADERS: "{{ .Values.app.corsHeaders | default "*" }}"
+  CORS_CREDENTIALS: "{{ .Values.app.corsCredentials | default true }}"
+  
+  # Rate limiting
+  RATE_LIMIT_ENABLED: "{{ .Values.app.rateLimitEnabled | default true }}"
+  RATE_LIMIT_REQUESTS: "{{ .Values.app.rateLimitRequests | default 1000 }}"
+  RATE_LIMIT_WINDOW: "{{ .Values.app.rateLimitWindow | default 60 }}"
+  RATE_LIMIT_STORAGE: "redis"
+  
+  # API configuration
+  API_VERSION: "v1"
+  API_PREFIX: "/api/v1"
+  API_TITLE: "SnapFix Enterprise API"
+  API_DESCRIPTION: "Advanced Photo Editing Platform for Enterprise"
+  API_DOCS_URL: "/docs"
+  API_REDOC_URL: "/redoc"
+  API_OPENAPI_URL: "/openapi.json"
+  
+  # Feature flags
+  FEATURE_USER_REGISTRATION: "{{ .Values.app.features.userRegistration | default true }}"
+  FEATURE_SOCIAL_LOGIN: "{{ .Values.app.features.socialLogin | default true }}"
+  FEATURE_FILE_UPLOAD: "{{ .Values.app.features.fileUpload | default true }}"
+  FEATURE_REAL_TIME_EDITING: "{{ .Values.app.features.realTimeEditing | default true }}"
+  FEATURE_AI_ENHANCEMENT: "{{ .Values.app.features.aiEnhancement | default true }}"
+  FEATURE_BATCH_PROCESSING: "{{ .Values.app.features.batchProcessing | default true }}"
+  FEATURE_COLLABORATION: "{{ .Values.app.features.collaboration | default true }}"
+  FEATURE_ANALYTICS: "{{ .Values.app.features.analytics | default true }}"
+  FEATURE_NOTIFICATIONS: "{{ .Values.app.features.notifications | default true }}"
+  FEATURE_WEBHOOKS: "{{ .Values.app.features.webhooks | default true }}"
+  
+  # ========================================
+  # DATABASE CONFIGURATION
+  # ========================================
+  
+  # PostgreSQL settings
+  DB_ENGINE: "postgresql"
+  DB_HOST: "{{ .Values.postgresql.primary.service.name | default "postgresql-primary" }}"
+  DB_PORT: "{{ .Values.postgresql.primary.service.ports.postgresql | default 5432 }}"
+  DB_NAME: "{{ .Values.postgresql.auth.database }}"
+  DB_USER: "{{ .Values.postgresql.auth.username }}"
+  DB_POOL_SIZE: "{{ .Values.app.database.poolSize | default 20 }}"
+  DB_MAX_OVERFLOW: "{{ .Values.app.database.maxOverflow | default 30 }}"
+  DB_POOL_TIMEOUT: "{{ .Values.app.database.poolTimeout | default 30 }}"
+  DB_POOL_RECYCLE: "{{ .Values.app.database.poolRecycle | default 3600 }}"
+  DB_ECHO: "{{ .Values.app.database.echo | default false }}"
+  
+  # Read replica configuration
+  DB_READ_REPLICA_ENABLED: "{{ .Values.postgresql.readReplicas.replicaCount | default 0 | ne 0 }}"
+  DB_READ_REPLICA_HOST: "{{ .Values.postgresql.readReplicas.service.name | default "postgresql-read" }}"
+  DB_READ_REPLICA_PORT: "{{ .Values.postgresql.readReplicas.service.ports.postgresql | default 5432 }}"
+  
+  # MongoDB settings
+  MONGO_HOST: "{{ .Values.mongodb.service.name | default "mongodb" }}"
+  MONGO_PORT: "{{ .Values.mongodb.service.ports.mongodb | default 27017 }}"
+  MONGO_DATABASE: "{{ .Values.mongodb.auth.database }}"
+  MONGO_USERNAME: "{{ .Values.mongodb.auth.username }}"
+  MONGO_REPLICA_SET: "{{ .Values.mongodb.replicaSetName | default "rs0" }}"
+  MONGO_MAX_POOL_SIZE: "{{ .Values.app.mongodb.maxPoolSize | default 100 }}"
+  MONGO_MIN_POOL_SIZE: "{{ .Values.app.mongodb.minPoolSize | default 10 }}"
+  MONGO_MAX_IDLE_TIME: "{{ .Values.app.mongodb.maxIdleTime | default 30000 }}"
+  
+  # ========================================
+  # CACHE CONFIGURATION
+  # ========================================
+  
+  # Redis settings
+  REDIS_HOST: "{{ .Values.redis.master.service.name | default "redis-master" }}"
+  REDIS_PORT: "{{ .Values.redis.master.service.ports.redis | default 6379 }}"
+  REDIS_DB: "{{ .Values.app.redis.database | default 0 }}"
+  REDIS_MAX_CONNECTIONS: "{{ .Values.app.redis.maxConnections | default 100 }}"
+  REDIS_SOCKET_TIMEOUT: "{{ .Values.app.redis.socketTimeout | default 5 }}"
+  REDIS_SOCKET_CONNECT_TIMEOUT: "{{ .Values.app.redis.socketConnectTimeout | default 5 }}"
+  REDIS_RETRY_ON_TIMEOUT: "{{ .Values.app.redis.retryOnTimeout | default true }}"
+  REDIS_HEALTH_CHECK_INTERVAL: "{{ .Values.app.redis.healthCheckInterval | default 30 }}"
+  
+  # Redis Cluster settings
+  REDIS_CLUSTER_ENABLED: "{{ .Values.redis.cluster.enabled | default false }}"
+  REDIS_CLUSTER_NODES: "{{ .Values.app.redis.clusterNodes | default "redis-cluster:6379" }}"
+  REDIS_CLUSTER_SKIP_FULL_COVERAGE_CHECK: "{{ .Values.app.redis.skipFullCoverageCheck | default true }}"
+  
+  # Cache settings
+  CACHE_DEFAULT_TIMEOUT: "{{ .Values.app.cache.defaultTimeout | default 300 }}"
+  CACHE_KEY_PREFIX: "{{ .Values.app.cache.keyPrefix | default "snapfix" }}"
+  CACHE_VERSION: "{{ .Values.app.cache.version | default 1 }}"
+  
+  # ========================================
+  # MESSAGE QUEUE CONFIGURATION
+  # ========================================
+  
+  # RabbitMQ settings
+  RABBITMQ_HOST: "{{ .Values.rabbitmq.service.name | default "rabbitmq" }}"
+  RABBITMQ_PORT: "{{ .Values.rabbitmq.service.ports.amqp | default 5672 }}"
+  RABBITMQ_VHOST: "{{ .Values.rabbitmq.auth.vhost | default "/" }}"
+  RABBITMQ_USERNAME: "{{ .Values.rabbitmq.auth.username }}"
+  RABBITMQ_MANAGEMENT_PORT: "{{ .Values.rabbitmq.service.ports.manager | default 15672 }}"
+  
+  # Celery configuration
+  CELERY_BROKER_URL: "pyamqp://{{ .Values.rabbitmq.auth.username }}@{{ .Values.rabbitmq.service.name | default "rabbitmq" }}:{{ .Values.rabbitmq.service.ports.amqp | default 5672 }}/{{ .Values.rabbitmq.auth.vhost | default "/" }}"
+  CELERY_RESULT_BACKEND: "redis://{{ .Values.redis.master.service.name | default "redis-master" }}:{{ .Values.redis.master.service.ports.redis | default 6379 }}/1"
+  CELERY_TASK_SERIALIZER: "{{ .Values.app.celery.taskSerializer | default "json" }}"
+  CELERY_RESULT_SERIALIZER: "{{ .Values.app.celery.resultSerializer | default "json" }}"
+  CELERY_ACCEPT_CONTENT: "{{ .Values.app.celery.acceptContent | default "json" }}"
+  CELERY_TIMEZONE: "{{ .Values.app.celery.timezone | default "UTC" }}"
+  CELERY_ENABLE_UTC: "{{ .Values.app.celery.enableUtc | default true }}"
+  CELERY_TASK_TRACK_STARTED: "{{ .Values.app.celery.taskTrackStarted | default true }}"
+  CELERY_TASK_TIME_LIMIT: "{{ .Values.app.celery.taskTimeLimit | default 300 }}"
+  CELERY_TASK_SOFT_TIME_LIMIT: "{{ .Values.app.celery.taskSoftTimeLimit | default 240 }}"
+  CELERY_WORKER_PREFETCH_MULTIPLIER: "{{ .Values.app.celery.workerPrefetchMultiplier | default 1 }}"
+  CELERY_WORKER_MAX_TASKS_PER_CHILD: "{{ .Values.app.celery.workerMaxTasksPerChild | default 1000 }}"
+  
+  # ========================================
+  # MONITORING CONFIGURATION
+  # ========================================
+  
+  # Prometheus metrics
+  PROMETHEUS_ENABLED: "{{ .Values.monitoring.prometheus.enabled | default true }}"
+  METRICS_PORT: "9090"
+  METRICS_PATH: "/metrics"
+  METRICS_NAMESPACE: "snapfix"
+  METRICS_SUBSYSTEM: "enterprise"
+  
+  # Jaeger tracing
+  JAEGER_ENABLED: "{{ .Values.tracing.jaeger.enabled | default true }}"
+  JAEGER_AGENT_HOST: "{{ .Values.tracing.jaeger.agent.host | default "jaeger-agent" }}"
+  JAEGER_AGENT_PORT: "{{ .Values.tracing.jaeger.agent.port | default 6831 }}"
+  JAEGER_COLLECTOR_ENDPOINT: "{{ .Values.tracing.jaeger.collector.endpoint | default "http://jaeger-collector:14268/api/traces" }}"
+  JAEGER_SERVICE_NAME: "snapfix-enterprise"
+  JAEGER_SAMPLER_TYPE: "{{ .Values.tracing.jaeger.samplerType | default "probabilistic" }}"
+  JAEGER_SAMPLER_PARAM: "{{ .Values.tracing.jaeger.samplerParam | default 0.1 }}"
+  
+  # Health checks
+  HEALTH_CHECK_ENABLED: "true"
+  HEALTH_CHECK_PATH: "/health"
+  HEALTH_CHECK_TIMEOUT: "{{ .Values.app.healthCheck.timeout | default 5 }}"
+  
+  # ========================================
+  # STORAGE CONFIGURATION
+  # ========================================
+  
+  # File storage
+  STORAGE_BACKEND: "{{ .Values.app.storage.backend | default "s3" }}"
+  STORAGE_BUCKET: "{{ .Values.app.storage.bucket | default "snapfix-enterprise-files" }}"
+  STORAGE_REGION: "{{ .Values.app.storage.region | default .Values.global.region }}"
+  STORAGE_ENDPOINT: "{{ .Values.app.storage.endpoint | default "" }}"
+  STORAGE_USE_SSL: "{{ .Values.app.storage.useSSL | default true }}"
+  STORAGE_SIGNATURE_VERSION: "{{ .Values.app.storage.signatureVersion | default "s3v4" }}"
+  
+  # File upload settings
+  MAX_FILE_SIZE: "{{ .Values.app.upload.maxFileSize | default "100MB" }}"
+  ALLOWED_FILE_TYPES: "{{ .Values.app.upload.allowedFileTypes | default "jpg,jpeg,png,gif,bmp,tiff,webp" }}"
+  UPLOAD_PATH: "{{ .Values.app.upload.path | default "/uploads" }}"
+  TEMP_PATH: "{{ .Values.app.upload.tempPath | default "/tmp/uploads" }}"
+  
+  # ========================================
+  # EXTERNAL SERVICES CONFIGURATION
+  # ========================================
+  
+  # Email settings
+  EMAIL_BACKEND: "{{ .Values.app.email.backend | default "smtp" }}"
+  EMAIL_HOST: "{{ .Values.app.email.host | default "localhost" }}"
+  EMAIL_PORT: "{{ .Values.app.email.port | default 587 }}"
+  EMAIL_USE_TLS: "{{ .Values.app.email.useTLS | default true }}"
+  EMAIL_USE_SSL: "{{ .Values.app.email.useSSL | default false }}"
+  EMAIL_FROM: "{{ .Values.app.email.from | default "noreply@snapfix.enterprise.com" }}"
+  
+  # SMS settings
+  SMS_BACKEND: "{{ .Values.app.sms.backend | default "twilio" }}"
+  SMS_FROM: "{{ .Values.app.sms.from | default "+1234567890" }}"
+  
+  # Push notification settings
+  PUSH_NOTIFICATIONS_ENABLED: "{{ .Values.app.pushNotifications.enabled | default true }}"
+  FCM_SERVER_KEY: "{{ .Values.app.pushNotifications.fcmServerKey | default "" }}"
+  APNS_CERTIFICATE_PATH: "{{ .Values.app.pushNotifications.apnsCertificatePath | default "" }}"
+  
+  # Social login settings
+  GOOGLE_OAUTH_CLIENT_ID: "{{ .Values.app.socialLogin.google.clientId | default "" }}"
+  FACEBOOK_APP_ID: "{{ .Values.app.socialLogin.facebook.appId | default "" }}"
+  GITHUB_CLIENT_ID: "{{ .Values.app.socialLogin.github.clientId | default "" }}"
+  
+  # Payment gateway settings
+  STRIPE_PUBLISHABLE_KEY: "{{ .Values.app.payment.stripe.publishableKey | default "" }}"
+  PAYPAL_CLIENT_ID: "{{ .Values.app.payment.paypal.clientId | default "" }}"
+  
+  # ========================================
+  # AI/ML CONFIGURATION
+  # ========================================
+  
+  # AI service settings
+  AI_SERVICE_ENABLED: "{{ .Values.app.ai.enabled | default true }}"
+  AI_SERVICE_ENDPOINT: "{{ .Values.app.ai.endpoint | default "http://ai-service:8080" }}"
+  AI_SERVICE_TIMEOUT: "{{ .Values.app.ai.timeout | default 30 }}"
+  AI_SERVICE_MAX_RETRIES: "{{ .Values.app.ai.maxRetries | default 3 }}"
+  
+  # OpenAI settings
+  OPENAI_API_BASE: "{{ .Values.app.openai.apiBase | default "https://api.openai.com/v1" }}"
+  OPENAI_MODEL: "{{ .Values.app.openai.model | default "gpt-3.5-turbo" }}"
+  OPENAI_MAX_TOKENS: "{{ .Values.app.openai.maxTokens | default 1000 }}"
+  OPENAI_TEMPERATURE: "{{ .Values.app.openai.temperature | default 0.7 }}"
+  
+  # ========================================
+  # PERFORMANCE CONFIGURATION
+  # ========================================
+  
+  # Connection pooling
+  CONNECTION_POOL_SIZE: "{{ .Values.app.performance.connectionPoolSize | default 20 }}"
+  CONNECTION_POOL_MAX_OVERFLOW: "{{ .Values.app.performance.connectionPoolMaxOverflow | default 30 }}"
+  CONNECTION_POOL_TIMEOUT: "{{ .Values.app.performance.connectionPoolTimeout | default 30 }}"
+  
+  # Async settings
+  ASYNC_POOL_SIZE: "{{ .Values.app.performance.asyncPoolSize | default 100 }}"
+  ASYNC_MAX_WORKERS: "{{ .Values.app.performance.asyncMaxWorkers | default 50 }}"
+  
+  # Compression
+  COMPRESSION_ENABLED: "{{ .Values.app.performance.compressionEnabled | default true }}"
+  COMPRESSION_LEVEL: "{{ .Values.app.performance.compressionLevel | default 6 }}"
+  COMPRESSION_MIN_SIZE: "{{ .Values.app.performance.compressionMinSize | default 1024 }}"
+  
+  # ========================================
+  # SECURITY CONFIGURATION
+  # ========================================
+  
+  # JWT settings
+  JWT_ALGORITHM: "{{ .Values.app.jwt.algorithm | default "HS256" }}"
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "{{ .Values.app.jwt.accessTokenExpireMinutes | default 30 }}"
+  JWT_REFRESH_TOKEN_EXPIRE_DAYS: "{{ .Values.app.jwt.refreshTokenExpireDays | default 7 }}"
+  JWT_ISSUER: "{{ .Values.app.jwt.issuer | default "snapfix-enterprise" }}"
+  JWT_AUDIENCE: "{{ .Values.app.jwt.audience | default "snapfix-users" }}"
+  
+  # OAuth2 settings
+  OAUTH2_TOKEN_EXPIRE_SECONDS: "{{ .Values.app.oauth2.tokenExpireSeconds | default 3600 }}"
+  OAUTH2_REFRESH_TOKEN_EXPIRE_SECONDS: "{{ .Values.app.oauth2.refreshTokenExpireSeconds | default 604800 }}"
+  
+  # Password policy
+  PASSWORD_MIN_LENGTH: "{{ .Values.app.password.minLength | default 8 }}"
+  PASSWORD_REQUIRE_UPPERCASE: "{{ .Values.app.password.requireUppercase | default true }}"
+  PASSWORD_REQUIRE_LOWERCASE: "{{ .Values.app.password.requireLowercase | default true }}"
+  PASSWORD_REQUIRE_NUMBERS: "{{ .Values.app.password.requireNumbers | default true }}"
+  PASSWORD_REQUIRE_SYMBOLS: "{{ .Values.app.password.requireSymbols | default true }}"
+  
+  # Session settings
+  SESSION_TIMEOUT: "{{ .Values.app.session.timeout | default 3600 }}"
+  SESSION_COOKIE_SECURE: "{{ .Values.app.session.cookieSecure | default true }}"
+  SESSION_COOKIE_HTTPONLY: "{{ .Values.app.session.cookieHttpOnly | default true }}"
+  SESSION_COOKIE_SAMESITE: "{{ .Values.app.session.cookieSameSite | default "Lax" }}"
+  
+  # ========================================
+  # DEVELOPMENT CONFIGURATION
+  # ========================================
+  {{- if eq .Values.global.environment "development" }}
+  
+  # Development-specific settings
+  DEBUG: "true"
+  RELOAD: "true"
+  HOT_RELOAD: "true"
+  PROFILING_ENABLED: "true"
+  SQL_ECHO: "true"
+  
+  # Development tools
+  SWAGGER_UI_ENABLED: "true"
+  REDOC_ENABLED: "true"
+  DEBUG_TOOLBAR_ENABLED: "true"
+  
+  {{- end }}
+  
+  # ========================================
+  # CUSTOM CONFIGURATION
+  # ========================================
+  {{- with .Values.app.customConfig }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+
+---
+{{/*
+📋 Fluent Bit Configuration for Log Shipping
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: logging
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         1
+        Log_Level     info
+        Daemon        off
+        Parsers_File  parsers.conf
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+    
+    [INPUT]
+        Name              tail
+        Path              /app/logs/*.log
+        Parser            json
+        Tag               snapfix.app.*
+        Refresh_Interval  5
+        Mem_Buf_Limit     50MB
+        Skip_Long_Lines   On
+        Skip_Empty_Lines  On
+    
+    [FILTER]
+        Name                kubernetes
+        Match               snapfix.app.*
+        Kube_URL            https://kubernetes.default.svc:443
+        Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+        Kube_Tag_Prefix     snapfix.app.
+        Merge_Log           On
+        Merge_Log_Key       log_processed
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude Off
+    
+    [FILTER]
+        Name    modify
+        Match   snapfix.app.*
+        Add     service snapfix-enterprise
+        Add     environment {{ .Values.global.environment }}
+        Add     version {{ .Values.app.version }}
+        Add     namespace {{ .Release.Namespace }}
+    
+    [OUTPUT]
+        Name            es
+        Match           snapfix.app.*
+        Host            ${FLUENT_ELASTICSEARCH_HOST}
+        Port            ${FLUENT_ELASTICSEARCH_PORT}
+        Index           snapfix-logs
+        Type            _doc
+        Logstash_Format On
+        Logstash_Prefix snapfix
+        Retry_Limit     5
+        Buffer_Size     5MB
+        Workers         2
+  
+  parsers.conf: |
+    [PARSER]
+        Name        json
+        Format      json
+        Time_Key    timestamp
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+        Time_Keep   On
+    
+    [PARSER]
+        Name        docker
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+        Time_Keep   On
+
+---
+{{/*
+🎛️ Application Configuration File
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-app-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app-configuration
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  app.yaml: |
+    # SnapFix Enterprise Application Configuration
+    application:
+      name: {{ .Values.app.name }}
+      version: {{ .Values.app.version }}
+      environment: {{ .Values.global.environment }}
+      debug: {{ .Values.app.debug | default false }}
+    
+    server:
+      host: 0.0.0.0
+      port: 8000
+      workers: {{ .Values.app.workers | default 4 }}
+      timeout: {{ .Values.app.timeout | default 30 }}
+      keepalive: {{ .Values.app.keepalive | default 5 }}
+    
+    database:
+      primary:
+        host: {{ .Values.postgresql.primary.service.name | default "postgresql-primary" }}
+        port: {{ .Values.postgresql.primary.service.ports.postgresql | default 5432 }}
+        name: {{ .Values.postgresql.auth.database }}
+        user: {{ .Values.postgresql.auth.username }}
+        pool_size: {{ .Values.app.database.poolSize | default 20 }}
+        max_overflow: {{ .Values.app.database.maxOverflow | default 30 }}
+      {{- if .Values.postgresql.readReplicas.replicaCount }}
+      read_replica:
+        host: {{ .Values.postgresql.readReplicas.service.name | default "postgresql-read" }}
+        port: {{ .Values.postgresql.readReplicas.service.ports.postgresql | default 5432 }}
+        name: {{ .Values.postgresql.auth.database }}
+        user: {{ .Values.postgresql.auth.username }}
+      {{- end }}
+    
+    cache:
+      redis:
+        host: {{ .Values.redis.master.service.name | default "redis-master" }}
+        port: {{ .Values.redis.master.service.ports.redis | default 6379 }}
+        db: {{ .Values.app.redis.database | default 0 }}
+        max_connections: {{ .Values.app.redis.maxConnections | default 100 }}
+        {{- if .Values.redis.cluster.enabled }}
+        cluster:
+          enabled: true
+          nodes: {{ .Values.app.redis.clusterNodes | default "redis-cluster:6379" }}
+        {{- end }}
+    
+    queue:
+      rabbitmq:
+        host: {{ .Values.rabbitmq.service.name | default "rabbitmq" }}
+        port: {{ .Values.rabbitmq.service.ports.amqp | default 5672 }}
+        vhost: {{ .Values.rabbitmq.auth.vhost | default "/" }}
+        username: {{ .Values.rabbitmq.auth.username }}
+      
+      celery:
+        task_serializer: {{ .Values.app.celery.taskSerializer | default "json" }}
+        result_serializer: {{ .Values.app.celery.resultSerializer | default "json" }}
+        timezone: {{ .Values.app.celery.timezone | default "UTC" }}
+        task_time_limit: {{ .Values.app.celery.taskTimeLimit | default 300 }}
+        worker_prefetch_multiplier: {{ .Values.app.celery.workerPrefetchMultiplier | default 1 }}
+    
+    monitoring:
+      prometheus:
+        enabled: {{ .Values.monitoring.prometheus.enabled | default true }}
+        port: 9090
+        path: /metrics
+      
+      jaeger:
+        enabled: {{ .Values.tracing.jaeger.enabled | default true }}
+        agent_host: {{ .Values.tracing.jaeger.agent.host | default "jaeger-agent" }}
+        agent_port: {{ .Values.tracing.jaeger.agent.port | default 6831 }}
+        service_name: snapfix-enterprise
+    
+    security:
+      jwt:
+        algorithm: {{ .Values.app.jwt.algorithm | default "HS256" }}
+        access_token_expire_minutes: {{ .Values.app.jwt.accessTokenExpireMinutes | default 30 }}
+        refresh_token_expire_days: {{ .Values.app.jwt.refreshTokenExpireDays | default 7 }}
+      
+      cors:
+        origins: {{ .Values.app.corsOrigins | default "*" }}
+        methods: {{ .Values.app.corsMethods | default "GET,POST,PUT,DELETE,OPTIONS,PATCH" }}
+        headers: {{ .Values.app.corsHeaders | default "*" }}
+        credentials: {{ .Values.app.corsCredentials | default true }}
+    
+    features:
+      user_registration: {{ .Values.app.features.userRegistration | default true }}
+      social_login: {{ .Values.app.features.socialLogin | default true }}
+      file_upload: {{ .Values.app.features.fileUpload | default true }}
+      real_time_editing: {{ .Values.app.features.realTimeEditing | default true }}
+      ai_enhancement: {{ .Values.app.features.aiEnhancement | default true }}
+      batch_processing: {{ .Values.app.features.batchProcessing | default true }}
+      collaboration: {{ .Values.app.features.collaboration | default true }}
+      analytics: {{ .Values.app.features.analytics | default true }}
+      notifications: {{ .Values.app.features.notifications | default true }}
+      webhooks: {{ .Values.app.features.webhooks | default true }}
+  
+  logging.yaml: |
+    version: 1
+    disable_existing_loggers: false
+    
+    formatters:
+      json:
+        format: '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s", "module": "%(module)s", "function": "%(funcName)s", "line": %(lineno)d}'
+        datefmt: '%Y-%m-%dT%H:%M:%S.%fZ'
+      
+      standard:
+        format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+        datefmt: '%Y-%m-%d %H:%M:%S'
+    
+    handlers:
+      console:
+        class: logging.StreamHandler
+        level: {{ .Values.app.logLevel | default "INFO" }}
+        formatter: {{ .Values.app.logFormat | default "json" }}
+        stream: ext://sys.stdout
+      
+      file:
+        class: logging.handlers.RotatingFileHandler
+        level: {{ .Values.app.logLevel | default "INFO" }}
+        formatter: {{ .Values.app.logFormat | default "json" }}
+        filename: /app/logs/snapfix.log
+        maxBytes: {{ .Values.app.logMaxSize | default 104857600 }}  # 100MB
+        backupCount: {{ .Values.app.logBackupCount | default 5 }}
+      
+      error_file:
+        class: logging.handlers.RotatingFileHandler
+        level: ERROR
+        formatter: {{ .Values.app.logFormat | default "json" }}
+        filename: /app/logs/error.log
+        maxBytes: {{ .Values.app.logMaxSize | default 104857600 }}  # 100MB
+        backupCount: {{ .Values.app.logBackupCount | default 5 }}
+    
+    loggers:
+      snapfix:
+        level: {{ .Values.app.logLevel | default "INFO" }}
+        handlers: [console, file, error_file]
+        propagate: false
+      
+      uvicorn:
+        level: {{ .Values.app.logLevel | default "INFO" }}
+        handlers: [console, file]
+        propagate: false
+      
+      sqlalchemy:
+        level: {{ if .Values.app.database.echo }}DEBUG{{ else }}WARNING{{ end }}
+        handlers: [console, file]
+        propagate: false
+      
+      celery:
+        level: {{ .Values.app.logLevel | default "INFO" }}
+        handlers: [console, file]
+        propagate: false
+    
+    root:
+      level: {{ .Values.app.logLevel | default "INFO" }}
+      handlers: [console, file, error_file]

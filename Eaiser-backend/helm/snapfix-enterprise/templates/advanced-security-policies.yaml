@@ -1,0 +1,744 @@
+# Advanced Security Policies and Threat Detection for SnapFix Enterprise
+# This template provides comprehensive security policies, threat detection, and compliance features
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-security-policies
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+data:
+  security-policies.yaml: |
+    # Advanced Security Policies Configuration
+    security_policies:
+      # Threat Detection and Prevention
+      threat_detection:
+        enabled: {{ .Values.security.threatDetection.enabled | default true }}
+        
+        # Anomaly Detection
+        anomaly_detection:
+          enabled: {{ .Values.security.threatDetection.anomalyDetection.enabled | default true }}
+          sensitivity: "{{ .Values.security.threatDetection.anomalyDetection.sensitivity | default "medium" }}" # low, medium, high
+          learning_period_days: {{ .Values.security.threatDetection.anomalyDetection.learningPeriodDays | default 7 }}
+          
+          # Behavioral Analysis
+          behavioral_analysis:
+            user_activity_patterns: {{ .Values.security.threatDetection.anomalyDetection.userActivityPatterns | default true }}
+            api_usage_patterns: {{ .Values.security.threatDetection.anomalyDetection.apiUsagePatterns | default true }}
+            geographic_anomalies: {{ .Values.security.threatDetection.anomalyDetection.geographicAnomalies | default true }}
+            time_based_anomalies: {{ .Values.security.threatDetection.anomalyDetection.timeBasedAnomalies | default true }}
+        
+        # Intrusion Detection System (IDS)
+        ids:
+          enabled: {{ .Values.security.threatDetection.ids.enabled | default true }}
+          
+          # Signature-based Detection
+          signature_detection:
+            enabled: {{ .Values.security.threatDetection.ids.signatureDetection.enabled | default true }}
+            update_interval_hours: {{ .Values.security.threatDetection.ids.signatureDetection.updateIntervalHours | default 24 }}
+            
+            # Known Attack Patterns
+            attack_patterns:
+              sql_injection:
+                enabled: true
+                severity: "high"
+                patterns:
+                  - "(?i)(union|select|insert|update|delete|drop|create|alter)\\s+"
+                  - "(?i)(exec|execute|sp_|xp_)\\s*\\("
+                  - "(?i)(or|and)\\s+\\d+\\s*=\\s*\\d+"
+                  - "(?i)'\\s*(or|and)\\s*'\\w+'"
+              
+              xss_attacks:
+                enabled: true
+                severity: "high"
+                patterns:
+                  - "(?i)<script[^>]*>.*?</script>"
+                  - "(?i)javascript:\\s*"
+                  - "(?i)on\\w+\\s*=\\s*['\"].*?['\"]?"
+                  - "(?i)<iframe[^>]*>.*?</iframe>"
+              
+              command_injection:
+                enabled: true
+                severity: "critical"
+                patterns:
+                  - "(?i)(;|\\||&|`|\\$\\().*?(rm|cat|ls|ps|kill|chmod|chown)"
+                  - "(?i)(wget|curl|nc|netcat|telnet|ssh)\\s+"
+                  - "(?i)/bin/(sh|bash|csh|tcsh|zsh)"
+              
+              path_traversal:
+                enabled: true
+                severity: "medium"
+                patterns:
+                  - "(?i)\\.\\.[\\/\\\\]"
+                  - "(?i)%2e%2e[\\/\\\\]"
+                  - "(?i)(etc/passwd|boot\\.ini|win\\.ini)"
+        
+        # Machine Learning-based Detection
+        ml_detection:
+          enabled: {{ .Values.security.threatDetection.mlDetection.enabled | default true }}
+          model_update_interval_hours: {{ .Values.security.threatDetection.mlDetection.modelUpdateIntervalHours | default 168 }} # Weekly
+          
+          # Features for ML Model
+          features:
+            request_frequency: true
+            request_size: true
+            response_time: true
+            error_rate: true
+            user_agent_entropy: true
+            payload_entropy: true
+            geographic_location: true
+            time_of_day: true
+      
+      # Data Loss Prevention (DLP)
+      dlp:
+        enabled: {{ .Values.security.dlp.enabled | default true }}
+        
+        # Sensitive Data Detection
+        sensitive_data_detection:
+          enabled: {{ .Values.security.dlp.sensitiveDataDetection.enabled | default true }}
+          
+          # Data Types to Monitor
+          data_types:
+            credit_cards:
+              enabled: true
+              patterns:
+                - "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3[0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\\b"
+              action: "block" # block, alert, redact
+            
+            ssn:
+              enabled: true
+              patterns:
+                - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+                - "\\b\\d{9}\\b"
+              action: "block"
+            
+            email_addresses:
+              enabled: true
+              patterns:
+                - "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+              action: "alert"
+            
+            phone_numbers:
+              enabled: true
+              patterns:
+                - "\\b\\+?1?[-.]?\\(?\\d{3}\\)?[-.]?\\d{3}[-.]?\\d{4}\\b"
+              action: "alert"
+            
+            api_keys:
+              enabled: true
+              patterns:
+                - "(?i)(api[_-]?key|access[_-]?token|secret[_-]?key)\\s*[:=]\\s*['\"]?([a-zA-Z0-9_-]{20,})['\"]?"
+              action: "block"
+        
+        # Data Exfiltration Prevention
+        exfiltration_prevention:
+          enabled: {{ .Values.security.dlp.exfiltrationPrevention.enabled | default true }}
+          max_data_transfer_mb: {{ .Values.security.dlp.exfiltrationPrevention.maxDataTransferMb | default 100 }}
+          suspicious_transfer_threshold_mb: {{ .Values.security.dlp.exfiltrationPrevention.suspiciousTransferThresholdMb | default 50 }}
+      
+      # Compliance and Governance
+      compliance:
+        # GDPR Compliance
+        gdpr:
+          enabled: {{ .Values.security.compliance.gdpr.enabled | default true }}
+          data_retention_days: {{ .Values.security.compliance.gdpr.dataRetentionDays | default 365 }}
+          consent_tracking: {{ .Values.security.compliance.gdpr.consentTracking | default true }}
+          right_to_be_forgotten: {{ .Values.security.compliance.gdpr.rightToBeForgotten | default true }}
+          data_portability: {{ .Values.security.compliance.gdpr.dataPortability | default true }}
+        
+        # HIPAA Compliance (if handling health data)
+        hipaa:
+          enabled: {{ .Values.security.compliance.hipaa.enabled | default false }}
+          encryption_at_rest: {{ .Values.security.compliance.hipaa.encryptionAtRest | default true }}
+          encryption_in_transit: {{ .Values.security.compliance.hipaa.encryptionInTransit | default true }}
+          access_logging: {{ .Values.security.compliance.hipaa.accessLogging | default true }}
+          audit_trail: {{ .Values.security.compliance.hipaa.auditTrail | default true }}
+        
+        # SOC 2 Compliance
+        soc2:
+          enabled: {{ .Values.security.compliance.soc2.enabled | default true }}
+          security_controls: {{ .Values.security.compliance.soc2.securityControls | default true }}
+          availability_monitoring: {{ .Values.security.compliance.soc2.availabilityMonitoring | default true }}
+          processing_integrity: {{ .Values.security.compliance.soc2.processingIntegrity | default true }}
+          confidentiality: {{ .Values.security.compliance.soc2.confidentiality | default true }}
+          privacy: {{ .Values.security.compliance.soc2.privacy | default true }}
+      
+      # Security Incident Response
+      incident_response:
+        enabled: {{ .Values.security.incidentResponse.enabled | default true }}
+        
+        # Automated Response Actions
+        automated_response:
+          enabled: {{ .Values.security.incidentResponse.automatedResponse.enabled | default true }}
+          
+          # Response Actions by Severity
+          actions:
+            critical:
+              - "block_ip"
+              - "revoke_tokens"
+              - "alert_security_team"
+              - "create_incident_ticket"
+            
+            high:
+              - "throttle_requests"
+              - "alert_security_team"
+              - "log_detailed_info"
+            
+            medium:
+              - "increase_monitoring"
+              - "log_incident"
+            
+            low:
+              - "log_incident"
+        
+        # Incident Escalation
+        escalation:
+          enabled: {{ .Values.security.incidentResponse.escalation.enabled | default true }}
+          escalation_time_minutes: {{ .Values.security.incidentResponse.escalation.escalationTimeMinutes | default 30 }}
+          
+          # Notification Channels
+          notifications:
+            email:
+              enabled: {{ .Values.security.incidentResponse.notifications.email.enabled | default true }}
+              recipients: {{ .Values.security.incidentResponse.notifications.email.recipients | default (list "security@company.com") | toJson }}
+            
+            slack:
+              enabled: {{ .Values.security.incidentResponse.notifications.slack.enabled | default true }}
+              webhook_url: "{{ .Values.security.incidentResponse.notifications.slack.webhookUrl | default "" }}"
+              channel: "{{ .Values.security.incidentResponse.notifications.slack.channel | default "#security-alerts" }}"
+            
+            pagerduty:
+              enabled: {{ .Values.security.incidentResponse.notifications.pagerduty.enabled | default false }}
+              integration_key: "{{ .Values.security.incidentResponse.notifications.pagerduty.integrationKey | default "" }}"
+      
+      # Security Metrics and KPIs
+      metrics:
+        enabled: {{ .Values.security.metrics.enabled | default true }}
+        
+        # Key Performance Indicators
+        kpis:
+          # Security Events
+          security_events_per_hour: true
+          blocked_attacks_per_hour: true
+          false_positive_rate: true
+          
+          # Authentication Metrics
+          failed_login_attempts: true
+          successful_authentications: true
+          token_refresh_rate: true
+          
+          # API Security Metrics
+          api_abuse_attempts: true
+          rate_limit_violations: true
+          unauthorized_access_attempts: true
+          
+          # Compliance Metrics
+          gdpr_requests_processed: true
+          data_retention_compliance: true
+          audit_log_completeness: true
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-threat-detection-rules
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+data:
+  threat-detection-rules.yaml: |
+    # Threat Detection Rules Configuration
+    threat_detection_rules:
+      # OWASP Top 10 Protection Rules
+      owasp_top10:
+        # A01:2021 – Broken Access Control
+        broken_access_control:
+          - rule_id: "BAC001"
+            name: "Unauthorized Admin Access Attempt"
+            description: "Detects attempts to access admin endpoints without proper authorization"
+            pattern: "(?i)(/admin|/administrator|/wp-admin|/phpmyadmin)"
+            severity: "high"
+            action: "block"
+          
+          - rule_id: "BAC002"
+            name: "Privilege Escalation Attempt"
+            description: "Detects attempts to escalate privileges"
+            pattern: "(?i)(role|permission|privilege).*?(admin|root|superuser)"
+            severity: "critical"
+            action: "block"
+        
+        # A02:2021 – Cryptographic Failures
+        cryptographic_failures:
+          - rule_id: "CF001"
+            name: "Weak Encryption Algorithm"
+            description: "Detects use of weak encryption algorithms"
+            pattern: "(?i)(md5|sha1|des|rc4)"
+            severity: "medium"
+            action: "alert"
+        
+        # A03:2021 – Injection
+        injection:
+          - rule_id: "INJ001"
+            name: "SQL Injection Attempt"
+            description: "Detects SQL injection patterns"
+            pattern: "(?i)(union|select|insert|update|delete|drop).*?(from|where|order by)"
+            severity: "high"
+            action: "block"
+          
+          - rule_id: "INJ002"
+            name: "NoSQL Injection Attempt"
+            description: "Detects NoSQL injection patterns"
+            pattern: "(?i)(\\$where|\\$ne|\\$gt|\\$lt|\\$regex|\\$or|\\$and)"
+            severity: "high"
+            action: "block"
+          
+          - rule_id: "INJ003"
+            name: "LDAP Injection Attempt"
+            description: "Detects LDAP injection patterns"
+            pattern: "(?i)(\\*|\\(|\\)|\\\\|\\/).*?(cn=|ou=|dc=)"
+            severity: "medium"
+            action: "block"
+        
+        # A04:2021 – Insecure Design
+        insecure_design:
+          - rule_id: "ID001"
+            name: "Insecure Direct Object Reference"
+            description: "Detects potential IDOR vulnerabilities"
+            pattern: "(?i)(id|user_id|account_id)=[0-9]+"
+            severity: "medium"
+            action: "monitor"
+        
+        # A05:2021 – Security Misconfiguration
+        security_misconfiguration:
+          - rule_id: "SM001"
+            name: "Debug Mode Enabled"
+            description: "Detects debug mode indicators"
+            pattern: "(?i)(debug|trace|verbose)=true"
+            severity: "low"
+            action: "alert"
+        
+        # A06:2021 – Vulnerable and Outdated Components
+        vulnerable_components:
+          - rule_id: "VC001"
+            name: "Known Vulnerable Library"
+            description: "Detects use of known vulnerable libraries"
+            pattern: "(?i)(jquery-1\\.[0-7]|bootstrap-[12]\\.|angular-1\\.[0-5])"
+            severity: "medium"
+            action: "alert"
+        
+        # A07:2021 – Identification and Authentication Failures
+        auth_failures:
+          - rule_id: "AF001"
+            name: "Brute Force Attack"
+            description: "Detects brute force login attempts"
+            condition: "failed_login_attempts > 10 in 5 minutes"
+            severity: "high"
+            action: "block_ip"
+          
+          - rule_id: "AF002"
+            name: "Credential Stuffing"
+            description: "Detects credential stuffing attacks"
+            condition: "unique_usernames > 100 and failed_logins > 500 in 10 minutes"
+            severity: "high"
+            action: "block_ip"
+        
+        # A08:2021 – Software and Data Integrity Failures
+        integrity_failures:
+          - rule_id: "IF001"
+            name: "Unsigned Code Execution"
+            description: "Detects execution of unsigned code"
+            pattern: "(?i)(eval|exec|system|shell_exec)\\s*\\("
+            severity: "critical"
+            action: "block"
+        
+        # A09:2021 – Security Logging and Monitoring Failures
+        logging_failures:
+          - rule_id: "LF001"
+            name: "Log Tampering Attempt"
+            description: "Detects attempts to tamper with logs"
+            pattern: "(?i)(delete|truncate|drop).*?(log|audit)"
+            severity: "high"
+            action: "alert"
+        
+        # A10:2021 – Server-Side Request Forgery (SSRF)
+        ssrf:
+          - rule_id: "SSRF001"
+            name: "SSRF Attack Attempt"
+            description: "Detects SSRF attack patterns"
+            pattern: "(?i)(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|169\\.254|10\\.|172\\.|192\\.168\\.)"
+            severity: "high"
+            action: "block"
+      
+      # Custom Business Logic Rules
+      business_logic:
+        - rule_id: "BL001"
+          name: "Unusual Image Upload Pattern"
+          description: "Detects unusual image upload patterns"
+          condition: "image_uploads > 100 in 1 hour from single IP"
+          severity: "medium"
+          action: "throttle"
+        
+        - rule_id: "BL002"
+          name: "Rapid Repair Request Creation"
+          description: "Detects rapid creation of repair requests"
+          condition: "repair_requests > 50 in 10 minutes from single user"
+          severity: "medium"
+          action: "throttle"
+        
+        - rule_id: "BL003"
+          name: "Suspicious Data Export"
+          description: "Detects suspicious data export activities"
+          condition: "data_export_size > 1GB in single request"
+          severity: "high"
+          action: "alert"
+      
+      # Geolocation-based Rules
+      geolocation:
+        - rule_id: "GEO001"
+          name: "Access from High-Risk Country"
+          description: "Detects access from high-risk countries"
+          countries: ["CN", "RU", "KP", "IR"]
+          severity: "medium"
+          action: "monitor"
+        
+        - rule_id: "GEO002"
+          name: "Impossible Travel"
+          description: "Detects impossible travel patterns"
+          condition: "distance > 1000km and time_diff < 1 hour"
+          severity: "high"
+          action: "alert"
+      
+      # Time-based Rules
+      temporal:
+        - rule_id: "TIME001"
+          name: "Off-Hours Access"
+          description: "Detects access during off-business hours"
+          time_range: "22:00-06:00"
+          timezone: "UTC"
+          severity: "low"
+          action: "monitor"
+        
+        - rule_id: "TIME002"
+          name: "Weekend Admin Activity"
+          description: "Detects admin activity during weekends"
+          days: ["Saturday", "Sunday"]
+          roles: ["admin", "superuser"]
+          severity: "medium"
+          action: "alert"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-threat-detection
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: threat-detection
+spec:
+  replicas: {{ .Values.threatDetection.replicaCount | default 2 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: threat-detection
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/advanced-security-policies.yaml") . | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: threat-detection
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: threat-detection
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.threatDetection.image.repository }}:{{ .Values.threatDetection.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.threatDetection.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # Threat Detection Configuration
+            - name: THREAT_DETECTION_ENABLED
+              value: "{{ .Values.security.threatDetection.enabled | default true }}"
+            - name: ANOMALY_DETECTION_ENABLED
+              value: "{{ .Values.security.threatDetection.anomalyDetection.enabled | default true }}"
+            - name: ML_DETECTION_ENABLED
+              value: "{{ .Values.security.threatDetection.mlDetection.enabled | default true }}"
+            
+            # Database Configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                  key: database-url
+            
+            # Redis Configuration for Caching
+            - name: REDIS_URL
+              value: "redis://{{ include "snapfix-enterprise.fullname" . }}-redis-cluster:6379"
+            
+            # Elasticsearch Configuration for Log Analysis
+            - name: ELASTICSEARCH_URL
+              value: "http://{{ include "snapfix-enterprise.fullname" . }}-elasticsearch:9200"
+            
+            # Machine Learning Model Configuration
+            - name: ML_MODEL_PATH
+              value: "/app/models"
+            - name: ML_MODEL_UPDATE_INTERVAL
+              value: "{{ .Values.security.threatDetection.mlDetection.modelUpdateIntervalHours | default 168 }}"
+            
+            # Notification Configuration
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-notification-secrets
+                  key: slack-webhook-url
+                  optional: true
+            - name: EMAIL_SMTP_HOST
+              value: "{{ .Values.notifications.email.smtpHost | default "" }}"
+            - name: EMAIL_SMTP_PORT
+              value: "{{ .Values.notifications.email.smtpPort | default 587 }}"
+            
+            # Compliance Configuration
+            - name: GDPR_ENABLED
+              value: "{{ .Values.security.compliance.gdpr.enabled | default true }}"
+            - name: HIPAA_ENABLED
+              value: "{{ .Values.security.compliance.hipaa.enabled | default false }}"
+            - name: SOC2_ENABLED
+              value: "{{ .Values.security.compliance.soc2.enabled | default true }}"
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.threatDetection.resources | nindent 12 }}
+          
+          volumeMounts:
+            - name: security-policies
+              mountPath: /app/config/security-policies
+              readOnly: true
+            - name: threat-detection-rules
+              mountPath: /app/config/rules
+              readOnly: true
+            - name: ml-models
+              mountPath: /app/models
+      
+      volumes:
+        - name: security-policies
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-security-policies
+        - name: threat-detection-rules
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-threat-detection-rules
+        - name: ml-models
+          {{- if .Values.threatDetection.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-threat-detection-models
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+---
+{{- if .Values.threatDetection.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-threat-detection-models
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.threatDetection.persistence.accessMode | default "ReadWriteOnce" }}
+  resources:
+    requests:
+      storage: {{ .Values.threatDetection.persistence.size | default "10Gi" }}
+  {{- if .Values.threatDetection.persistence.storageClass }}
+  storageClassName: {{ .Values.threatDetection.persistence.storageClass }}
+  {{- end }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-threat-detection
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: threat-detection
+spec:
+  type: {{ .Values.threatDetection.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.threatDetection.service.port | default 80 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.threatDetection.service.grpcPort | default 9090 }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: threat-detection
+
+---
+# Secret for notification credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-notification-secrets
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- if .Values.notifications.slack.webhookUrl }}
+  slack-webhook-url: {{ .Values.notifications.slack.webhookUrl | b64enc }}
+  {{- end }}
+  {{- if .Values.notifications.email.password }}
+  email-password: {{ .Values.notifications.email.password | b64enc }}
+  {{- end }}
+  {{- if .Values.notifications.pagerduty.integrationKey }}
+  pagerduty-integration-key: {{ .Values.notifications.pagerduty.integrationKey | b64enc }}
+  {{- end }}
+
+---
+# ServiceMonitor for Prometheus to scrape threat detection metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-threat-detection
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: threat-detection
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: threat-detection
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+
+---
+# NetworkPolicy for threat detection service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-threat-detection
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: threat-detection
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from security middleware
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: security-middleware
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow access to database
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: database
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow access to Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow access to Elasticsearch
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9200
+    # Allow HTTPS for external notifications
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow SMTP for email notifications
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 587
+        - protocol: TCP
+          port: 25

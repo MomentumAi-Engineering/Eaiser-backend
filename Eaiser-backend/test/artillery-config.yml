@@ -1,0 +1,83 @@
+config:
+  target: http://localhost:80
+  phases:
+    - duration: 2m
+      arrivalRate: 100
+      name: "Warm-up"
+    - duration: 5m
+      arrivalRate: 1000
+      rampTo: 10000
+      name: "Ramp-up"
+    - duration: 10m
+      arrivalRate: 100000
+      name: "Peak Load - 1 Lakh Users"
+    - duration: 15m
+      arrivalRate: 50000
+      name: "Sustained Load"
+    - duration: 5m
+      arrivalRate: 150000
+      name: "Stress Test"
+    - duration: 3m
+      arrivalRate: 1000
+      name: "Cool Down"
+  processor: ./load-test-processor.js
+  payload:
+    path: ./test-data.csv
+    fields: ["userId", "issueTitle", "issueDescription", "priority"]
+scenarios:
+  - name: "Issue Reporting Workflow"
+    weight: 40
+    flow:
+      - post:
+          url: /api/auth/login
+          json: {"email":"{{ $randomEmail }}","password":"testpass123"}
+          capture: {"json":"$.token","as":"authToken"}
+      - think:
+          2
+      - post:
+          url: /api/issues
+          headers: {"Authorization":"Bearer {{ authToken }}","Content-Type":"application/json"}
+          json: {"title":"{{ issueTitle }}","description":"{{ issueDescription }}","priority":"{{ priority }}","category":"bug","tags":["urgent","production"],"location":{"latitude":28.6139,"longitude":77.209}}
+          capture: {"json":"$.issue_id","as":"issueId"}
+      - think:
+          1
+      - get:
+          url: /api/issues/{{ issueId }}
+          headers: {"Authorization":"Bearer {{ authToken }}"}
+  - name: "Issue Browsing"
+    weight: 30
+    flow:
+      - get:
+          url: /api/issues?page={{ $randomInt(1, 100) }}&limit=20&sort=timestamp
+      - think:
+          3
+      - get:
+          url: /api/issues/search?q=bug&category=all&priority=high
+      - think:
+          2
+      - get:
+          url: /api/issues/stats
+  - name: "User Management"
+    weight: 20
+    flow:
+      - post:
+          url: /api/auth/register
+          json: {"email":"{{ $randomEmail }}","password":"testpass123","name":"{{ $randomFullName }}","phone":"{{ $randomPhoneNumber }}"}
+      - think:
+          1
+      - post:
+          url: /api/auth/login
+          json: {"email":"{{ $randomEmail }}","password":"testpass123"}
+          capture: {"json":"$.token","as":"authToken"}
+      - get:
+          url: /api/user/profile
+          headers: {"Authorization":"Bearer {{ authToken }}"}
+  - name: "Health Checks"
+    weight: 10
+    flow:
+      - get:
+          url: /health
+      - get:
+          url: /api/health
+      - get:
+          url: /metrics

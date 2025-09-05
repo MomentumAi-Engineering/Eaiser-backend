@@ -1,0 +1,978 @@
+{{/*
+🐰 RabbitMQ Cluster Configuration for SnapFix Enterprise
+
+This template creates a RabbitMQ cluster with:
+- High availability cluster (3+ nodes)
+- Quorum queues for durability
+- Load balancer for client connections
+- Management UI with monitoring
+- Celery integration for background tasks
+- Auto-scaling and resource optimization
+*/}}
+
+{{- if .Values.rabbitmq.enabled }}
+{{/*
+📋 RabbitMQ Cluster ConfigMap
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq-config
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  enabled_plugins: |
+    [rabbitmq_management,
+     rabbitmq_peer_discovery_k8s,
+     rabbitmq_prometheus,
+     rabbitmq_shovel,
+     rabbitmq_shovel_management,
+     rabbitmq_federation,
+     rabbitmq_federation_management,
+     rabbitmq_consistent_hash_exchange,
+     rabbitmq_delayed_message_exchange].
+  
+  rabbitmq.conf: |
+    # ========================================
+    # RABBITMQ CLUSTER CONFIGURATION
+    # ========================================
+    
+    # Cluster settings
+    cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+    cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+    cluster_formation.k8s.address_type = hostname
+    cluster_formation.k8s.service_name = {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-headless
+    cluster_formation.k8s.hostname_suffix = .{{ include "snapfix-enterprise.fullname" . }}-rabbitmq-headless.{{ .Release.Namespace }}.svc.cluster.local
+    
+    # Network settings
+    listeners.tcp.default = 5672
+    management.tcp.port = 15672
+    
+    # Memory and disk settings
+    vm_memory_high_watermark.relative = {{ .Values.rabbitmq.memoryHighWatermark | default 0.6 }}
+    disk_free_limit.relative = {{ .Values.rabbitmq.diskFreeLimit | default 2.0 }}
+    
+    # Queue settings
+    default_vhost = {{ .Values.rabbitmq.vhost | default "/" }}
+    default_user = {{ .Values.rabbitmq.auth.username | default "admin" }}
+    default_pass = CHANGEME
+    default_permissions.configure = .*
+    default_permissions.read = .*
+    default_permissions.write = .*
+    
+    # Performance settings
+    channel_max = {{ .Values.rabbitmq.channelMax | default 2047 }}
+    connection_max = {{ .Values.rabbitmq.connectionMax | default 50000 }}
+    heartbeat = {{ .Values.rabbitmq.heartbeat | default 60 }}
+    
+    # Clustering settings
+    cluster_partition_handling = {{ .Values.rabbitmq.clusterPartitionHandling | default "pause_minority" }}
+    cluster_keepalive_interval = {{ .Values.rabbitmq.clusterKeepaliveInterval | default 10000 }}
+    
+    # Queue master locator
+    queue_master_locator = {{ .Values.rabbitmq.queueMasterLocator | default "min-masters" }}
+    
+    # Logging
+    log.console = true
+    log.console.level = {{ .Values.rabbitmq.logLevel | default "info" }}
+    log.file = /var/log/rabbitmq/rabbit.log
+    log.file.level = {{ .Values.rabbitmq.logLevel | default "info" }}
+    log.file.rotation.date = $D0
+    log.file.rotation.size = 10485760
+    
+    # Management plugin settings
+    management.rates_mode = {{ .Values.rabbitmq.management.ratesMode | default "basic" }}
+    management.sample_retention_policies.global.minute = {{ .Values.rabbitmq.management.sampleRetention.minute | default 5 }}
+    management.sample_retention_policies.global.hour = {{ .Values.rabbitmq.management.sampleRetention.hour | default 60 }}
+    management.sample_retention_policies.global.day = {{ .Values.rabbitmq.management.sampleRetention.day | default 1440 }}
+    
+    # Prometheus metrics
+    {{- if .Values.monitoring.prometheus.enabled }}
+    prometheus.tcp.port = 15692
+    prometheus.path = /metrics
+    {{- end }}
+    
+    # SSL/TLS settings (if enabled)
+    {{- if .Values.rabbitmq.tls.enabled }}
+    listeners.ssl.default = 5671
+    ssl_options.cacertfile = /etc/rabbitmq/certs/ca.crt
+    ssl_options.certfile = /etc/rabbitmq/certs/tls.crt
+    ssl_options.keyfile = /etc/rabbitmq/certs/tls.key
+    ssl_options.verify = verify_peer
+    ssl_options.fail_if_no_peer_cert = true
+    {{- end }}
+  
+  init-cluster.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Initializing RabbitMQ Cluster"
+    
+    # Wait for RabbitMQ to start
+    until rabbitmqctl node_health_check; do
+      echo "Waiting for RabbitMQ to start..."
+      sleep 5
+    done
+    
+    # Set up users and permissions
+    {{- if .Values.rabbitmq.auth.enabled }}
+    rabbitmqctl add_user {{ .Values.rabbitmq.auth.username | default "admin" }} "${RABBITMQ_PASSWORD}"
+    rabbitmqctl set_user_tags {{ .Values.rabbitmq.auth.username | default "admin" }} administrator
+    rabbitmqctl set_permissions -p {{ .Values.rabbitmq.vhost | default "/" }} {{ .Values.rabbitmq.auth.username | default "admin" }} ".*" ".*" ".*"
+    
+    # Create Celery user
+    rabbitmqctl add_user {{ .Values.celery.broker.username | default "celery" }} "${CELERY_BROKER_PASSWORD}"
+    rabbitmqctl set_permissions -p {{ .Values.rabbitmq.vhost | default "/" }} {{ .Values.celery.broker.username | default "celery" }} ".*" ".*" ".*"
+    {{- end }}
+    
+    # Create exchanges and queues for Celery
+    rabbitmqctl eval '
+    {ok, Connection} = amqp_connection:start(#amqp_params_direct{}),
+    {ok, Channel} = amqp_channel:open(Connection),
+    
+    %% Declare Celery exchanges
+    amqp_channel:call(Channel, #'"'exchange.declare'"'{exchange = <<"celery">>, type = <<"direct">>, durable = true}),
+    amqp_channel:call(Channel, #'"'exchange.declare'"'{exchange = <<"celeryev">>, type = <<"topic">>, durable = true}),
+    
+    %% Declare Celery queues with quorum queue type for HA
+    amqp_channel:call(Channel, #'"'queue.declare'"'{
+        queue = <<"celery">>,
+        durable = true,
+        arguments = [{<<"x-queue-type">>, longstr, <<"quorum">>}]
+    }),
+    
+    amqp_channel:call(Channel, #'"'queue.declare'"'{
+        queue = <<"celery.priority.high">>,
+        durable = true,
+        arguments = [
+            {<<"x-queue-type">>, longstr, <<"quorum">>},
+            {<<"x-max-priority">>, long, 10}
+        ]
+    }),
+    
+    amqp_channel:call(Channel, #'"'queue.declare'"'{
+        queue = <<"celery.priority.low">>,
+        durable = true,
+        arguments = [
+            {<<"x-queue-type">>, longstr, <<"quorum">>},
+            {<<"x-max-priority">>, long, 3}
+        ]
+    }),
+    
+    %% Bind queues to exchanges
+    amqp_channel:call(Channel, #'"'queue.bind'"'{queue = <<"celery">>, exchange = <<"celery">>, routing_key = <<"celery">>}),
+    amqp_channel:call(Channel, #'"'queue.bind'"'{queue = <<"celery.priority.high">>, exchange = <<"celery">>, routing_key = <<"celery.priority.high">>}),
+    amqp_channel:call(Channel, #'"'queue.bind'"'{queue = <<"celery.priority.low">>, exchange = <<"celery">>, routing_key = <<"celery.priority.low">>}),
+    
+    amqp_channel:close(Channel),
+    amqp_connection:close(Connection).
+    '
+    
+    echo "RabbitMQ cluster initialized successfully"
+    
+    # Show cluster status
+    rabbitmqctl cluster_status
+    rabbitmqctl list_queues name messages consumers
+
+---
+{{/*
+🐰 RabbitMQ Headless Service for Cluster Discovery
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq-headless
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  publishNotReadyAddresses: true
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+      protocol: TCP
+    - name: management
+      port: 15672
+      targetPort: management
+      protocol: TCP
+    {{- if .Values.rabbitmq.tls.enabled }}
+    - name: amqps
+      port: 5671
+      targetPort: amqps
+      protocol: TCP
+    {{- end }}
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - name: metrics
+      port: 15692
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+
+---
+{{/*
+🐰 RabbitMQ Load Balancer Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    {{- if .Values.monitoring.prometheus.enabled }}
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "15692"
+    prometheus.io/path: "/metrics"
+    {{- end }}
+    {{- if eq .Values.rabbitmq.service.type "LoadBalancer" }}
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    {{- end }}
+spec:
+  type: {{ .Values.rabbitmq.service.type | default "ClusterIP" }}
+  {{- if .Values.rabbitmq.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.rabbitmq.service.loadBalancerIP }}
+  {{- end }}
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+      protocol: TCP
+      {{- if and (eq .Values.rabbitmq.service.type "NodePort") .Values.rabbitmq.service.nodePorts.amqp }}
+      nodePort: {{ .Values.rabbitmq.service.nodePorts.amqp }}
+      {{- end }}
+    - name: management
+      port: 15672
+      targetPort: management
+      protocol: TCP
+      {{- if and (eq .Values.rabbitmq.service.type "NodePort") .Values.rabbitmq.service.nodePorts.management }}
+      nodePort: {{ .Values.rabbitmq.service.nodePorts.management }}
+      {{- end }}
+    {{- if .Values.rabbitmq.tls.enabled }}
+    - name: amqps
+      port: 5671
+      targetPort: amqps
+      protocol: TCP
+      {{- if and (eq .Values.rabbitmq.service.type "NodePort") .Values.rabbitmq.service.nodePorts.amqps }}
+      nodePort: {{ .Values.rabbitmq.service.nodePorts.amqps }}
+      {{- end }}
+    {{- end }}
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - name: metrics
+      port: 15692
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+
+---
+{{/*
+🐰 RabbitMQ StatefulSet
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  serviceName: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-headless
+  replicas: {{ .Values.rabbitmq.replicaCount | default 3 }}
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rabbitmq
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rabbitmq
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/rabbitmq-cluster.yaml") . | sha256sum }}
+        {{- if .Values.monitoring.prometheus.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "15692"
+        prometheus.io/path: "/metrics"
+        {{- end }}
+    spec:
+      {{- with .Values.rabbitmq.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "snapfix-enterprise.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: rabbitmq
+                topologyKey: kubernetes.io/hostname
+      
+      initContainers:
+        - name: init-permissions
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 999:999 /var/lib/rabbitmq
+              chmod 755 /var/lib/rabbitmq
+          volumeMounts:
+            - name: rabbitmq-data
+              mountPath: /var/lib/rabbitmq
+          securityContext:
+            runAsUser: 0
+      
+      containers:
+        - name: rabbitmq
+          image: "{{ .Values.rabbitmq.image.repository }}:{{ .Values.rabbitmq.image.tag | default "3.12-management" }}"
+          imagePullPolicy: {{ .Values.rabbitmq.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: amqp
+              containerPort: 5672
+              protocol: TCP
+            - name: management
+              containerPort: 15672
+              protocol: TCP
+            {{- if .Values.rabbitmq.tls.enabled }}
+            - name: amqps
+              containerPort: 5671
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.monitoring.prometheus.enabled }}
+            - name: metrics
+              containerPort: 15692
+              protocol: TCP
+            {{- end }}
+          
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: {{ .Values.rabbitmq.auth.username | default "admin" | quote }}
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-secret
+                  key: rabbitmq-password
+            - name: RABBITMQ_DEFAULT_VHOST
+              value: {{ .Values.rabbitmq.vhost | default "/" | quote }}
+            - name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-secret
+                  key: rabbitmq-erlang-cookie
+            - name: RABBITMQ_NODE_NAME
+              value: "rabbit@$(hostname -f)"
+            - name: RABBITMQ_USE_LONGNAME
+              value: "true"
+            - name: RABBITMQ_NODENAME
+              value: "rabbit@$(hostname -f)"
+            - name: K8S_SERVICE_NAME
+              value: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-headless
+            - name: RABBITMQ_CONFIG_FILE
+              value: "/etc/rabbitmq/rabbitmq"
+            - name: RABBITMQ_MNESIA_DIR
+              value: "/var/lib/rabbitmq/mnesia"
+            - name: RABBITMQ_LOG_BASE
+              value: "/var/log/rabbitmq"
+            {{- if .Values.rabbitmq.extraEnvVars }}
+            {{- toYaml .Values.rabbitmq.extraEnvVars | nindent 12 }}
+            {{- end }}
+          
+          volumeMounts:
+            - name: rabbitmq-config
+              mountPath: /etc/rabbitmq
+            - name: rabbitmq-data
+              mountPath: /var/lib/rabbitmq
+            {{- if .Values.rabbitmq.tls.enabled }}
+            - name: rabbitmq-certs
+              mountPath: /etc/rabbitmq/certs
+              readOnly: true
+            {{- end }}
+          
+          livenessProbe:
+            exec:
+              command:
+                - rabbitmq-diagnostics
+                - -q
+                - ping
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 15
+            failureThreshold: 3
+          
+          readinessProbe:
+            exec:
+              command:
+                - rabbitmq-diagnostics
+                - -q
+                - check_running
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.rabbitmq.resources | nindent 12 }}
+      
+      volumes:
+        - name: rabbitmq-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-config
+        {{- if .Values.rabbitmq.tls.enabled }}
+        - name: rabbitmq-certs
+          secret:
+            secretName: {{ .Values.rabbitmq.tls.secretName }}
+        {{- end }}
+  
+  volumeClaimTemplates:
+    - metadata:
+        name: rabbitmq-data
+        labels:
+          {{- include "snapfix-enterprise.labels" . | nindent 10 }}
+        annotations:
+          {{- if .Values.rabbitmq.persistence.annotations }}
+          {{- toYaml .Values.rabbitmq.persistence.annotations | nindent 10 }}
+          {{- end }}
+      spec:
+        accessModes:
+          {{- range .Values.rabbitmq.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- if .Values.rabbitmq.persistence.storageClass }}
+        storageClassName: {{ .Values.rabbitmq.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.rabbitmq.persistence.size | default "20Gi" }}
+
+---
+{{/*
+🔧 RabbitMQ Cluster Initialization Job
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq-init
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rabbitmq-init
+    spec:
+      restartPolicy: Never
+      
+      containers:
+        - name: init-cluster
+          image: "{{ .Values.rabbitmq.image.repository }}:{{ .Values.rabbitmq.image.tag | default "3.12-management" }}"
+          imagePullPolicy: {{ .Values.rabbitmq.image.pullPolicy | default "IfNotPresent" }}
+          
+          env:
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-secret
+                  key: rabbitmq-password
+            - name: CELERY_BROKER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-celery-secret
+                  key: celery-broker-password
+            - name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-secret
+                  key: rabbitmq-erlang-cookie
+          
+          command:
+            - /bin/bash
+            - /scripts/init-cluster.sh
+          
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /scripts
+          
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq-config
+            defaultMode: 0755
+
+---
+{{/*
+👷 Celery Worker Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.celery.worker.replicas | default 3 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-worker
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.celery.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "snapfix-enterprise.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: celery-worker
+                topologyKey: kubernetes.io/hostname
+      
+      containers:
+        - name: celery-worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          
+          command:
+            - celery
+            - -A
+            - app.celery_app
+            - worker
+            - --loglevel={{ .Values.celery.worker.logLevel | default "info" }}
+            - --concurrency={{ .Values.celery.worker.concurrency | default 4 }}
+            - --prefetch-multiplier={{ .Values.celery.worker.prefetchMultiplier | default 1 }}
+            - --max-tasks-per-child={{ .Values.celery.worker.maxTasksPerChild | default 1000 }}
+            - --queues={{ .Values.celery.worker.queues | default "celery,celery.priority.high,celery.priority.low" }}
+          
+          env:
+            # Application environment
+            - name: ENVIRONMENT
+              value: {{ .Values.environment | default "production" }}
+            - name: DEBUG
+              value: {{ .Values.debug | default false | quote }}
+            
+            # Database configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-app-secret
+                  key: database-url
+            
+            # Redis configuration
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-app-secret
+                  key: redis-url
+            
+            # RabbitMQ/Celery configuration
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-celery-secret
+                  key: celery-broker-url
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-celery-secret
+                  key: celery-result-backend
+            
+            # Worker configuration
+            - name: CELERY_WORKER_NAME
+              value: "worker@$(hostname)"
+            - name: CELERY_WORKER_POOL
+              value: {{ .Values.celery.worker.pool | default "prefork" }}
+            - name: CELERY_WORKER_AUTOSCALE
+              value: "{{ .Values.celery.worker.autoscale.max | default 8 }},{{ .Values.celery.worker.autoscale.min | default 2 }}"
+            
+            {{- if .Values.celery.worker.extraEnvVars }}
+            {{- toYaml .Values.celery.worker.extraEnvVars | nindent 12 }}
+            {{- end }}
+          
+          volumeMounts:
+            - name: app-config
+              mountPath: /app/config
+              readOnly: true
+            {{- if .Values.persistence.enabled }}
+            - name: app-data
+              mountPath: /app/data
+            {{- end }}
+          
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.celery_app
+                - inspect
+                - ping
+                - -d
+                - "worker@$(hostname)"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          readinessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.celery_app
+                - inspect
+                - active
+                - -d
+                - "worker@$(hostname)"
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.celery.worker.resources | nindent 12 }}
+      
+      volumes:
+        - name: app-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-app-config
+        {{- if .Values.persistence.enabled }}
+        - name: app-data
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-app-data
+        {{- end }}
+
+---
+{{/*
+📊 Celery Beat Scheduler Deployment
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-beat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-beat
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: 1  # Only one beat scheduler should run
+  strategy:
+    type: Recreate  # Ensure only one instance runs at a time
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-beat
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-beat
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.celery.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      containers:
+        - name: celery-beat
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          
+          command:
+            - celery
+            - -A
+            - app.celery_app
+            - beat
+            - --loglevel={{ .Values.celery.beat.logLevel | default "info" }}
+            - --schedule=/app/data/celerybeat-schedule
+            - --pidfile=/app/data/celerybeat.pid
+          
+          env:
+            # Application environment
+            - name: ENVIRONMENT
+              value: {{ .Values.environment | default "production" }}
+            - name: DEBUG
+              value: {{ .Values.debug | default false | quote }}
+            
+            # Database configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-app-secret
+                  key: database-url
+            
+            # Redis configuration
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-app-secret
+                  key: redis-url
+            
+            # RabbitMQ/Celery configuration
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-celery-secret
+                  key: celery-broker-url
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-celery-secret
+                  key: celery-result-backend
+            
+            {{- if .Values.celery.beat.extraEnvVars }}
+            {{- toYaml .Values.celery.beat.extraEnvVars | nindent 12 }}
+            {{- end }}
+          
+          volumeMounts:
+            - name: app-config
+              mountPath: /app/config
+              readOnly: true
+            - name: celery-beat-data
+              mountPath: /app/data
+          
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "test -f /app/data/celerybeat.pid && kill -0 $(cat /app/data/celerybeat.pid)"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.celery.beat.resources | nindent 12 }}
+      
+      volumes:
+        - name: app-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-app-config
+        - name: celery-beat-data
+          {{- if .Values.celery.beat.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "snapfix-enterprise.fullname" . }}-celery-beat-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+
+{{- if .Values.celery.beat.persistence.enabled }}
+---
+{{/*
+💾 Celery Beat Persistent Volume Claim
+*/}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-beat-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-beat-storage
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.celery.beat.persistence.storageClass }}
+  storageClassName: {{ .Values.celery.beat.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.celery.beat.persistence.size | default "1Gi" }}
+{{- end }}
+
+---
+{{/*
+🌸 Celery Flower Monitoring Deployment
+*/}}
+{{- if .Values.celery.flower.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-flower
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-flower
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-flower
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-flower
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.celery.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      containers:
+        - name: celery-flower
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          
+          command:
+            - celery
+            - -A
+            - app.celery_app
+            - flower
+            - --port=5555
+            - --broker={{ .Values.celery.flower.brokerUrl | default "${CELERY_BROKER_URL}" }}
+            {{- if .Values.celery.flower.auth.enabled }}
+            - --basic_auth={{ .Values.celery.flower.auth.username }}:${FLOWER_PASSWORD}
+            {{- end }}
+          
+          ports:
+            - name: flower
+              containerPort: 5555
+              protocol: TCP
+          
+          env:
+            # RabbitMQ/Celery configuration
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-celery-secret
+                  key: celery-broker-url
+            {{- if .Values.celery.flower.auth.enabled }}
+            - name: FLOWER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-celery-secret
+                  key: flower-password
+            {{- end }}
+            
+            {{- if .Values.celery.flower.extraEnvVars }}
+            {{- toYaml .Values.celery.flower.extraEnvVars | nindent 12 }}
+            {{- end }}
+          
+          livenessProbe:
+            httpGet:
+              path: /
+              port: flower
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /
+              port: flower
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.celery.flower.resources | nindent 12 }}
+
+---
+{{/*
+🌸 Celery Flower Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-flower
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-flower
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  type: {{ .Values.celery.flower.service.type | default "ClusterIP" }}
+  ports:
+    - name: flower
+      port: 5555
+      targetPort: flower
+      protocol: TCP
+      {{- if and (eq .Values.celery.flower.service.type "NodePort") .Values.celery.flower.service.nodePort }}
+      nodePort: {{ .Values.celery.flower.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-flower
+{{- end }}
+
+{{- end }}

@@ -1,0 +1,46 @@
+{
+  "name": "test",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node load-test-1lakh-users.js",
+    "load-test": "node load-test-1lakh-users.js",
+    "load-test-production": "node load-test-1lakh-users.js",
+    "load-test-quick": "artillery quick --count 1000 --num 10 http://localhost:80/health",
+    "load-test-basic": "artillery run basic-load-test.yml",
+    "load-test-comprehensive": "artillery run comprehensive-load-test.js",
+    "stress-test": "artillery run stress-test.yml",
+    "performance-test": "artillery run performance-test.yml",
+    "install-artillery": "npm install -g artillery",
+    "setup": "npm install && npm run install-artillery",
+    "clean": "rm -f *.json *.csv *.log monitoring.js artillery-config.yml",
+    "report": "artillery report load-test-results.json",
+    "monitor": "node monitoring.js",
+    "health-check": "curl http://localhost:80/health",
+    "validate-setup": "node validate-setup.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^4.18.0",
+    "form-data": "^4.0.4",
+    "axios": "^1.6.0",
+    "lodash": "^4.17.21",
+    "chalk": "^4.1.2",
+    "cli-progress": "^3.12.0",
+    "commander": "^9.4.1",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "autocannon": "^8.0.0"
+  },
+  "config": {
+    "target_url": "http://localhost:80",
+    "max_users": 100000,
+    "test_duration": "40m",
+    "ramp_up_time": "5m"
+  }
+}

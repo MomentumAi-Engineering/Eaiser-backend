@@ -1,0 +1,1508 @@
+# 🚀 SnapFix Enterprise - Production Environment
+# 🏭 High-Performance Configuration for 100K+ Concurrent Users
+# ⚡ Maximum Resources with Enterprise-Grade Features
+
+# ========================================
+# GLOBAL OVERRIDES FOR PRODUCTION
+# ========================================
+global:
+  environment: production
+  region: us-west-2
+  domain: snapfix.enterprise.com
+  
+  # High-performance SSD storage
+  storageClass: gp3-encrypted-high-iops
+  
+  # Maximum security for production
+  podSecurityStandards:
+    enforce: restricted
+    audit: restricted
+    warn: restricted
+  
+  # Production image registry
+  imageRegistry:
+    url: "your-registry.com"
+    pullPolicy: IfNotPresent
+    pullSecrets:
+      - name: registry-secret-prod
+
+# ========================================
+# APPLICATION CONFIGURATION (HIGH-SCALE)
+# ========================================
+app:
+  # High replica count for production
+  replicaCount: 20
+  
+  image:
+    repository: your-registry.com/snapfix-enterprise
+    tag: "v1.0.0"
+    pullPolicy: IfNotPresent
+  
+  # High-performance resources
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+      ephemeral-storage: "2Gi"
+    limits:
+      cpu: "4000m"
+      memory: "8Gi"
+      ephemeral-storage: "4Gi"
+  
+  # Production environment variables
+  env:
+    - name: APP_ENV
+      value: "production"
+    - name: LOG_LEVEL
+      value: "WARNING"
+    - name: WORKERS
+      value: "8"
+    - name: MAX_CONNECTIONS
+      value: "2000"
+    - name: DEBUG
+      value: "false"
+    - name: RELOAD
+      value: "false"
+    - name: KEEP_ALIVE
+      value: "65"
+    - name: TIMEOUT
+      value: "120"
+    - name: MAX_REQUESTS
+      value: "10000"
+    - name: MAX_REQUESTS_JITTER
+      value: "1000"
+    
+    # Database configuration
+    - name: DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-database-secret-prod
+          key: database-url
+    - name: DATABASE_POOL_SIZE
+      value: "50"
+    - name: DATABASE_MAX_OVERFLOW
+      value: "100"
+    - name: DATABASE_POOL_TIMEOUT
+      value: "30"
+    - name: DATABASE_POOL_RECYCLE
+      value: "3600"
+    
+    # Redis configuration
+    - name: REDIS_URL
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-redis-secret-prod
+          key: redis-url
+    - name: REDIS_POOL_SIZE
+      value: "100"
+    - name: REDIS_TIMEOUT
+      value: "5"
+    
+    # MongoDB configuration
+    - name: MONGODB_URL
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-mongodb-secret-prod
+          key: mongodb-url
+    - name: MONGODB_POOL_SIZE
+      value: "100"
+    - name: MONGODB_TIMEOUT
+      value: "30000"
+    
+    # RabbitMQ configuration
+    - name: RABBITMQ_URL
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-rabbitmq-secret-prod
+          key: rabbitmq-url
+    - name: RABBITMQ_POOL_SIZE
+      value: "50"
+    
+    # Security settings
+    - name: JWT_SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: snapfix-security-secret-prod
+          key: jwt-secret
+    - name: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+      value: "30"
+    - name: JWT_REFRESH_TOKEN_EXPIRE_DAYS
+      value: "7"
+    
+    # Performance settings
+    - name: CACHE_TTL
+      value: "3600"
+    - name: SESSION_TIMEOUT
+      value: "1800"
+    - name: RATE_LIMIT_PER_MINUTE
+      value: "1000"
+    
+    # Monitoring settings
+    - name: METRICS_ENABLED
+      value: "true"
+    - name: TRACING_ENABLED
+      value: "true"
+    - name: JAEGER_AGENT_HOST
+      value: "jaeger-agent"
+    - name: JAEGER_AGENT_PORT
+      value: "6831"
+  
+  # Production-grade health checks
+  livenessProbe:
+    httpGet:
+      path: /health/live
+      port: 8000
+      httpHeaders:
+        - name: Host
+          value: localhost
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  readinessProbe:
+    httpGet:
+      path: /health/ready
+      port: 8000
+      httpHeaders:
+        - name: Host
+          value: localhost
+    initialDelaySeconds: 15
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+    successThreshold: 1
+  
+  startupProbe:
+    httpGet:
+      path: /health/startup
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+    successThreshold: 1
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+      prometheus.io/path: "/metrics"
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+  
+  # Pod Disruption Budget for high availability
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 15
+  
+  # Anti-affinity for better distribution
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - snapfix-enterprise
+          topologyKey: kubernetes.io/hostname
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - snapfix-enterprise
+            topologyKey: topology.kubernetes.io/zone
+
+# ========================================
+# AUTO-SCALING (AGGRESSIVE FOR PRODUCTION)
+# ========================================
+autoscaling:
+  hpa:
+    enabled: true
+    minReplicas: 15
+    maxReplicas: 100
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+    
+    # Advanced custom metrics
+    customMetrics:
+      enabled: true
+      metrics:
+        - type: Pods
+          pods:
+            metric:
+              name: http_requests_per_second
+            target:
+              type: AverageValue
+              averageValue: "1000"
+        - type: Pods
+          pods:
+            metric:
+              name: database_connections_active
+            target:
+              type: AverageValue
+              averageValue: "40"
+        - type: Pods
+          pods:
+            metric:
+              name: redis_connections_active
+            target:
+              type: AverageValue
+              averageValue: "80"
+    
+    # Aggressive scaling behavior
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Percent
+            value: 10
+            periodSeconds: 60
+          - type: Pods
+            value: 2
+            periodSeconds: 60
+        selectPolicy: Min
+      scaleUp:
+        stabilizationWindowSeconds: 30
+        policies:
+          - type: Percent
+            value: 50
+            periodSeconds: 30
+          - type: Pods
+            value: 5
+            periodSeconds: 30
+        selectPolicy: Max
+  
+  # Enable VPA for production
+  vpa:
+    enabled: true
+    updateMode: "Auto"
+    resourcePolicy:
+      containerPolicies:
+        - containerName: snapfix-enterprise
+          minAllowed:
+            cpu: "500m"
+            memory: "1Gi"
+          maxAllowed:
+            cpu: "8000m"
+            memory: "16Gi"
+          controlledResources:
+            - cpu
+            - memory
+          controlledValues: RequestsAndLimits
+  
+  # Enable KEDA for production
+  keda:
+    enabled: true
+    scaledObjects:
+      - name: rabbitmq-scaler
+        scaleTargetRef:
+          name: snapfix-enterprise
+        minReplicaCount: 15
+        maxReplicaCount: 80
+        triggers:
+          - type: rabbitmq
+            metadata:
+              protocol: amqp
+              queueName: snapfix-tasks
+              queueLength: "10"
+              host: "amqp://snapfix_prod:password@rabbitmq-cluster:5672/"
+      - name: redis-scaler
+        scaleTargetRef:
+          name: snapfix-enterprise
+        minReplicaCount: 15
+        maxReplicaCount: 60
+        triggers:
+          - type: redis
+            metadata:
+              address: "redis-cluster:6379"
+              listName: "snapfix-queue"
+              listLength: "20"
+              password: "redis-password"
+
+# ========================================
+# INGRESS CONFIGURATION (HIGH-PERFORMANCE)
+# ========================================
+ingress:
+  enabled: true
+  className: nginx
+  
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    
+    # High-performance optimizations
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-buffering: "on"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+    
+    # Production rate limiting
+    nginx.ingress.kubernetes.io/rate-limit: "2000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "200"
+    nginx.ingress.kubernetes.io/rate-limit-rps: "100"
+    
+    # Load balancing
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+    nginx.ingress.kubernetes.io/load-balance: "ewma"
+    
+    # Caching
+    nginx.ingress.kubernetes.io/proxy-cache-valid: "200 302 10m"
+    nginx.ingress.kubernetes.io/proxy-cache-valid-404: "1m"
+    
+    # Compression
+    nginx.ingress.kubernetes.io/enable-brotli: "true"
+    nginx.ingress.kubernetes.io/brotli-level: "6"
+    nginx.ingress.kubernetes.io/brotli-types: "text/xml image/svg+xml application/x-font-ttf image/vnd.microsoft.icon application/x-font-opentype application/json font/eot application/vnd.ms-fontobject application/javascript font/otf application/xml application/xhtml+xml text/javascript application/x-javascript text/plain application/x-font-truetype application/xml+rss image/x-icon font/opentype text/css image/x-win-bitmap"
+    
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: https:; frame-ancestors 'none';";
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+      more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=()";
+  
+  hosts:
+    - host: snapfix.enterprise.com
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: api.snapfix.enterprise.com
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: www.snapfix.enterprise.com
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    - secretName: snapfix-prod-tls-secret
+      hosts:
+        - snapfix.enterprise.com
+        - api.snapfix.enterprise.com
+        - www.snapfix.enterprise.com
+
+# ========================================
+# NGINX INGRESS CONTROLLER (HIGH-PERFORMANCE)
+# ========================================
+nginx-ingress:
+  enabled: true
+  
+  controller:
+    replicaCount: 5
+    
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+    
+    # High-performance configuration
+    config:
+      worker-processes: "auto"
+      worker-connections: "65536"
+      worker-rlimit-nofile: "131072"
+      worker-cpu-affinity: "auto"
+      
+      # Buffer sizes
+      proxy-buffer-size: "16k"
+      proxy-buffers-number: "8"
+      client-body-buffer-size: "1m"
+      client-header-buffer-size: "1k"
+      large-client-header-buffers: "4 8k"
+      
+      # Timeouts
+      proxy-connect-timeout: "60"
+      proxy-send-timeout: "60"
+      proxy-read-timeout: "60"
+      client-body-timeout: "60"
+      client-header-timeout: "60"
+      keepalive-timeout: "65"
+      
+      # Performance
+      use-gzip: "true"
+      gzip-level: "6"
+      gzip-types: "text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript"
+      
+      # Security
+      ssl-protocols: "TLSv1.2 TLSv1.3"
+      ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+      ssl-prefer-server-ciphers: "true"
+      
+      # Logging
+      log-format-upstream: '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" $request_length $request_time [$proxy_upstream_name] [$proxy_alternative_upstream_name] $upstream_addr $upstream_response_length $upstream_response_time $upstream_status $req_id'
+    
+    # Metrics
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+    
+    # Anti-affinity
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: ingress-nginx
+            topologyKey: kubernetes.io/hostname
+
+# ========================================
+# DATABASE CONFIGURATION (HIGH-AVAILABILITY)
+# ========================================
+# PostgreSQL - Full cluster with multiple read replicas
+postgresql:
+  enabled: true
+  architecture: replication
+  
+  auth:
+    postgresPassword: ""  # Will be generated
+    username: snapfix_prod
+    password: ""  # Will be generated
+    database: snapfix_prod
+    existingSecret: "snapfix-postgresql-secret-prod"
+  
+  primary:
+    resources:
+      requests:
+        cpu: "2000m"
+        memory: "4Gi"
+      limits:
+        cpu: "8000m"
+        memory: "16Gi"
+    
+    persistence:
+      enabled: true
+      size: 500Gi
+      storageClass: gp3-encrypted-high-iops
+    
+    # High-performance PostgreSQL configuration
+    configuration: |
+      # Connection settings
+      max_connections = 1000
+      superuser_reserved_connections = 10
+      
+      # Memory settings
+      shared_buffers = 4GB
+      effective_cache_size = 12GB
+      work_mem = 32MB
+      maintenance_work_mem = 1GB
+      
+      # WAL settings
+      wal_level = replica
+      max_wal_size = 4GB
+      min_wal_size = 1GB
+      wal_buffers = 64MB
+      wal_writer_delay = 200ms
+      commit_delay = 100
+      commit_siblings = 10
+      
+      # Replication settings
+      max_wal_senders = 10
+      max_replication_slots = 10
+      hot_standby = on
+      hot_standby_feedback = on
+      
+      # Performance settings
+      checkpoint_completion_target = 0.9
+      checkpoint_timeout = 15min
+      random_page_cost = 1.1
+      effective_io_concurrency = 200
+      
+      # Logging
+      log_statement = 'ddl'
+      log_min_duration_statement = 500
+      log_checkpoints = on
+      log_connections = on
+      log_disconnections = on
+      log_lock_waits = on
+      
+      # Autovacuum
+      autovacuum = on
+      autovacuum_max_workers = 6
+      autovacuum_naptime = 30s
+      
+      # Statistics
+      track_activities = on
+      track_counts = on
+      track_io_timing = on
+      track_functions = all
+  
+  readReplicas:
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+    
+    persistence:
+      enabled: true
+      size: 500Gi
+      storageClass: gp3-encrypted-high-iops
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"
+
+# MongoDB - Sharded cluster for production
+mongodb:
+  enabled: true
+  architecture: sharded
+  
+  auth:
+    enabled: true
+    rootPassword: ""  # Will be generated
+    username: snapfix_prod
+    password: ""  # Will be generated
+    database: snapfix_prod
+    existingSecret: "snapfix-mongodb-secret-prod"
+  
+  shards: 3
+  shardsvr:
+    dataNode:
+      replicaCount: 3
+      resources:
+        requests:
+          cpu: "1000m"
+          memory: "2Gi"
+        limits:
+          cpu: "4000m"
+          memory: "8Gi"
+      
+      persistence:
+        enabled: true
+        size: 200Gi
+        storageClass: gp3-encrypted-high-iops
+  
+  configsvr:
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+    
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: gp3-encrypted-high-iops
+  
+  mongos:
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# ========================================
+# CACHING CONFIGURATION (REDIS CLUSTER)
+# ========================================
+# Redis - Full cluster for production
+redis:
+  enabled: true
+  architecture: replication
+  
+  auth:
+    enabled: true
+    password: ""  # Will be generated
+    existingSecret: "snapfix-redis-secret-prod"
+    existingSecretPasswordKey: "redis-password"
+  
+  master:
+    count: 3  # Redis Cluster
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+    
+    persistence:
+      enabled: true
+      size: 50Gi
+      storageClass: gp3-encrypted-high-iops
+    
+    # High-performance Redis configuration
+    configuration: |
+      # Memory management
+      maxmemory-policy allkeys-lru
+      maxmemory 3gb
+      
+      # Persistence
+      save 900 1
+      save 300 10
+      save 60 10000
+      
+      # Performance
+      tcp-keepalive 300
+      timeout 0
+      tcp-backlog 511
+      
+      # Cluster
+      cluster-enabled yes
+      cluster-config-file nodes.conf
+      cluster-node-timeout 15000
+      cluster-require-full-coverage no
+  
+  replica:
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+    
+    persistence:
+      enabled: true
+      size: 50Gi
+      storageClass: gp3-encrypted-high-iops
+  
+  sentinel:
+    enabled: true
+    masterSet: mymaster
+    quorum: 2
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# ========================================
+# MESSAGE QUEUE (RABBITMQ CLUSTER)
+# ========================================
+# RabbitMQ - Full cluster for production
+rabbitmq:
+  enabled: true
+  replicaCount: 5
+  
+  auth:
+    username: snapfix_prod
+    password: ""  # Will be generated
+    existingPasswordSecret: "snapfix-rabbitmq-secret-prod"
+    existingSecretPasswordKey: "rabbitmq-password"
+  
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+    limits:
+      cpu: "4000m"
+      memory: "8Gi"
+  
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClass: gp3-encrypted-high-iops
+  
+  clustering:
+    enabled: true
+    forceBoot: false
+    rebalance: true
+  
+  # High-performance RabbitMQ configuration
+  configuration: |
+    # Performance
+    vm_memory_high_watermark.relative = 0.6
+    disk_free_limit.relative = 2.0
+    
+    # Clustering
+    cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+    cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+    cluster_formation.k8s.address_type = hostname
+    
+    # Management
+    management.tcp.port = 15672
+    management.load_definitions = /etc/rabbitmq/definitions.json
+  
+  extraConfiguration: |
+    # Queue settings
+    default_vhost = /
+    default_user = snapfix_prod
+    default_permissions.configure = .*
+    default_permissions.read = .*
+    default_permissions.write = .*
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# ========================================
+# MONITORING (FULL PRODUCTION STACK)
+# ========================================
+monitoring:
+  prometheus:
+    enabled: true
+  
+  grafana:
+    enabled: true
+    adminPassword: ""  # Will be generated
+
+# Full Prometheus stack for production
+kube-prometheus-stack:
+  enabled: true
+  
+  prometheus:
+    prometheusSpec:
+      retention: 30d
+      retentionSize: 200GB
+      
+      resources:
+        requests:
+          cpu: "2000m"
+          memory: "8Gi"
+        limits:
+          cpu: "4000m"
+          memory: "16Gi"
+      
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp3-encrypted-high-iops
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 200Gi
+      
+      # Advanced scrape configs
+      additionalScrapeConfigs:
+        - job_name: 'snapfix-enterprise'
+          kubernetes_sd_configs:
+            - role: endpoints
+              namespaces:
+                names:
+                  - snapfix-enterprise-prod
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_service_name]
+              action: keep
+              regex: snapfix-enterprise
+  
+  grafana:
+    enabled: true
+    adminPassword: ""  # Will be generated from secret
+    
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+    
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClassName: gp3-encrypted-high-iops
+    
+    # Production Grafana configuration
+    grafana.ini:
+      server:
+        root_url: https://grafana.snapfix.enterprise.com
+        serve_from_sub_path: true
+      
+      security:
+        admin_user: admin
+        admin_password: $__file{/etc/secrets/admin_password}
+        secret_key: $__file{/etc/secrets/secret_key}
+      
+      auth:
+        disable_login_form: false
+        disable_signout_menu: false
+      
+      auth.anonymous:
+        enabled: false
+      
+      log:
+        mode: console
+        level: warn
+      
+      metrics:
+        enabled: true
+        basic_auth_username: metrics
+        basic_auth_password: $__file{/etc/secrets/metrics_password}
+  
+  alertmanager:
+    enabled: true
+    
+    alertmanagerSpec:
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+      
+      storage:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp3-encrypted-high-iops
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 10Gi
+      
+      # Production alerting configuration
+      config:
+        global:
+          smtp_smarthost: 'smtp.snapfix.enterprise.com:587'
+          smtp_from: 'alerts@snapfix.enterprise.com'
+        
+        route:
+          group_by: ['alertname', 'cluster', 'service']
+          group_wait: 10s
+          group_interval: 10s
+          repeat_interval: 1h
+          receiver: 'web.hook'
+          routes:
+            - match:
+                severity: critical
+              receiver: 'critical-alerts'
+            - match:
+                severity: warning
+              receiver: 'warning-alerts'
+        
+        receivers:
+          - name: 'web.hook'
+            webhook_configs:
+              - url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+          
+          - name: 'critical-alerts'
+            email_configs:
+              - to: 'oncall@snapfix.enterprise.com'
+                subject: 'CRITICAL: {{ .GroupLabels.alertname }}'
+                body: |
+                  {{ range .Alerts }}
+                  Alert: {{ .Annotations.summary }}
+                  Description: {{ .Annotations.description }}
+                  {{ end }}
+            
+            slack_configs:
+              - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+                channel: '#alerts-critical'
+                title: 'CRITICAL Alert'
+                text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+          
+          - name: 'warning-alerts'
+            email_configs:
+              - to: 'devops@snapfix.enterprise.com'
+                subject: 'WARNING: {{ .GroupLabels.alertname }}'
+
+# ========================================
+# LOGGING (FULL ELK STACK)
+# ========================================
+logging:
+  elasticsearch:
+    enabled: true
+    
+    master:
+      replicaCount: 3
+      resources:
+        requests:
+          cpu: "1000m"
+          memory: "2Gi"
+        limits:
+          cpu: "2000m"
+          memory: "4Gi"
+      
+      persistence:
+        enabled: true
+        size: 100Gi
+        storageClass: gp3-encrypted-high-iops
+    
+    data:
+      replicaCount: 5
+      resources:
+        requests:
+          cpu: "2000m"
+          memory: "4Gi"
+        limits:
+          cpu: "4000m"
+          memory: "8Gi"
+      
+      persistence:
+        enabled: true
+        size: 500Gi
+        storageClass: gp3-encrypted-high-iops
+    
+    coordinating:
+      replicaCount: 2
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "1000m"
+          memory: "2Gi"
+  
+  kibana:
+    enabled: true
+    replicaCount: 2
+    
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+    
+    ingress:
+      enabled: true
+      hosts:
+        - host: kibana.snapfix.enterprise.com
+          paths:
+            - path: /
+              pathType: Prefix
+      tls:
+        - secretName: snapfix-kibana-prod-tls
+          hosts:
+            - kibana.snapfix.enterprise.com
+  
+  logstash:
+    enabled: true
+    replicaCount: 3
+    
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+
+# ========================================
+# TRACING (FULL JAEGER STACK)
+# ========================================
+tracing:
+  jaeger:
+    enabled: true
+    
+    collector:
+      replicaCount: 3
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "1000m"
+          memory: "2Gi"
+    
+    query:
+      replicaCount: 2
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "1000m"
+          memory: "2Gi"
+      
+      ingress:
+        enabled: true
+        hosts:
+          - host: jaeger.snapfix.enterprise.com
+            paths:
+              - path: /
+                pathType: Prefix
+        tls:
+          - secretName: snapfix-jaeger-prod-tls
+            hosts:
+              - jaeger.snapfix.enterprise.com
+    
+    storage:
+      type: elasticsearch
+      elasticsearch:
+        host: elasticsearch-master
+        port: 9200
+        indexPrefix: jaeger
+
+# ========================================
+# SECURITY (MAXIMUM SECURITY)
+# ========================================
+security:
+  # Enable all network policies
+  networkPolicies:
+    enabled: true
+    defaultDenyIngress: true
+    defaultDenyEgress: false
+    
+    # Custom network policies
+    customPolicies:
+      - name: allow-prometheus
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: snapfix-enterprise
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    name: monitoring
+            ports:
+              - protocol: TCP
+                port: 9090
+  
+  # Enable pod security policies
+  podSecurityPolicy:
+    enabled: true
+    policy:
+      privileged: false
+      allowPrivilegeEscalation: false
+      requiredDropCapabilities:
+        - ALL
+      allowedCapabilities: []
+      runAsUser:
+        rule: MustRunAsNonRoot
+      seLinux:
+        rule: RunAsAny
+      fsGroup:
+        rule: RunAsAny
+  
+  # Full RBAC
+  rbac:
+    enabled: true
+    
+    serviceAccount:
+      create: true
+      name: snapfix-enterprise-prod
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/snapfix-enterprise-prod-role
+    
+    clusterRole:
+      create: true
+      rules:
+        - apiGroups: [""]
+          resources: ["pods", "services", "endpoints"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["apps"]
+          resources: ["deployments", "replicasets"]
+          verbs: ["get", "list", "watch"]
+  
+  # Production cert manager
+  certManager:
+    enabled: true
+    
+    clusterIssuer:
+      enabled: true
+      name: letsencrypt-prod
+      email: devops@snapfix.enterprise.com
+      server: https://acme-v02.api.letsencrypt.org/directory
+      
+      # DNS01 challenge for wildcard certificates
+      solvers:
+        - dns01:
+            route53:
+              region: us-west-2
+              hostedZoneID: Z1234567890ABC
+          selector:
+            dnsNames:
+              - '*.snapfix.enterprise.com'
+              - 'snapfix.enterprise.com'
+  
+  # Production external secrets
+  externalSecrets:
+    enabled: true
+    
+    secretStore:
+      name: vault-secret-store-prod
+      provider:
+        vault:
+          server: "https://vault.snapfix.enterprise.com"
+          path: "secret"
+          version: "v2"
+          auth:
+            kubernetes:
+              mountPath: "kubernetes"
+              role: "snapfix-enterprise-prod"
+    
+    # Define external secrets
+    secrets:
+      - name: snapfix-database-secret-prod
+        refreshInterval: 1h
+        data:
+          - secretKey: database-url
+            remoteRef:
+              key: snapfix/prod/database
+              property: url
+      
+      - name: snapfix-redis-secret-prod
+        refreshInterval: 1h
+        data:
+          - secretKey: redis-url
+            remoteRef:
+              key: snapfix/prod/redis
+              property: url
+
+# ========================================
+# BACKUP (COMPREHENSIVE BACKUP STRATEGY)
+# ========================================
+backup:
+  velero:
+    enabled: true
+    
+    configuration:
+      provider: aws
+      
+      backupStorageLocation:
+        name: default
+        bucket: snapfix-enterprise-backups-prod
+        config:
+          region: us-west-2
+          s3ForcePathStyle: false
+          s3Url: https://s3.us-west-2.amazonaws.com
+      
+      volumeSnapshotLocation:
+        name: default
+        config:
+          region: us-west-2
+    
+    # Multiple backup schedules
+    schedules:
+      # Hourly backups (kept for 24 hours)
+      hourly:
+        schedule: "0 * * * *"
+        template:
+          ttl: "24h"
+          includedNamespaces:
+            - snapfix-enterprise-prod
+          excludedResources:
+            - events
+            - events.events.k8s.io
+      
+      # Daily backups (kept for 30 days)
+      daily:
+        schedule: "0 2 * * *"
+        template:
+          ttl: "720h"  # 30 days
+          includedNamespaces:
+            - snapfix-enterprise-prod
+          storageLocation: default
+          volumeSnapshotLocations:
+            - default
+      
+      # Weekly backups (kept for 12 weeks)
+      weekly:
+        schedule: "0 3 * * 0"
+        template:
+          ttl: "2016h"  # 12 weeks
+          includedNamespaces:
+            - snapfix-enterprise-prod
+          storageLocation: default
+          volumeSnapshotLocations:
+            - default
+      
+      # Monthly backups (kept for 12 months)
+      monthly:
+        schedule: "0 4 1 * *"
+        template:
+          ttl: "8760h"  # 12 months
+          includedNamespaces:
+            - snapfix-enterprise-prod
+          storageLocation: default
+          volumeSnapshotLocations:
+            - default
+
+# ========================================
+# GITOPS (ARGOCD INTEGRATION)
+# ========================================
+gitops:
+  argocd:
+    enabled: false  # Usually deployed in separate namespace
+    
+    # Application definitions
+    applications:
+      production:
+        name: snapfix-enterprise-prod
+        namespace: argocd
+        project: default
+        
+        source:
+          repoURL: https://github.com/your-org/snapfix-enterprise-helm
+          targetRevision: main
+          path: .
+          helm:
+            valueFiles:
+              - values.yaml
+              - values-production.yaml
+        
+        destination:
+          server: https://kubernetes.default.svc
+          namespace: snapfix-enterprise-prod
+        
+        syncPolicy:
+          automated:
+            prune: true
+            selfHeal: true
+          syncOptions:
+            - CreateNamespace=true
+            - PrunePropagationPolicy=foreground
+            - PruneLast=true
+
+# ========================================
+# SERVICE MESH (ISTIO FOR PRODUCTION)
+# ========================================
+serviceMesh:
+  istio:
+    enabled: true
+    
+    # Virtual Service for advanced routing
+    virtualService:
+      enabled: true
+      hosts:
+        - snapfix.enterprise.com
+        - api.snapfix.enterprise.com
+      
+      http:
+        - match:
+            - uri:
+                prefix: "/api/v1"
+          route:
+            - destination:
+                host: snapfix-enterprise
+                port:
+                  number: 8000
+          timeout: 30s
+          retries:
+            attempts: 3
+            perTryTimeout: 10s
+        
+        - match:
+            - uri:
+                prefix: "/"
+          route:
+            - destination:
+                host: snapfix-enterprise
+                port:
+                  number: 8000
+          timeout: 60s
+    
+    # Destination Rule for load balancing
+    destinationRule:
+      enabled: true
+      host: snapfix-enterprise
+      
+      trafficPolicy:
+        loadBalancer:
+          consistentHash:
+            httpHeaderName: "x-user-id"
+        
+        connectionPool:
+          tcp:
+            maxConnections: 100
+          http:
+            http1MaxPendingRequests: 50
+            http2MaxRequests: 100
+            maxRequestsPerConnection: 10
+            maxRetries: 3
+        
+        circuitBreaker:
+          consecutiveErrors: 5
+          interval: 30s
+          baseEjectionTime: 30s
+          maxEjectionPercent: 50
+
+# ========================================
+# CELERY (HIGH-SCALE WORKERS)
+# ========================================
+celery:
+  enabled: true
+  
+  workers:
+    replicaCount: 20
+    
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+    
+    # Advanced autoscaling for workers
+    autoscaling:
+      enabled: true
+      minReplicas: 15
+      maxReplicas: 100
+      targetCPUUtilizationPercentage: 60
+      targetMemoryUtilizationPercentage: 70
+      
+      # KEDA scaling based on queue length
+      keda:
+        enabled: true
+        triggers:
+          - type: rabbitmq
+            metadata:
+              protocol: amqp
+              queueName: snapfix-tasks
+              queueLength: "20"
+              host: "amqp://snapfix_prod:password@rabbitmq-cluster:5672/"
+    
+    # Worker configuration
+    env:
+      - name: CELERY_BROKER_URL
+        valueFrom:
+          secretKeyRef:
+            name: snapfix-rabbitmq-secret-prod
+            key: rabbitmq-url
+      - name: CELERY_RESULT_BACKEND
+        valueFrom:
+          secretKeyRef:
+            name: snapfix-redis-secret-prod
+            key: redis-url
+      - name: CELERY_WORKER_CONCURRENCY
+        value: "8"
+      - name: CELERY_WORKER_PREFETCH_MULTIPLIER
+        value: "4"
+      - name: CELERY_TASK_ACKS_LATE
+        value: "true"
+      - name: CELERY_WORKER_MAX_TASKS_PER_CHILD
+        value: "1000"
+  
+  beat:
+    enabled: true
+    
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "200m"
+        memory: "512Mi"
+    
+    # Beat configuration
+    env:
+      - name: CELERY_BROKER_URL
+        valueFrom:
+          secretKeyRef:
+            name: snapfix-rabbitmq-secret-prod
+            key: rabbitmq-url
+      - name: CELERY_RESULT_BACKEND
+        valueFrom:
+          secretKeyRef:
+            name: snapfix-redis-secret-prod
+            key: redis-url
+  
+  flower:
+    enabled: true
+    
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "200m"
+        memory: "512Mi"
+    
+    ingress:
+      enabled: true
+      annotations:
+        nginx.ingress.kubernetes.io/auth-type: basic
+        nginx.ingress.kubernetes.io/auth-secret: flower-auth
+        nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required'
+      
+      hosts:
+        - host: flower.snapfix.enterprise.com
+          paths:
+            - path: /
+              pathType: Prefix
+      
+      tls:
+        - secretName: snapfix-flower-prod-tls
+          hosts:
+            - flower.snapfix.enterprise.com
+
+# ========================================
+# DEVELOPMENT TOOLS (DISABLED FOR PRODUCTION)
+# ========================================
+development:
+  enabled: false
+  
+  debugTools:
+    enabled: false
+  
+  seedData:
+    enabled: false
+
+# ========================================
+# PRODUCTION OVERRIDES
+# ========================================
+production:
+  # Additional production-specific configurations
+  nodeSelector:
+    node-type: production
+  
+  tolerations:
+    - key: "production"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+  
+  # Resource quotas
+  resourceQuota:
+    enabled: true
+    hard:
+      requests.cpu: "100"
+      requests.memory: "200Gi"
+      limits.cpu: "200"
+      limits.memory: "400Gi"
+      persistentvolumeclaims: "50"
+  
+  # Limit ranges
+  limitRange:
+    enabled: true
+    limits:
+      - default:
+          cpu: "1000m"
+          memory: "2Gi"
+        defaultRequest:
+          cpu: "100m"
+          memory: "256Mi"
+        type: Container

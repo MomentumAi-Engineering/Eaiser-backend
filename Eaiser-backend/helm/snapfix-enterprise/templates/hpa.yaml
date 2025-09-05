@@ -1,0 +1,484 @@
+{{/*
+📈 SnapFix Enterprise - Advanced Horizontal Pod Autoscaler Template
+🚀 Multi-Metric Auto-Scaling for 100,000+ Concurrent Users
+🎯 CPU, Memory, Custom Metrics & Predictive Scaling
+*/}}
+{{- if .Values.autoscaling.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaling
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # HPA configuration metadata
+    autoscaling.kubernetes.io/version: "v2"
+    autoscaling.kubernetes.io/behavior: "advanced"
+    autoscaling.kubernetes.io/environment: "{{ .Values.global.environment }}"
+    # Prometheus metrics integration
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "snapfix-enterprise.fullname" . }}
+  
+  # ========================================
+  # SCALING BOUNDARIES
+  # ========================================
+  minReplicas: {{ .Values.autoscaling.hpa.minReplicas | default 3 }}
+  maxReplicas: {{ .Values.autoscaling.hpa.maxReplicas | default 100 }}
+  
+  # ========================================
+  # SCALING METRICS
+  # ========================================
+  metrics:
+    # ----------------------------------------
+    # CPU UTILIZATION METRIC
+    # ----------------------------------------
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.hpa.targetCPUUtilizationPercentage | default 70 }}
+    
+    # ----------------------------------------
+    # MEMORY UTILIZATION METRIC
+    # ----------------------------------------
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.hpa.targetMemoryUtilizationPercentage | default 80 }}
+    
+    {{- if .Values.autoscaling.hpa.customMetrics.enabled }}
+    # ----------------------------------------
+    # CUSTOM METRICS (Prometheus-based)
+    # ----------------------------------------
+    
+    # Request rate per second
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.hpa.customMetrics.requestsPerSecond | default "100" }}"
+    
+    # Response time (latency)
+    - type: Pods
+      pods:
+        metric:
+          name: http_request_duration_seconds
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.hpa.customMetrics.responseTime | default "0.5" }}"
+    
+    # Active connections
+    - type: Pods
+      pods:
+        metric:
+          name: nginx_active_connections
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.hpa.customMetrics.activeConnections | default "1000" }}"
+    
+    # Queue depth (Celery)
+    - type: Pods
+      pods:
+        metric:
+          name: celery_queue_length
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.hpa.customMetrics.queueDepth | default "50" }}"
+    
+    # Database connection pool usage
+    - type: Pods
+      pods:
+        metric:
+          name: database_connection_pool_usage
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.hpa.customMetrics.dbPoolUsage | default "0.8" }}"
+    
+    # Redis cache hit ratio (inverse scaling)
+    - type: Pods
+      pods:
+        metric:
+          name: redis_cache_miss_ratio
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.hpa.customMetrics.cacheMissRatio | default "0.2" }}"
+    {{- end }}
+    
+    {{- if .Values.autoscaling.hpa.externalMetrics.enabled }}
+    # ----------------------------------------
+    # EXTERNAL METRICS
+    # ----------------------------------------
+    
+    # AWS CloudWatch metrics
+    {{- if .Values.autoscaling.hpa.externalMetrics.cloudwatch.enabled }}
+    - type: External
+      external:
+        metric:
+          name: aws_alb_request_count_per_target
+          selector:
+            matchLabels:
+              load_balancer: {{ .Values.autoscaling.hpa.externalMetrics.cloudwatch.loadBalancer }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.hpa.externalMetrics.cloudwatch.requestsPerTarget | default "1000" }}"
+    {{- end }}
+    
+    # Google Cloud Monitoring metrics
+    {{- if .Values.autoscaling.hpa.externalMetrics.gcp.enabled }}
+    - type: External
+      external:
+        metric:
+          name: gcp_load_balancer_request_count
+          selector:
+            matchLabels:
+              backend_service: {{ .Values.autoscaling.hpa.externalMetrics.gcp.backendService }}
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.hpa.externalMetrics.gcp.requestCount | default "1000" }}"
+    {{- end }}
+    
+    # Custom business metrics
+    {{- range .Values.autoscaling.hpa.externalMetrics.custom }}
+    - type: External
+      external:
+        metric:
+          name: {{ .name }}
+          {{- if .selector }}
+          selector:
+            matchLabels:
+              {{- toYaml .selector | nindent 14 }}
+          {{- end }}
+        target:
+          type: {{ .targetType | default "AverageValue" }}
+          {{- if eq (.targetType | default "AverageValue") "AverageValue" }}
+          averageValue: "{{ .targetValue }}"
+          {{- else }}
+          value: "{{ .targetValue }}"
+          {{- end }}
+    {{- end }}
+    {{- end }}
+  
+  # ========================================
+  # SCALING BEHAVIOR
+  # ========================================
+  behavior:
+    scaleUp:
+      # Aggressive scale-up for traffic spikes
+      stabilizationWindowSeconds: {{ .Values.autoscaling.hpa.behavior.scaleUp.stabilizationWindowSeconds | default 60 }}
+      selectPolicy: {{ .Values.autoscaling.hpa.behavior.scaleUp.selectPolicy | default "Max" }}
+      policies:
+        # Allow up to 100% increase in pods every 60 seconds
+        - type: Percent
+          value: {{ .Values.autoscaling.hpa.behavior.scaleUp.percentPolicy.value | default 100 }}
+          periodSeconds: {{ .Values.autoscaling.hpa.behavior.scaleUp.percentPolicy.periodSeconds | default 60 }}
+        # Allow up to 10 new pods every 60 seconds
+        - type: Pods
+          value: {{ .Values.autoscaling.hpa.behavior.scaleUp.podsPolicy.value | default 10 }}
+          periodSeconds: {{ .Values.autoscaling.hpa.behavior.scaleUp.podsPolicy.periodSeconds | default 60 }}
+    
+    scaleDown:
+      # Conservative scale-down to prevent thrashing
+      stabilizationWindowSeconds: {{ .Values.autoscaling.hpa.behavior.scaleDown.stabilizationWindowSeconds | default 300 }}
+      selectPolicy: {{ .Values.autoscaling.hpa.behavior.scaleDown.selectPolicy | default "Min" }}
+      policies:
+        # Allow up to 10% decrease in pods every 60 seconds
+        - type: Percent
+          value: {{ .Values.autoscaling.hpa.behavior.scaleDown.percentPolicy.value | default 10 }}
+          periodSeconds: {{ .Values.autoscaling.hpa.behavior.scaleDown.percentPolicy.periodSeconds | default 60 }}
+        # Allow removal of at most 2 pods every 60 seconds
+        - type: Pods
+          value: {{ .Values.autoscaling.hpa.behavior.scaleDown.podsPolicy.value | default 2 }}
+          periodSeconds: {{ .Values.autoscaling.hpa.behavior.scaleDown.podsPolicy.periodSeconds | default 60 }}
+
+{{- end }}
+
+---
+{{/*
+📈 Celery Worker HPA
+*/}}
+{{- if and .Values.celery.worker.enabled .Values.celery.worker.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    autoscaling.kubernetes.io/version: "v2"
+    autoscaling.kubernetes.io/component: "celery-worker"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  
+  minReplicas: {{ .Values.celery.worker.autoscaling.minReplicas | default 2 }}
+  maxReplicas: {{ .Values.celery.worker.autoscaling.maxReplicas | default 50 }}
+  
+  metrics:
+    # CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.celery.worker.autoscaling.targetCPUUtilizationPercentage | default 70 }}
+    
+    # Memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.celery.worker.autoscaling.targetMemoryUtilizationPercentage | default 80 }}
+    
+    # Queue length (primary scaling metric for workers)
+    - type: Pods
+      pods:
+        metric:
+          name: celery_queue_length
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+              app.kubernetes.io/component: celery-worker
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.celery.worker.autoscaling.targetQueueLength | default "10" }}"
+    
+    # Active tasks per worker
+    - type: Pods
+      pods:
+        metric:
+          name: celery_active_tasks
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "snapfix-enterprise.name" . }}
+              app.kubernetes.io/component: celery-worker
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.celery.worker.autoscaling.targetActiveTasks | default "5" }}"
+  
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.celery.worker.autoscaling.behavior.scaleUp.stabilizationWindowSeconds | default 30 }}
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: {{ .Values.celery.worker.autoscaling.behavior.scaleUp.percentPolicy.value | default 200 }}
+          periodSeconds: {{ .Values.celery.worker.autoscaling.behavior.scaleUp.percentPolicy.periodSeconds | default 30 }}
+        - type: Pods
+          value: {{ .Values.celery.worker.autoscaling.behavior.scaleUp.podsPolicy.value | default 5 }}
+          periodSeconds: {{ .Values.celery.worker.autoscaling.behavior.scaleUp.podsPolicy.periodSeconds | default 30 }}
+    
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.celery.worker.autoscaling.behavior.scaleDown.stabilizationWindowSeconds | default 180 }}
+      selectPolicy: Min
+      policies:
+        - type: Percent
+          value: {{ .Values.celery.worker.autoscaling.behavior.scaleDown.percentPolicy.value | default 20 }}
+          periodSeconds: {{ .Values.celery.worker.autoscaling.behavior.scaleDown.percentPolicy.periodSeconds | default 60 }}
+        - type: Pods
+          value: {{ .Values.celery.worker.autoscaling.behavior.scaleDown.podsPolicy.value | default 2 }}
+          periodSeconds: {{ .Values.celery.worker.autoscaling.behavior.scaleDown.podsPolicy.periodSeconds | default 60 }}
+
+{{- end }}
+
+---
+{{/*
+📈 KEDA ScaledObject for Advanced Event-Driven Autoscaling
+*/}}
+{{- if and .Values.keda.enabled .Values.autoscaling.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-keda
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keda-scaler
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  scaleTargetRef:
+    name: {{ include "snapfix-enterprise.fullname" . }}
+  
+  # Scaling configuration
+  minReplicaCount: {{ .Values.autoscaling.keda.minReplicas | default 3 }}
+  maxReplicaCount: {{ .Values.autoscaling.keda.maxReplicas | default 100 }}
+  pollingInterval: {{ .Values.autoscaling.keda.pollingInterval | default 30 }}
+  cooldownPeriod: {{ .Values.autoscaling.keda.cooldownPeriod | default 300 }}
+  idleReplicaCount: {{ .Values.autoscaling.keda.idleReplicaCount | default 1 }}
+  
+  # Advanced scaling behavior
+  advanced:
+    restoreToOriginalReplicaCount: {{ .Values.autoscaling.keda.advanced.restoreToOriginalReplicaCount | default false }}
+    horizontalPodAutoscalerConfig:
+      name: {{ include "snapfix-enterprise.fullname" . }}-keda-hpa
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: {{ .Values.autoscaling.keda.advanced.scaleUp.stabilizationWindowSeconds | default 60 }}
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: {{ .Values.autoscaling.keda.advanced.scaleUp.percentPolicy.value | default 100 }}
+              periodSeconds: {{ .Values.autoscaling.keda.advanced.scaleUp.percentPolicy.periodSeconds | default 60 }}
+            - type: Pods
+              value: {{ .Values.autoscaling.keda.advanced.scaleUp.podsPolicy.value | default 10 }}
+              periodSeconds: {{ .Values.autoscaling.keda.advanced.scaleUp.podsPolicy.periodSeconds | default 60 }}
+        scaleDown:
+          stabilizationWindowSeconds: {{ .Values.autoscaling.keda.advanced.scaleDown.stabilizationWindowSeconds | default 300 }}
+          selectPolicy: Min
+          policies:
+            - type: Percent
+              value: {{ .Values.autoscaling.keda.advanced.scaleDown.percentPolicy.value | default 10 }}
+              periodSeconds: {{ .Values.autoscaling.keda.advanced.scaleDown.percentPolicy.periodSeconds | default 60 }}
+  
+  # Triggers for event-driven scaling
+  triggers:
+    # ----------------------------------------
+    # RABBITMQ QUEUE TRIGGER
+    # ----------------------------------------
+    {{- if .Values.autoscaling.keda.triggers.rabbitmq.enabled }}
+    - type: rabbitmq
+      metadata:
+        host: "amqp://{{ .Values.rabbitmq.auth.username }}:{{ .Values.rabbitmq.auth.password }}@{{ .Values.rabbitmq.service.name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.rabbitmq.service.ports.amqp }}/{{ .Values.rabbitmq.auth.vhost | default "/" }}"
+        queueName: {{ .Values.autoscaling.keda.triggers.rabbitmq.queueName | default "celery" }}
+        queueLength: "{{ .Values.autoscaling.keda.triggers.rabbitmq.queueLength | default "10" }}"
+        protocol: "amqp"
+        mode: "QueueLength"
+    {{- end }}
+    
+    # ----------------------------------------
+    # REDIS TRIGGER
+    # ----------------------------------------
+    {{- if .Values.autoscaling.keda.triggers.redis.enabled }}
+    - type: redis
+      metadata:
+        address: "{{ .Values.redis.master.service.name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.redis.master.service.ports.redis }}"
+        password: "{{ .Values.redis.auth.password }}"
+        listName: {{ .Values.autoscaling.keda.triggers.redis.listName | default "task_queue" }}
+        listLength: "{{ .Values.autoscaling.keda.triggers.redis.listLength | default "5" }}"
+        enableTLS: "{{ .Values.redis.tls.enabled | default false }}"
+    {{- end }}
+    
+    # ----------------------------------------
+    # PROMETHEUS TRIGGER
+    # ----------------------------------------
+    {{- if .Values.autoscaling.keda.triggers.prometheus.enabled }}
+    - type: prometheus
+      metadata:
+        serverAddress: "{{ .Values.monitoring.prometheus.server.service.serviceURL | default "http://prometheus-server.monitoring.svc.cluster.local:80" }}"
+        metricName: {{ .Values.autoscaling.keda.triggers.prometheus.metricName | default "http_requests_per_second" }}
+        threshold: "{{ .Values.autoscaling.keda.triggers.prometheus.threshold | default "100" }}"
+        query: {{ .Values.autoscaling.keda.triggers.prometheus.query | default "sum(rate(http_requests_total[1m]))" }}
+    {{- end }}
+    
+    # ----------------------------------------
+    # KAFKA TRIGGER (if using Kafka)
+    # ----------------------------------------
+    {{- if .Values.autoscaling.keda.triggers.kafka.enabled }}
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ .Values.autoscaling.keda.triggers.kafka.bootstrapServers }}
+        consumerGroup: {{ .Values.autoscaling.keda.triggers.kafka.consumerGroup | default "snapfix-consumer-group" }}
+        topic: {{ .Values.autoscaling.keda.triggers.kafka.topic }}
+        lagThreshold: "{{ .Values.autoscaling.keda.triggers.kafka.lagThreshold | default "10" }}"
+    {{- end }}
+    
+    # ----------------------------------------
+    # CUSTOM EXTERNAL SCALER
+    # ----------------------------------------
+    {{- if .Values.autoscaling.keda.triggers.external.enabled }}
+    - type: external
+      metadata:
+        scalerAddress: {{ .Values.autoscaling.keda.triggers.external.scalerAddress }}
+        {{- range $key, $value := .Values.autoscaling.keda.triggers.external.metadata }}
+        {{ $key }}: "{{ $value }}"
+        {{- end }}
+    {{- end }}
+    
+    # ----------------------------------------
+    # CRON TRIGGER (for predictive scaling)
+    # ----------------------------------------
+    {{- range .Values.autoscaling.keda.triggers.cron }}
+    - type: cron
+      metadata:
+        timezone: {{ .timezone | default "UTC" }}
+        start: {{ .start | quote }}
+        end: {{ .end | quote }}
+        desiredReplicas: "{{ .desiredReplicas }}"
+    {{- end }}
+
+{{- end }}
+
+---
+{{/*
+📈 VerticalPodAutoscaler for Resource Optimization
+*/}}
+{{- if and .Values.autoscaling.vpa.enabled .Values.vpa.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-vpa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vpa
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "snapfix-enterprise.fullname" . }}
+  
+  updatePolicy:
+    updateMode: {{ .Values.autoscaling.vpa.updateMode | default "Auto" }}
+    minReplicas: {{ .Values.autoscaling.vpa.minReplicas | default 3 }}
+  
+  resourcePolicy:
+    containerPolicies:
+      - containerName: {{ .Chart.Name }}
+        minAllowed:
+          cpu: {{ .Values.autoscaling.vpa.minAllowed.cpu | default "100m" }}
+          memory: {{ .Values.autoscaling.vpa.minAllowed.memory | default "128Mi" }}
+        maxAllowed:
+          cpu: {{ .Values.autoscaling.vpa.maxAllowed.cpu | default "4" }}
+          memory: {{ .Values.autoscaling.vpa.maxAllowed.memory | default "8Gi" }}
+        controlledResources: ["cpu", "memory"]
+        controlledValues: {{ .Values.autoscaling.vpa.controlledValues | default "RequestsAndLimits" }}
+
+{{- end }}

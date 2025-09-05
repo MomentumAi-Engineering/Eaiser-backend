@@ -1,0 +1,592 @@
+# OAuth2 and JWT Authentication System for SnapFix Enterprise
+# This template provides advanced authentication with refresh tokens, API versioning, and security features
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-config
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+data:
+  oauth2.conf: |
+    # OAuth2 Configuration
+    oauth2:
+      # JWT Settings
+      jwt:
+        secret_key: "{{ .Values.auth.jwt.secretKey | default "your-super-secret-jwt-key-change-this" }}"
+        algorithm: "{{ .Values.auth.jwt.algorithm | default "HS256" }}"
+        access_token_expire_minutes: {{ .Values.auth.jwt.accessTokenExpireMinutes | default 15 }}
+        refresh_token_expire_days: {{ .Values.auth.jwt.refreshTokenExpireDays | default 30 }}
+        issuer: "{{ .Values.auth.jwt.issuer | default "snapfix-enterprise" }}"
+        audience: "{{ .Values.auth.jwt.audience | default "snapfix-api" }}"
+      
+      # OAuth2 Providers
+      providers:
+        google:
+          enabled: {{ .Values.auth.oauth2.google.enabled | default false }}
+          client_id: "{{ .Values.auth.oauth2.google.clientId | default "" }}"
+          client_secret: "{{ .Values.auth.oauth2.google.clientSecret | default "" }}
+          redirect_uri: "{{ .Values.auth.oauth2.google.redirectUri | default "" }}"
+          scopes: ["openid", "email", "profile"]
+        
+        github:
+          enabled: {{ .Values.auth.oauth2.github.enabled | default false }}
+          client_id: "{{ .Values.auth.oauth2.github.clientId | default "" }}"
+          client_secret: "{{ .Values.auth.oauth2.github.clientSecret | default "" }}
+          redirect_uri: "{{ .Values.auth.oauth2.github.redirectUri | default "" }}"
+          scopes: ["user:email"]
+        
+        microsoft:
+          enabled: {{ .Values.auth.oauth2.microsoft.enabled | default false }}
+          client_id: "{{ .Values.auth.oauth2.microsoft.clientId | default "" }}"
+          client_secret: "{{ .Values.auth.oauth2.microsoft.clientSecret | default "" }}
+          redirect_uri: "{{ .Values.auth.oauth2.microsoft.redirectUri | default "" }}
+          tenant_id: "{{ .Values.auth.oauth2.microsoft.tenantId | default "common" }}"
+          scopes: ["openid", "email", "profile"]
+      
+      # Security Settings
+      security:
+        password_min_length: {{ .Values.auth.security.passwordMinLength | default 8 }}
+        password_require_uppercase: {{ .Values.auth.security.passwordRequireUppercase | default true }}
+        password_require_lowercase: {{ .Values.auth.security.passwordRequireLowercase | default true }}
+        password_require_numbers: {{ .Values.auth.security.passwordRequireNumbers | default true }}
+        password_require_special: {{ .Values.auth.security.passwordRequireSpecial | default true }}
+        max_login_attempts: {{ .Values.auth.security.maxLoginAttempts | default 5 }}
+        lockout_duration_minutes: {{ .Values.auth.security.lockoutDurationMinutes | default 30 }}
+        session_timeout_minutes: {{ .Values.auth.security.sessionTimeoutMinutes | default 60 }}
+        enable_2fa: {{ .Values.auth.security.enable2FA | default false }}
+        enable_captcha: {{ .Values.auth.security.enableCaptcha | default true }}
+      
+      # API Versioning
+      api_versioning:
+        default_version: "{{ .Values.api.versioning.defaultVersion | default "v1" }}"
+        supported_versions: {{ .Values.api.versioning.supportedVersions | default (list "v1" "v2") | toJson }}
+        deprecation_warnings: {{ .Values.api.versioning.deprecationWarnings | default true }}
+        version_header: "{{ .Values.api.versioning.versionHeader | default "X-API-Version" }}"
+        version_query_param: "{{ .Values.api.versioning.versionQueryParam | default "version" }}"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-secrets
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+type: Opaque
+data:
+  jwt-secret-key: {{ .Values.auth.jwt.secretKey | default "your-super-secret-jwt-key-change-this" | b64enc }}
+  {{- if .Values.auth.oauth2.google.enabled }}
+  google-client-secret: {{ .Values.auth.oauth2.google.clientSecret | b64enc }}
+  {{- end }}
+  {{- if .Values.auth.oauth2.github.enabled }}
+  github-client-secret: {{ .Values.auth.oauth2.github.clientSecret | b64enc }}
+  {{- end }}
+  {{- if .Values.auth.oauth2.microsoft.enabled }}
+  microsoft-client-secret: {{ .Values.auth.oauth2.microsoft.clientSecret | b64enc }}
+  {{- end }}
+  # Database encryption key for storing refresh tokens
+  refresh-token-encryption-key: {{ .Values.auth.refreshTokenEncryptionKey | default "your-refresh-token-encryption-key" | b64enc }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-auth-service
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth-service
+spec:
+  replicas: {{ .Values.authService.replicaCount | default 2 }}
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: auth-service
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/oauth2-jwt-auth.yaml") . | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: auth-service
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: auth-service
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.authService.image.repository }}:{{ .Values.authService.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.authService.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # JWT Configuration
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-secrets
+                  key: jwt-secret-key
+            - name: JWT_ALGORITHM
+              value: "{{ .Values.auth.jwt.algorithm | default "HS256" }}"
+            - name: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+              value: "{{ .Values.auth.jwt.accessTokenExpireMinutes | default 15 }}"
+            - name: JWT_REFRESH_TOKEN_EXPIRE_DAYS
+              value: "{{ .Values.auth.jwt.refreshTokenExpireDays | default 30 }}"
+            - name: JWT_ISSUER
+              value: "{{ .Values.auth.jwt.issuer | default "snapfix-enterprise" }}"
+            - name: JWT_AUDIENCE
+              value: "{{ .Values.auth.jwt.audience | default "snapfix-api" }}"
+            
+            # OAuth2 Configuration
+            {{- if .Values.auth.oauth2.google.enabled }}
+            - name: GOOGLE_CLIENT_ID
+              value: "{{ .Values.auth.oauth2.google.clientId }}"
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-secrets
+                  key: google-client-secret
+            - name: GOOGLE_REDIRECT_URI
+              value: "{{ .Values.auth.oauth2.google.redirectUri }}"
+            {{- end }}
+            
+            {{- if .Values.auth.oauth2.github.enabled }}
+            - name: GITHUB_CLIENT_ID
+              value: "{{ .Values.auth.oauth2.github.clientId }}"
+            - name: GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-secrets
+                  key: github-client-secret
+            - name: GITHUB_REDIRECT_URI
+              value: "{{ .Values.auth.oauth2.github.redirectUri }}"
+            {{- end }}
+            
+            {{- if .Values.auth.oauth2.microsoft.enabled }}
+            - name: MICROSOFT_CLIENT_ID
+              value: "{{ .Values.auth.oauth2.microsoft.clientId }}"
+            - name: MICROSOFT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-secrets
+                  key: microsoft-client-secret
+            - name: MICROSOFT_TENANT_ID
+              value: "{{ .Values.auth.oauth2.microsoft.tenantId | default "common" }}"
+            - name: MICROSOFT_REDIRECT_URI
+              value: "{{ .Values.auth.oauth2.microsoft.redirectUri }}"
+            {{- end }}
+            
+            # Database Configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-db-secret
+                  key: database-url
+            
+            # Redis Configuration for Session Storage
+            - name: REDIS_URL
+              value: "redis://{{ include "snapfix-enterprise.fullname" . }}-redis-cluster:6379"
+            
+            # Refresh Token Encryption
+            - name: REFRESH_TOKEN_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-secrets
+                  key: refresh-token-encryption-key
+            
+            # Security Settings
+            - name: MAX_LOGIN_ATTEMPTS
+              value: "{{ .Values.auth.security.maxLoginAttempts | default 5 }}"
+            - name: LOCKOUT_DURATION_MINUTES
+              value: "{{ .Values.auth.security.lockoutDurationMinutes | default 30 }}"
+            - name: SESSION_TIMEOUT_MINUTES
+              value: "{{ .Values.auth.security.sessionTimeoutMinutes | default 60 }}"
+            - name: ENABLE_2FA
+              value: "{{ .Values.auth.security.enable2FA | default false }}"
+            - name: ENABLE_CAPTCHA
+              value: "{{ .Values.auth.security.enableCaptcha | default true }}"
+            
+            # API Versioning
+            - name: API_DEFAULT_VERSION
+              value: "{{ .Values.api.versioning.defaultVersion | default "v1" }}"
+            - name: API_SUPPORTED_VERSIONS
+              value: "{{ .Values.api.versioning.supportedVersions | default (list "v1" "v2") | join "," }}"
+            - name: API_VERSION_HEADER
+              value: "{{ .Values.api.versioning.versionHeader | default "X-API-Version" }}"
+            - name: API_VERSION_QUERY_PARAM
+              value: "{{ .Values.api.versioning.versionQueryParam | default "version" }}"
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.authService.resources | nindent 12 }}
+          
+          volumeMounts:
+            - name: oauth2-config
+              mountPath: /app/config
+              readOnly: true
+      
+      volumes:
+        - name: oauth2-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-oauth2-config
+      
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-auth-service
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth-service
+spec:
+  type: {{ .Values.authService.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.authService.service.port | default 80 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.authService.service.grpcPort | default 9090 }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: auth-service
+
+---
+# API Gateway Configuration for OAuth2 and JWT
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-api-gateway-auth
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+data:
+  auth-middleware.lua: |
+    -- OAuth2 and JWT Authentication Middleware for API Gateway
+    local jwt = require "resty.jwt"
+    local http = require "resty.http"
+    local cjson = require "cjson"
+    local redis = require "resty.redis"
+    
+    local _M = {}
+    
+    -- Configuration
+    local config = {
+        jwt_secret = os.getenv("JWT_SECRET_KEY") or "your-super-secret-jwt-key-change-this",
+        jwt_algorithm = os.getenv("JWT_ALGORITHM") or "HS256",
+        auth_service_url = os.getenv("AUTH_SERVICE_URL") or "http://snapfix-enterprise-auth-service",
+        redis_host = os.getenv("REDIS_HOST") or "snapfix-enterprise-redis-cluster",
+        redis_port = tonumber(os.getenv("REDIS_PORT")) or 6379,
+        api_version_header = os.getenv("API_VERSION_HEADER") or "X-API-Version",
+        api_version_query_param = os.getenv("API_VERSION_QUERY_PARAM") or "version",
+        default_api_version = os.getenv("API_DEFAULT_VERSION") or "v1"
+    }
+    
+    -- Extract JWT token from request
+    function _M.extract_token()
+        local auth_header = ngx.var.http_authorization
+        if auth_header then
+            local token = auth_header:match("Bearer%s+(.+)")
+            return token
+        end
+        return nil
+    end
+    
+    -- Verify JWT token
+    function _M.verify_jwt(token)
+        if not token then
+            return nil, "No token provided"
+        end
+        
+        local jwt_obj = jwt:verify(config.jwt_secret, token, {
+            alg = config.jwt_algorithm
+        })
+        
+        if not jwt_obj.valid then
+            return nil, "Invalid token"
+        end
+        
+        -- Check token expiration
+        local now = ngx.time()
+        if jwt_obj.payload.exp and jwt_obj.payload.exp < now then
+            return nil, "Token expired"
+        end
+        
+        return jwt_obj.payload, nil
+    end
+    
+    -- Check if token is blacklisted (for logout functionality)
+    function _M.is_token_blacklisted(token)
+        local red = redis:new()
+        red:set_timeout(1000) -- 1 second
+        
+        local ok, err = red:connect(config.redis_host, config.redis_port)
+        if not ok then
+            ngx.log(ngx.ERR, "Failed to connect to Redis: ", err)
+            return false -- Assume not blacklisted if Redis is down
+        end
+        
+        local res, err = red:get("blacklist:" .. token)
+        if not res or res == ngx.null then
+            red:close()
+            return false
+        end
+        
+        red:close()
+        return true
+    end
+    
+    -- Get API version from request
+    function _M.get_api_version()
+        -- Check header first
+        local version = ngx.var["http_" .. config.api_version_header:lower():gsub("-", "_")]
+        if version then
+            return version
+        end
+        
+        -- Check query parameter
+        local args = ngx.req.get_uri_args()
+        version = args[config.api_version_query_param]
+        if version then
+            return version
+        end
+        
+        -- Return default version
+        return config.default_api_version
+    end
+    
+    -- Validate API version
+    function _M.validate_api_version(version)
+        local supported_versions = {
+            ["v1"] = true,
+            ["v2"] = true
+        }
+        
+        return supported_versions[version] ~= nil
+    end
+    
+    -- Rate limiting based on user
+    function _M.check_rate_limit(user_id)
+        local red = redis:new()
+        red:set_timeout(1000)
+        
+        local ok, err = red:connect(config.redis_host, config.redis_port)
+        if not ok then
+            ngx.log(ngx.ERR, "Failed to connect to Redis: ", err)
+            return true -- Allow if Redis is down
+        end
+        
+        local key = "rate_limit:" .. user_id
+        local current = red:incr(key)
+        
+        if current == 1 then
+            red:expire(key, 60) -- 1 minute window
+        end
+        
+        red:close()
+        
+        -- Allow 1000 requests per minute per user
+        return current <= 1000
+    end
+    
+    -- Main authentication function
+    function _M.authenticate()
+        -- Extract and verify JWT token
+        local token = _M.extract_token()
+        local payload, err = _M.verify_jwt(token)
+        
+        if not payload then
+            ngx.status = 401
+            ngx.header.content_type = "application/json"
+            ngx.say(cjson.encode({
+                error = "Unauthorized",
+                message = err or "Invalid authentication"
+            }))
+            ngx.exit(401)
+        end
+        
+        -- Check if token is blacklisted
+        if _M.is_token_blacklisted(token) then
+            ngx.status = 401
+            ngx.header.content_type = "application/json"
+            ngx.say(cjson.encode({
+                error = "Unauthorized",
+                message = "Token has been revoked"
+            }))
+            ngx.exit(401)
+        end
+        
+        -- Check rate limiting
+        if not _M.check_rate_limit(payload.sub) then
+            ngx.status = 429
+            ngx.header.content_type = "application/json"
+            ngx.say(cjson.encode({
+                error = "Too Many Requests",
+                message = "Rate limit exceeded"
+            }))
+            ngx.exit(429)
+        end
+        
+        -- Validate API version
+        local api_version = _M.get_api_version()
+        if not _M.validate_api_version(api_version) then
+            ngx.status = 400
+            ngx.header.content_type = "application/json"
+            ngx.say(cjson.encode({
+                error = "Bad Request",
+                message = "Unsupported API version: " .. api_version
+            }))
+            ngx.exit(400)
+        end
+        
+        -- Set user context for downstream services
+        ngx.req.set_header("X-User-ID", payload.sub)
+        ngx.req.set_header("X-User-Email", payload.email)
+        ngx.req.set_header("X-User-Roles", table.concat(payload.roles or {}, ","))
+        ngx.req.set_header("X-API-Version", api_version)
+        
+        -- Log successful authentication
+        ngx.log(ngx.INFO, "User authenticated: ", payload.sub, " API version: ", api_version)
+    end
+    
+    return _M
+
+---
+# ServiceMonitor for Prometheus to scrape auth service metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-auth-service
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth-service
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: auth-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+
+---
+# NetworkPolicy for auth service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-auth-service
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: auth-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from API Gateway
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+    # Allow traffic from main application
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow access to database
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: database
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow access to Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "snapfix-enterprise.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow HTTPS for OAuth2 providers
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443

@@ -1,0 +1,608 @@
+{{/*
+🚀 SnapFix Enterprise - Advanced Deployment Template
+📊 Production-Ready Kubernetes Deployment for 100,000+ Users
+☸️ Auto-Scaling, Health Checks, Security & High Availability
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    deployment.kubernetes.io/revision: "{{ .Release.Revision }}"
+    meta.helm.sh/release-name: {{ .Release.Name }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace }}
+    # Deployment strategy annotations
+    deployment.kubernetes.io/strategy: "RollingUpdate"
+    deployment.kubernetes.io/max-unavailable: "25%"
+    deployment.kubernetes.io/max-surge: "25%"
+spec:
+  replicas: {{ .Values.app.replicaCount }}
+  
+  # Advanced deployment strategy
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.app.strategy.rollingUpdate.maxUnavailable | default "25%" }}
+      maxSurge: {{ .Values.app.strategy.rollingUpdate.maxSurge | default "25%" }}
+  
+  # Revision history limit
+  revisionHistoryLimit: {{ .Values.app.revisionHistoryLimit | default 10 }}
+  
+  # Progress deadline
+  progressDeadlineSeconds: {{ .Values.app.progressDeadlineSeconds | default 600 }}
+  
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: snapfix-enterprise
+        # Additional labels for monitoring and service mesh
+        version: {{ .Values.app.version | quote }}
+        environment: {{ .Values.global.environment }}
+        {{- if .Values.serviceMesh.istio.enabled }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+      annotations:
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.app.env | default list | include "snapfix-enterprise.getEnvValue" "METRICS_PORT" | default "9090" }}"
+        prometheus.io/path: "/metrics"
+        
+        # Checksum annotations for config changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        
+        # Deployment metadata
+        deployment.kubernetes.io/timestamp: {{ now | date "2006-01-02T15:04:05Z" }}
+        deployment.kubernetes.io/git-commit: {{ .Values.app.gitCommit | default "unknown" }}
+        deployment.kubernetes.io/build-number: {{ .Values.app.buildNumber | default "unknown" }}
+        
+        {{- if .Values.serviceMesh.istio.enabled }}
+        # Istio sidecar configuration
+        sidecar.istio.io/proxyCPU: "100m"
+        sidecar.istio.io/proxyMemory: "128Mi"
+        sidecar.istio.io/proxyCPULimit: "200m"
+        sidecar.istio.io/proxyMemoryLimit: "256Mi"
+        {{- end }}
+        
+        {{- with .Values.app.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    
+    spec:
+      # Service account
+      serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+      
+      # Security context
+      securityContext:
+        {{- toYaml .Values.global.securityContext | nindent 8 }}
+      
+      # Image pull secrets
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # DNS configuration
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+          - name: edns0
+      
+      # Restart policy
+      restartPolicy: Always
+      
+      # Termination grace period
+      terminationGracePeriodSeconds: {{ .Values.app.terminationGracePeriodSeconds | default 30 }}
+      
+      # Node selection
+      {{- with .Values.app.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # Tolerations
+      {{- with .Values.app.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # Affinity and anti-affinity
+      {{- if .Values.app.affinity }}
+      affinity:
+        {{- toYaml .Values.app.affinity | nindent 8 }}
+      {{- else }}
+      affinity:
+        # Pod anti-affinity for better distribution
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - {{ include "snapfix-enterprise.name" . }}
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values:
+                        - api
+                topologyKey: kubernetes.io/hostname
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - {{ include "snapfix-enterprise.name" . }}
+                topologyKey: topology.kubernetes.io/zone
+      {{- end }}
+      
+      # Priority class
+      {{- if .Values.app.priorityClassName }}
+      priorityClassName: {{ .Values.app.priorityClassName }}
+      {{- end }}
+      
+      # Init containers
+      {{- if .Values.app.initContainers }}
+      initContainers:
+        {{- toYaml .Values.app.initContainers | nindent 8 }}
+      {{- else }}
+      initContainers:
+        # Database migration init container
+        - name: db-migrate
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Running database migrations..."
+              python manage.py migrate --noinput
+              echo "Database migrations completed"
+          env:
+            {{- include "snapfix-enterprise.envVars" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            {{- toYaml .Values.app.securityContext | nindent 12 }}
+        
+        # Cache warmup init container
+        - name: cache-warmup
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Warming up cache..."
+              python manage.py warmup_cache
+              echo "Cache warmup completed"
+          env:
+            {{- include "snapfix-enterprise.envVars" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            {{- toYaml .Values.app.securityContext | nindent 12 }}
+      {{- end }}
+      
+      # Main containers
+      containers:
+        # Main application container
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          
+          # Container ports
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.app.env | default list | include "snapfix-enterprise.getEnvValue" "METRICS_PORT" | default 9090 }}
+              protocol: TCP
+            {{- if .Values.app.additionalPorts }}
+            {{- toYaml .Values.app.additionalPorts | nindent 12 }}
+            {{- end }}
+          
+          # Environment variables
+          env:
+            {{- include "snapfix-enterprise.envVars" . | nindent 12 }}
+            # Container-specific environment variables
+            - name: CONTAINER_NAME
+              value: {{ .Chart.Name }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: SERVICE_ACCOUNT
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+          
+          # Environment from ConfigMap and Secrets
+          envFrom:
+            - configMapRef:
+                name: {{ include "snapfix-enterprise.fullname" . }}-config
+            - secretRef:
+                name: {{ include "snapfix-enterprise.fullname" . }}-secret
+          
+          # Resource limits and requests
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+          
+          # Security context
+          securityContext:
+            {{- toYaml .Values.app.securityContext | nindent 12 }}
+          
+          # Health checks
+          livenessProbe:
+            {{- toYaml .Values.app.livenessProbe | nindent 12 }}
+          
+          readinessProbe:
+            {{- toYaml .Values.app.readinessProbe | nindent 12 }}
+          
+          startupProbe:
+            {{- toYaml .Values.app.startupProbe | nindent 12 }}
+          
+          # Volume mounts
+          volumeMounts:
+            # Temporary directory
+            - name: tmp
+              mountPath: /tmp
+            # Application logs
+            - name: logs
+              mountPath: /app/logs
+            # Configuration files
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            # SSL certificates
+            {{- if .Values.app.tls.enabled }}
+            - name: tls-certs
+              mountPath: /app/certs
+              readOnly: true
+            {{- end }}
+            # Additional volume mounts
+            {{- with .Values.app.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          
+          # Lifecycle hooks
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    echo "Gracefully shutting down..."
+                    # Send SIGTERM to main process
+                    kill -TERM 1
+                    # Wait for graceful shutdown
+                    sleep {{ .Values.app.terminationGracePeriodSeconds | default 30 | sub 5 }}
+        
+        {{- if .Values.app.sidecarContainers }}
+        # Sidecar containers
+        {{- toYaml .Values.app.sidecarContainers | nindent 8 }}
+        {{- else }}
+        # Log shipping sidecar
+        - name: log-shipper
+          image: fluent/fluent-bit:2.2.0
+          imagePullPolicy: IfNotPresent
+          
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+          
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+              readOnly: true
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          
+          env:
+            - name: FLUENT_ELASTICSEARCH_HOST
+              value: "{{ .Values.logging.elasticsearch.host | default "elasticsearch-master" }}"
+            - name: FLUENT_ELASTICSEARCH_PORT
+              value: "{{ .Values.logging.elasticsearch.port | default "9200" }}"
+        {{- end }}
+      
+      # Volumes
+      volumes:
+        # Temporary directory
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        
+        # Application logs
+        - name: logs
+          emptyDir:
+            sizeLimit: 5Gi
+        
+        # Configuration
+        - name: config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-config
+            defaultMode: 0644
+        
+        # Fluent Bit configuration
+        - name: fluent-bit-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-fluent-bit-config
+            defaultMode: 0644
+        
+        # SSL certificates
+        {{- if .Values.app.tls.enabled }}
+        - name: tls-certs
+          secret:
+            secretName: {{ .Values.app.tls.secretName }}
+            defaultMode: 0600
+        {{- end }}
+        
+        # Additional volumes
+        {{- with .Values.app.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+{{/*
+🔄 Celery Workers Deployment
+*/}}
+{{- if .Values.celery.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: {{ .Values.celery.workers.replicaCount }}
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-worker
+  
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-worker
+        app.kubernetes.io/part-of: snapfix-enterprise
+        version: {{ .Values.app.version | quote }}
+        environment: {{ .Values.global.environment }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    
+    spec:
+      serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+      
+      securityContext:
+        {{- toYaml .Values.global.securityContext | nindent 8 }}
+      
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      containers:
+        - name: celery-worker
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          
+          command:
+            - celery
+            - -A
+            - app.celery
+            - worker
+            - --loglevel=info
+            - --concurrency=4
+            - --prefetch-multiplier=1
+            - --max-tasks-per-child=1000
+          
+          env:
+            {{- include "snapfix-enterprise.envVars" . | nindent 12 }}
+            - name: CELERY_WORKER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          
+          envFrom:
+            - configMapRef:
+                name: {{ include "snapfix-enterprise.fullname" . }}-config
+            - secretRef:
+                name: {{ include "snapfix-enterprise.fullname" . }}-secret
+          
+          resources:
+            {{- toYaml .Values.celery.workers.resources | nindent 12 }}
+          
+          securityContext:
+            {{- toYaml .Values.app.securityContext | nindent 12 }}
+          
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.celery
+                - inspect
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /app/logs
+      
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: logs
+          emptyDir:
+            sizeLimit: 2Gi
+{{- end }}
+---
+{{/*
+📅 Celery Beat Deployment
+*/}}
+{{- if and .Values.celery.enabled .Values.celery.beat.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-beat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-beat
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  replicas: 1  # Only one beat scheduler
+  
+  strategy:
+    type: Recreate  # Ensure only one beat instance
+  
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-beat
+  
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-beat
+        app.kubernetes.io/part-of: snapfix-enterprise
+        version: {{ .Values.app.version | quote }}
+        environment: {{ .Values.global.environment }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    
+    spec:
+      serviceAccountName: {{ include "snapfix-enterprise.serviceAccountName" . }}
+      
+      securityContext:
+        {{- toYaml .Values.global.securityContext | nindent 8 }}
+      
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      containers:
+        - name: celery-beat
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          
+          command:
+            - celery
+            - -A
+            - app.celery
+            - beat
+            - --loglevel=info
+            - --schedule=/tmp/celerybeat-schedule
+          
+          env:
+            {{- include "snapfix-enterprise.envVars" . | nindent 12 }}
+          
+          envFrom:
+            - configMapRef:
+                name: {{ include "snapfix-enterprise.fullname" . }}-config
+            - secretRef:
+                name: {{ include "snapfix-enterprise.fullname" . }}-secret
+          
+          resources:
+            {{- toYaml .Values.celery.beat.resources | nindent 12 }}
+          
+          securityContext:
+            {{- toYaml .Values.app.securityContext | nindent 12 }}
+          
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /app/logs
+            - name: celery-beat-schedule
+              mountPath: /app/celerybeat-schedule
+      
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: logs
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: celery-beat-schedule
+          emptyDir:
+            sizeLimit: 100Mi
+{{- end }}

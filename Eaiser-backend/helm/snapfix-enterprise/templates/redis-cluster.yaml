@@ -1,0 +1,478 @@
+{{/*
+🔴 Redis Cluster Configuration for SnapFix Enterprise
+
+This template creates a Redis Cluster with:
+- 6 nodes (3 masters, 3 replicas) for high availability
+- StatefulSet for persistent storage
+- Service for cluster discovery
+- ConfigMap for Redis configuration
+- Init containers for cluster setup
+*/}}
+
+{{- if .Values.redis.cluster.enabled }}
+{{/*
+📋 Redis Cluster ConfigMap
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-redis-cluster-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  redis.conf: |
+    # ========================================
+    # REDIS CLUSTER CONFIGURATION
+    # ========================================
+    
+    # Basic Redis settings
+    port {{ .Values.redis.cluster.port | default 6379 }}
+    bind 0.0.0.0
+    protected-mode no
+    
+    # Cluster settings
+    cluster-enabled yes
+    cluster-config-file nodes.conf
+    cluster-node-timeout {{ .Values.redis.cluster.nodeTimeout | default 15000 }}
+    cluster-announce-ip ${POD_IP}
+    cluster-announce-port {{ .Values.redis.cluster.port | default 6379 }}
+    cluster-announce-bus-port {{ .Values.redis.cluster.busPort | default 16379 }}
+    
+    # Persistence settings
+    {{- if .Values.redis.cluster.persistence.enabled }}
+    save {{ .Values.redis.cluster.persistence.save | default "900 1 300 10 60 10000" }}
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    dir /data
+    
+    # AOF settings
+    {{- if .Values.redis.cluster.persistence.aof.enabled }}
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync {{ .Values.redis.cluster.persistence.aof.fsync | default "everysec" }}
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    {{- end }}
+    {{- end }}
+    
+    # Memory settings
+    maxmemory {{ .Values.redis.cluster.maxMemory | default "2gb" }}
+    maxmemory-policy {{ .Values.redis.cluster.maxMemoryPolicy | default "allkeys-lru" }}
+    
+    # Network settings
+    tcp-keepalive {{ .Values.redis.cluster.tcpKeepalive | default 300 }}
+    timeout {{ .Values.redis.cluster.timeout | default 0 }}
+    
+    # Security settings
+    {{- if .Values.redis.cluster.auth.enabled }}
+    requirepass ${REDIS_PASSWORD}
+    masterauth ${REDIS_PASSWORD}
+    {{- end }}
+    
+    # Logging
+    loglevel {{ .Values.redis.cluster.logLevel | default "notice" }}
+    logfile ""
+    
+    # Performance tuning
+    tcp-backlog {{ .Values.redis.cluster.tcpBacklog | default 511 }}
+    databases {{ .Values.redis.cluster.databases | default 16 }}
+    
+    # Slow log settings
+    slowlog-log-slower-than {{ .Values.redis.cluster.slowlog.threshold | default 10000 }}
+    slowlog-max-len {{ .Values.redis.cluster.slowlog.maxLen | default 128 }}
+    
+    # Client settings
+    maxclients {{ .Values.redis.cluster.maxClients | default 10000 }}
+    
+  cluster-init.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Starting Redis Cluster initialization..."
+    
+    # Wait for all Redis nodes to be ready
+    NODES=""
+    for i in $(seq 0 $((CLUSTER_SIZE-1))); do
+      NODE="${SERVICE_NAME}-${i}.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:${REDIS_PORT}"
+      NODES="${NODES} ${NODE}"
+      
+      echo "Waiting for Redis node ${NODE} to be ready..."
+      until redis-cli -h ${SERVICE_NAME}-${i}.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local -p ${REDIS_PORT} ping; do
+        echo "Waiting for ${NODE}..."
+        sleep 2
+      done
+      echo "Node ${NODE} is ready"
+    done
+    
+    echo "All Redis nodes are ready. Creating cluster..."
+    
+    # Create the cluster
+    redis-cli --cluster create ${NODES} \
+      --cluster-replicas ${CLUSTER_REPLICAS} \
+      --cluster-yes
+    
+    echo "Redis Cluster created successfully!"
+    
+    # Verify cluster status
+    redis-cli -h ${SERVICE_NAME}-0.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local -p ${REDIS_PORT} cluster info
+    redis-cli -h ${SERVICE_NAME}-0.${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local -p ${REDIS_PORT} cluster nodes
+
+---
+{{/*
+🔴 Redis Cluster Headless Service
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-redis-cluster
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # Service discovery annotations
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+    
+    # Prometheus monitoring
+    {{- if .Values.monitoring.prometheus.enabled }}
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "{{ .Values.redis.cluster.metricsPort | default 9121 }}"
+    prometheus.io/path: "/metrics"
+    {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  publishNotReadyAddresses: true
+  ports:
+    - name: redis
+      port: {{ .Values.redis.cluster.port | default 6379 }}
+      targetPort: redis
+      protocol: TCP
+    - name: cluster-bus
+      port: {{ .Values.redis.cluster.busPort | default 16379 }}
+      targetPort: cluster-bus
+      protocol: TCP
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - name: metrics
+      port: {{ .Values.redis.cluster.metricsPort | default 9121 }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "snapfix-enterprise.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster
+
+---
+{{/*
+🔴 Redis Cluster StatefulSet
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-redis-cluster
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  serviceName: {{ include "snapfix-enterprise.fullname" . }}-redis-cluster
+  replicas: {{ .Values.redis.cluster.nodes | default 6 }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis-cluster
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis-cluster
+        app.kubernetes.io/part-of: snapfix-enterprise
+      annotations:
+        # Configuration checksum for rolling updates
+        checksum/config: {{ include (print $.Template.BasePath "/redis-cluster.yaml") . | sha256sum }}
+        
+        # Prometheus annotations
+        {{- if .Values.monitoring.prometheus.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.redis.cluster.metricsPort | default 9121 }}"
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        
+        {{- with .Values.redis.cluster.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.redis.cluster.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- if .Values.redis.cluster.podSecurityContext }}
+      securityContext:
+        {{- toYaml .Values.redis.cluster.podSecurityContext | nindent 8 }}
+      {{- end }}
+      
+      # Anti-affinity to spread Redis nodes across different nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "snapfix-enterprise.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: redis-cluster
+                topologyKey: kubernetes.io/hostname
+        {{- with .Values.redis.cluster.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      
+      {{- with .Values.redis.cluster.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.redis.cluster.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      initContainers:
+        # Set proper permissions for data directory
+        - name: init-permissions
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 999:999 /data
+              chmod 755 /data
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+          securityContext:
+            runAsUser: 0
+      
+      containers:
+        # Redis container
+        - name: redis
+          image: "{{ .Values.redis.cluster.image.repository }}:{{ .Values.redis.cluster.image.tag | default "7.2-alpine" }}"
+          imagePullPolicy: {{ .Values.redis.cluster.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: redis
+              containerPort: {{ .Values.redis.cluster.port | default 6379 }}
+              protocol: TCP
+            - name: cluster-bus
+              containerPort: {{ .Values.redis.cluster.busPort | default 16379 }}
+              protocol: TCP
+          
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- if .Values.redis.cluster.auth.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-redis-secret
+                  key: redis-password
+            {{- end }}
+          
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+          
+          volumeMounts:
+            - name: redis-config
+              mountPath: /etc/redis
+            - name: redis-data
+              mountPath: /data
+          
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          resources:
+            {{- toYaml .Values.redis.cluster.resources | nindent 12 }}
+          
+          {{- if .Values.redis.cluster.securityContext }}
+          securityContext:
+            {{- toYaml .Values.redis.cluster.securityContext | nindent 12 }}
+          {{- end }}
+        
+        {{- if .Values.monitoring.prometheus.enabled }}
+        # Redis Exporter for Prometheus metrics
+        - name: redis-exporter
+          image: "{{ .Values.redis.cluster.exporter.image.repository }}:{{ .Values.redis.cluster.exporter.image.tag | default "v1.55.0" }}"
+          imagePullPolicy: {{ .Values.redis.cluster.exporter.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.redis.cluster.metricsPort | default 9121 }}
+              protocol: TCP
+          
+          env:
+            - name: REDIS_ADDR
+              value: "redis://localhost:{{ .Values.redis.cluster.port | default 6379 }}"
+            {{- if .Values.redis.cluster.auth.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-redis-secret
+                  key: redis-password
+            {{- end }}
+          
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          
+          resources:
+            {{- toYaml .Values.redis.cluster.exporter.resources | nindent 12 }}
+        {{- end }}
+      
+      volumes:
+        - name: redis-config
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-redis-cluster-config
+            defaultMode: 0755
+  
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+        labels:
+          {{- include "snapfix-enterprise.labels" . | nindent 10 }}
+          app.kubernetes.io/component: redis-cluster
+      spec:
+        accessModes:
+          {{- range .Values.redis.cluster.persistence.accessModes | default (list "ReadWriteOnce") }}
+          - {{ . }}
+          {{- end }}
+        {{- if .Values.redis.cluster.persistence.storageClass }}
+        storageClassName: {{ .Values.redis.cluster.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.cluster.persistence.size | default "10Gi" }}
+
+---
+{{/*
+🔧 Redis Cluster Initialization Job
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-redis-cluster-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster-init
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "snapfix-enterprise.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis-cluster-init
+    spec:
+      restartPolicy: Never
+      
+      containers:
+        - name: cluster-init
+          image: "{{ .Values.redis.cluster.image.repository }}:{{ .Values.redis.cluster.image.tag | default "7.2-alpine" }}"
+          imagePullPolicy: {{ .Values.redis.cluster.image.pullPolicy | default "IfNotPresent" }}
+          
+          env:
+            - name: SERVICE_NAME
+              value: {{ include "snapfix-enterprise.fullname" . }}-redis-cluster
+            - name: NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: REDIS_PORT
+              value: "{{ .Values.redis.cluster.port | default 6379 }}"
+            - name: CLUSTER_SIZE
+              value: "{{ .Values.redis.cluster.nodes | default 6 }}"
+            - name: CLUSTER_REPLICAS
+              value: "{{ .Values.redis.cluster.replicas | default 1 }}"
+            {{- if .Values.redis.cluster.auth.enabled }}
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "snapfix-enterprise.fullname" . }}-redis-secret
+                  key: redis-password
+            {{- end }}
+          
+          command:
+            - /bin/bash
+            - /scripts/cluster-init.sh
+          
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /scripts
+          
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: {{ include "snapfix-enterprise.fullname" . }}-redis-cluster-config
+            defaultMode: 0755
+
+{{- end }}

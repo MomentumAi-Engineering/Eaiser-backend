@@ -1,0 +1,662 @@
+{{/*
+🔐 SnapFix Enterprise - Advanced RBAC Configuration
+👥 Role-Based Access Control for 100,000+ Concurrent Users
+🛡️ Fine-Grained Permissions & Security
+*/}}
+{{- if .Values.rbac.create }}
+# ========================================
+# SERVICE ACCOUNT - MAIN APPLICATION
+# ========================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "snapfix-enterprise.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-account
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    # Service account metadata
+    rbac.kubernetes.io/version: "v1"
+    rbac.kubernetes.io/component: "main-application"
+    rbac.kubernetes.io/environment: "{{ .Values.global.environment }}"
+    # AWS IAM role annotation (if using IRSA)
+    {{- if .Values.aws.irsa.enabled }}
+    eks.amazonaws.com/role-arn: {{ .Values.aws.irsa.roleArn }}
+    {{- end }}
+    # GCP Workload Identity annotation
+    {{- if .Values.gcp.workloadIdentity.enabled }}
+    iam.gke.io/gcp-service-account: {{ .Values.gcp.workloadIdentity.serviceAccount }}
+    {{- end }}
+    # Azure Workload Identity annotation
+    {{- if .Values.azure.workloadIdentity.enabled }}
+    azure.workload.identity/client-id: {{ .Values.azure.workloadIdentity.clientId }}
+    {{- end }}
+automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken | default true }}
+{{- with .Values.serviceAccount.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+
+---
+# ========================================
+# CLUSTER ROLE - APPLICATION PERMISSIONS
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-app
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-role
+    app.kubernetes.io/part-of: snapfix-enterprise
+rules:
+  # ----------------------------------------
+  # CORE API PERMISSIONS
+  # ----------------------------------------
+  # Read pods for health checks and monitoring
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read services for service discovery
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read endpoints for load balancing
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read configmaps for configuration
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read secrets for credentials
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read nodes for cluster information
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  
+  # ----------------------------------------
+  # APPS API PERMISSIONS
+  # ----------------------------------------
+  # Read deployments for scaling information
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read replicasets for pod management
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  
+  # ----------------------------------------
+  # AUTOSCALING API PERMISSIONS
+  # ----------------------------------------
+  {{- if .Values.autoscaling.hpa.enabled }}
+  # Read HPA for scaling metrics
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  
+  # ----------------------------------------
+  # METRICS API PERMISSIONS
+  # ----------------------------------------
+  {{- if .Values.monitoring.prometheus.enabled }}
+  # Read metrics for monitoring
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  {{- end }}
+  
+  # ----------------------------------------
+  # CUSTOM METRICS API PERMISSIONS
+  # ----------------------------------------
+  {{- if .Values.autoscaling.hpa.customMetrics.enabled }}
+  # Read custom metrics for HPA
+  - apiGroups: ["custom.metrics.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list"]
+  {{- end }}
+  
+  # ----------------------------------------
+  # EXTERNAL METRICS API PERMISSIONS
+  # ----------------------------------------
+  {{- if .Values.autoscaling.hpa.externalMetrics.enabled }}
+  # Read external metrics for HPA
+  - apiGroups: ["external.metrics.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list"]
+  {{- end }}
+  
+  # ----------------------------------------
+  # NETWORKING API PERMISSIONS
+  # ----------------------------------------
+  {{- if .Values.networkPolicy.enabled }}
+  # Read network policies
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  
+  # ----------------------------------------
+  # ISTIO API PERMISSIONS (if enabled)
+  # ----------------------------------------
+  {{- if .Values.istio.enabled }}
+  # Read Istio resources
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices", "destinationrules", "gateways"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["security.istio.io"]
+    resources: ["authorizationpolicies", "peerauthentications"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  
+  # ----------------------------------------
+  # CUSTOM PERMISSIONS
+  # ----------------------------------------
+  {{- range .Values.rbac.customRules }}
+  - apiGroups: {{ .apiGroups | toJson }}
+    resources: {{ .resources | toJson }}
+    verbs: {{ .verbs | toJson }}
+    {{- if .resourceNames }}
+    resourceNames: {{ .resourceNames | toJson }}
+    {{- end }}
+  {{- end }}
+
+---
+# ========================================
+# CLUSTER ROLE BINDING - APPLICATION
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-app
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-role-binding
+    app.kubernetes.io/part-of: snapfix-enterprise
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "snapfix-enterprise.fullname" . }}-app
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+
+---
+# ========================================
+# ROLE - NAMESPACE-SPECIFIC PERMISSIONS
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-namespace
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: role
+    app.kubernetes.io/part-of: snapfix-enterprise
+rules:
+  # ----------------------------------------
+  # ENHANCED NAMESPACE PERMISSIONS
+  # ----------------------------------------
+  # Full access to pods in namespace
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to pod logs
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  
+  # Full access to pod exec (for debugging)
+  {{- if .Values.rbac.allowPodExec }}
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  {{- end }}
+  
+  # Full access to configmaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to services
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to endpoints
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to persistent volume claims
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to replicasets
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to statefulsets
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to ingresses
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Full access to HPA
+  {{- if .Values.autoscaling.hpa.enabled }}
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+  
+  # Full access to VPA
+  {{- if .Values.autoscaling.vpa.enabled }}
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+  
+  # Full access to KEDA ScaledObjects
+  {{- if .Values.keda.enabled }}
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects", "scaledjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+
+---
+# ========================================
+# ROLE BINDING - NAMESPACE PERMISSIONS
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-namespace
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: role-binding
+    app.kubernetes.io/part-of: snapfix-enterprise
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "snapfix-enterprise.fullname" . }}-namespace
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+
+---
+# ========================================
+# SERVICE ACCOUNT - CELERY WORKER
+# ========================================
+{{- if .Values.celery.worker.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "snapfix-enterprise.serviceAccountName" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-account
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: celery-worker
+  annotations:
+    rbac.kubernetes.io/component: "celery-worker"
+    {{- if .Values.aws.irsa.enabled }}
+    eks.amazonaws.com/role-arn: {{ .Values.aws.irsa.workerRoleArn | default .Values.aws.irsa.roleArn }}
+    {{- end }}
+automountServiceAccountToken: {{ .Values.celery.worker.serviceAccount.automountServiceAccountToken | default true }}
+
+---
+# ========================================
+# ROLE - CELERY WORKER PERMISSIONS
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: role
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: celery-worker
+rules:
+  # Read-only access to pods for health checks
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read-only access to configmaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read-only access to secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read-only access to services
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  
+  # Access to create events for logging
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+---
+# ========================================
+# ROLE BINDING - CELERY WORKER
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: role-binding
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: celery-worker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.serviceAccountName" . }}-celery-worker
+    namespace: {{ .Release.Namespace }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE ACCOUNT - CELERY BEAT
+# ========================================
+{{- if .Values.celery.beat.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "snapfix-enterprise.serviceAccountName" . }}-celery-beat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-account
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: celery-beat
+  annotations:
+    rbac.kubernetes.io/component: "celery-beat"
+automountServiceAccountToken: {{ .Values.celery.beat.serviceAccount.automountServiceAccountToken | default true }}
+
+---
+# ========================================
+# ROLE - CELERY BEAT PERMISSIONS
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-beat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: role
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: celery-beat
+rules:
+  # Read-only access to pods
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read-only access to configmaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read-only access to secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  
+  # Access to create events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+---
+# ========================================
+# ROLE BINDING - CELERY BEAT
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-beat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: role-binding
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: celery-beat
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-beat
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.serviceAccountName" . }}-celery-beat
+    namespace: {{ .Release.Namespace }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE ACCOUNT - MONITORING
+# ========================================
+{{- if .Values.monitoring.prometheus.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-account
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: monitoring
+  annotations:
+    rbac.kubernetes.io/component: "monitoring"
+automountServiceAccountToken: true
+
+---
+# ========================================
+# CLUSTER ROLE - MONITORING PERMISSIONS
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-role
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: monitoring
+rules:
+  # Read access to all resources for monitoring
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "nodes/metrics", "services", "endpoints", "pods", "ingresses", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["extensions"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "volumeattachments"]
+    verbs: ["get", "list", "watch"]
+
+---
+# ========================================
+# CLUSTER ROLE BINDING - MONITORING
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-role-binding
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "snapfix-enterprise.fullname" . }}-monitoring
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.fullname" . }}-monitoring
+    namespace: {{ .Release.Namespace }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE ACCOUNT - BACKUP
+# ========================================
+{{- if .Values.backup.velero.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-account
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: backup
+  annotations:
+    rbac.kubernetes.io/component: "backup"
+    {{- if .Values.aws.irsa.enabled }}
+    eks.amazonaws.com/role-arn: {{ .Values.aws.irsa.backupRoleArn }}
+    {{- end }}
+automountServiceAccountToken: true
+
+---
+# ========================================
+# CLUSTER ROLE - BACKUP PERMISSIONS
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-backup
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-role
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: backup
+rules:
+  # Velero backup permissions
+  - apiGroups: ["velero.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  
+  # Read access to all resources for backup
+  - apiGroups: [""]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["apps"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["extensions"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+---
+# ========================================
+# CLUSTER ROLE BINDING - BACKUP
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-backup
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-role-binding
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: backup
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "snapfix-enterprise.fullname" . }}-backup
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.fullname" . }}-backup
+    namespace: {{ .Release.Namespace }}
+
+{{- end }}
+
+{{- end }}

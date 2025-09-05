@@ -1,0 +1,622 @@
+{{/*
+📊 SnapFix Enterprise - Advanced Service Monitoring
+🔍 Prometheus ServiceMonitor for 100,000+ Concurrent Users
+📈 Comprehensive Metrics Collection & Alerting
+*/}}
+{{- if and .Values.monitoring.prometheus.enabled .Values.monitoring.serviceMonitor.enabled }}
+# ========================================
+# SERVICE MONITOR - MAIN APPLICATION
+# ========================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+    monitoring.coreos.com/type: application
+  annotations:
+    # ServiceMonitor metadata
+    monitoring.coreos.com/version: "v1"
+    monitoring.coreos.com/component: "main-application"
+    monitoring.coreos.com/environment: "{{ .Values.global.environment }}"
+    # Alerting annotations
+    alerting.coreos.com/enabled: "{{ .Values.monitoring.alerting.enabled | default "true" }}"
+    alerting.coreos.com/severity: "{{ .Values.monitoring.alerting.severity | default "warning" }}"
+spec:
+  # ----------------------------------------
+  # SERVICE SELECTOR
+  # ----------------------------------------
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: web
+  
+  # ----------------------------------------
+  # NAMESPACE SELECTOR
+  # ----------------------------------------
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  # ----------------------------------------
+  # ENDPOINT CONFIGURATION
+  # ----------------------------------------
+  endpoints:
+    # Main application metrics endpoint
+    - port: metrics
+      path: {{ .Values.monitoring.serviceMonitor.path | default "/metrics" }}
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+      scheme: {{ .Values.monitoring.serviceMonitor.scheme | default "http" }}
+      
+      # Honor labels from target
+      honorLabels: {{ .Values.monitoring.serviceMonitor.honorLabels | default true }}
+      
+      # Honor timestamps from target
+      honorTimestamps: {{ .Values.monitoring.serviceMonitor.honorTimestamps | default true }}
+      
+      # ----------------------------------------
+      # METRIC RELABELING
+      # ----------------------------------------
+      metricRelabelings:
+        # Add environment label
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+        
+        # Add application label
+        - sourceLabels: [__name__]
+          targetLabel: application
+          replacement: snapfix-enterprise
+        
+        # Add version label
+        - sourceLabels: [__name__]
+          targetLabel: version
+          replacement: {{ .Values.image.tag | default .Chart.AppVersion }}
+        
+        # Rename instance label to pod
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        
+        # Add node label
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        
+        # Add namespace label
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        
+        # Custom metric relabelings
+        {{- range .Values.monitoring.serviceMonitor.metricRelabelings }}
+        - sourceLabels: {{ .sourceLabels | toJson }}
+          {{- if .targetLabel }}
+          targetLabel: {{ .targetLabel }}
+          {{- end }}
+          {{- if .replacement }}
+          replacement: {{ .replacement }}
+          {{- end }}
+          {{- if .regex }}
+          regex: {{ .regex }}
+          {{- end }}
+          {{- if .action }}
+          action: {{ .action }}
+          {{- end }}
+        {{- end }}
+      
+      # ----------------------------------------
+      # RELABELING CONFIGURATION
+      # ----------------------------------------
+      relabelings:
+        # Keep only running pods
+        - sourceLabels: [__meta_kubernetes_pod_phase]
+          regex: Running
+          action: keep
+        
+        # Keep only ready containers
+        - sourceLabels: [__meta_kubernetes_pod_ready]
+          regex: "true"
+          action: keep
+        
+        # Add service label
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+        
+        # Add endpoint label
+        - sourceLabels: [__meta_kubernetes_endpoint_port_name]
+          targetLabel: endpoint
+        
+        # Custom relabelings
+        {{- range .Values.monitoring.serviceMonitor.relabelings }}
+        - sourceLabels: {{ .sourceLabels | toJson }}
+          {{- if .targetLabel }}
+          targetLabel: {{ .targetLabel }}
+          {{- end }}
+          {{- if .replacement }}
+          replacement: {{ .replacement }}
+          {{- end }}
+          {{- if .regex }}
+          regex: {{ .regex }}
+          {{- end }}
+          {{- if .action }}
+          action: {{ .action }}
+          {{- end }}
+        {{- end }}
+      
+      # ----------------------------------------
+      # TLS CONFIGURATION
+      # ----------------------------------------
+      {{- if .Values.monitoring.serviceMonitor.tls.enabled }}
+      tlsConfig:
+        {{- if .Values.monitoring.serviceMonitor.tls.caFile }}
+        caFile: {{ .Values.monitoring.serviceMonitor.tls.caFile }}
+        {{- end }}
+        {{- if .Values.monitoring.serviceMonitor.tls.certFile }}
+        certFile: {{ .Values.monitoring.serviceMonitor.tls.certFile }}
+        {{- end }}
+        {{- if .Values.monitoring.serviceMonitor.tls.keyFile }}
+        keyFile: {{ .Values.monitoring.serviceMonitor.tls.keyFile }}
+        {{- end }}
+        {{- if .Values.monitoring.serviceMonitor.tls.serverName }}
+        serverName: {{ .Values.monitoring.serviceMonitor.tls.serverName }}
+        {{- end }}
+        insecureSkipVerify: {{ .Values.monitoring.serviceMonitor.tls.insecureSkipVerify | default false }}
+      {{- end }}
+      
+      # ----------------------------------------
+      # BASIC AUTH CONFIGURATION
+      # ----------------------------------------
+      {{- if .Values.monitoring.serviceMonitor.basicAuth.enabled }}
+      basicAuth:
+        username:
+          name: {{ .Values.monitoring.serviceMonitor.basicAuth.username.secret }}
+          key: {{ .Values.monitoring.serviceMonitor.basicAuth.username.key }}
+        password:
+          name: {{ .Values.monitoring.serviceMonitor.basicAuth.password.secret }}
+          key: {{ .Values.monitoring.serviceMonitor.basicAuth.password.key }}
+      {{- end }}
+      
+      # ----------------------------------------
+      # BEARER TOKEN CONFIGURATION
+      # ----------------------------------------
+      {{- if .Values.monitoring.serviceMonitor.bearerToken.enabled }}
+      bearerTokenSecret:
+        name: {{ .Values.monitoring.serviceMonitor.bearerToken.secret }}
+        key: {{ .Values.monitoring.serviceMonitor.bearerToken.key }}
+      {{- end }}
+  
+  # ----------------------------------------
+  # JOB LABEL
+  # ----------------------------------------
+  jobLabel: {{ .Values.monitoring.serviceMonitor.jobLabel | default "app.kubernetes.io/name" }}
+  
+  # ----------------------------------------
+  # TARGET LABELS
+  # ----------------------------------------
+  targetLabels:
+    - app.kubernetes.io/name
+    - app.kubernetes.io/instance
+    - app.kubernetes.io/version
+    - app.kubernetes.io/component
+    - app.kubernetes.io/part-of
+    {{- range .Values.monitoring.serviceMonitor.targetLabels }}
+    - {{ . }}
+    {{- end }}
+  
+  # ----------------------------------------
+  # POD TARGET LABELS
+  # ----------------------------------------
+  podTargetLabels:
+    - app.kubernetes.io/name
+    - app.kubernetes.io/instance
+    - pod-template-hash
+    {{- range .Values.monitoring.serviceMonitor.podTargetLabels }}
+    - {{ . }}
+    {{- end }}
+  
+  # ----------------------------------------
+  # SAMPLE LIMIT
+  # ----------------------------------------
+  sampleLimit: {{ .Values.monitoring.serviceMonitor.sampleLimit | default 10000 }}
+  
+  # ----------------------------------------
+  # TARGET LIMIT
+  # ----------------------------------------
+  targetLimit: {{ .Values.monitoring.serviceMonitor.targetLimit | default 100 }}
+
+---
+# ========================================
+# SERVICE MONITOR - CELERY WORKERS
+# ========================================
+{{- if .Values.celery.worker.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: celery-worker
+    monitoring.coreos.com/type: worker
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-worker
+  
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  endpoints:
+    - port: metrics
+      path: {{ .Values.celery.worker.monitoring.metricsPath | default "/metrics" }}
+      interval: {{ .Values.celery.worker.monitoring.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.celery.worker.monitoring.scrapeTimeout | default "10s" }}
+      
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+        
+        - sourceLabels: [__name__]
+          targetLabel: component
+          replacement: celery-worker
+        
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: worker_pod
+        
+        # Celery-specific metric relabelings
+        - sourceLabels: [queue]
+          targetLabel: celery_queue
+        
+        - sourceLabels: [task]
+          targetLabel: celery_task
+      
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_phase]
+          regex: Running
+          action: keep
+        
+        - sourceLabels: [__meta_kubernetes_pod_ready]
+          regex: "true"
+          action: keep
+  
+  jobLabel: app.kubernetes.io/component
+  sampleLimit: {{ .Values.celery.worker.monitoring.sampleLimit | default 5000 }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE MONITOR - CELERY FLOWER
+# ========================================
+{{- if .Values.celery.flower.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-celery-flower
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/role: celery-flower
+    monitoring.coreos.com/type: monitoring-ui
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapfix-enterprise.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-flower
+  
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  endpoints:
+    - port: http
+      path: {{ .Values.celery.flower.monitoring.metricsPath | default "/api/workers" }}
+      interval: {{ .Values.celery.flower.monitoring.interval | default "60s" }}
+      scrapeTimeout: {{ .Values.celery.flower.monitoring.scrapeTimeout | default "30s" }}
+      
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+        
+        - sourceLabels: [__name__]
+          targetLabel: component
+          replacement: celery-flower
+  
+  jobLabel: app.kubernetes.io/component
+  sampleLimit: {{ .Values.celery.flower.monitoring.sampleLimit | default 1000 }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE MONITOR - REDIS
+# ========================================
+{{- if and .Values.redis.enabled .Values.redis.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/name: redis
+    monitoring.coreos.com/type: database
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  endpoints:
+    - port: metrics
+      path: {{ .Values.redis.monitoring.metricsPath | default "/metrics" }}
+      interval: {{ .Values.redis.monitoring.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.redis.monitoring.scrapeTimeout | default "10s" }}
+      
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+        
+        - sourceLabels: [__name__]
+          targetLabel: database_type
+          replacement: redis
+        
+        - sourceLabels: [addr]
+          targetLabel: redis_instance
+        
+        # Redis cluster metrics
+        {{- if .Values.redis.cluster.enabled }}
+        - sourceLabels: [role]
+          targetLabel: redis_role
+        
+        - sourceLabels: [master_name]
+          targetLabel: redis_master
+        {{- end }}
+  
+  jobLabel: app.kubernetes.io/name
+  sampleLimit: {{ .Values.redis.monitoring.sampleLimit | default 3000 }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE MONITOR - POSTGRESQL
+# ========================================
+{{- if and .Values.postgresql.enabled .Values.postgresql.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-postgresql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/name: postgresql
+    monitoring.coreos.com/type: database
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  endpoints:
+    - port: metrics
+      path: {{ .Values.postgresql.monitoring.metricsPath | default "/metrics" }}
+      interval: {{ .Values.postgresql.monitoring.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.postgresql.monitoring.scrapeTimeout | default "10s" }}
+      
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+        
+        - sourceLabels: [__name__]
+          targetLabel: database_type
+          replacement: postgresql
+        
+        - sourceLabels: [datname]
+          targetLabel: database_name
+        
+        - sourceLabels: [server]
+          targetLabel: postgresql_server
+  
+  jobLabel: app.kubernetes.io/name
+  sampleLimit: {{ .Values.postgresql.monitoring.sampleLimit | default 5000 }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE MONITOR - MONGODB
+# ========================================
+{{- if and .Values.mongodb.enabled .Values.mongodb.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-mongodb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/name: mongodb
+    monitoring.coreos.com/type: database
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongodb
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  endpoints:
+    - port: metrics
+      path: {{ .Values.mongodb.monitoring.metricsPath | default "/metrics" }}
+      interval: {{ .Values.mongodb.monitoring.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.mongodb.monitoring.scrapeTimeout | default "10s" }}
+      
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+        
+        - sourceLabels: [__name__]
+          targetLabel: database_type
+          replacement: mongodb
+        
+        - sourceLabels: [cl_name]
+          targetLabel: mongodb_cluster
+        
+        - sourceLabels: [rs_nm]
+          targetLabel: mongodb_replica_set
+        
+        # MongoDB sharding metrics
+        {{- if .Values.mongodb.sharding.enabled }}
+        - sourceLabels: [sh_name]
+          targetLabel: mongodb_shard
+        {{- end }}
+  
+  jobLabel: app.kubernetes.io/name
+  sampleLimit: {{ .Values.mongodb.monitoring.sampleLimit | default 4000 }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE MONITOR - RABBITMQ
+# ========================================
+{{- if and .Values.rabbitmq.enabled .Values.rabbitmq.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-rabbitmq
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/name: rabbitmq
+    monitoring.coreos.com/type: message-queue
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  
+  endpoints:
+    - port: metrics
+      path: {{ .Values.rabbitmq.monitoring.metricsPath | default "/metrics" }}
+      interval: {{ .Values.rabbitmq.monitoring.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.rabbitmq.monitoring.scrapeTimeout | default "10s" }}
+      
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+        
+        - sourceLabels: [__name__]
+          targetLabel: message_queue_type
+          replacement: rabbitmq
+        
+        - sourceLabels: [queue]
+          targetLabel: rabbitmq_queue
+        
+        - sourceLabels: [vhost]
+          targetLabel: rabbitmq_vhost
+        
+        - sourceLabels: [node]
+          targetLabel: rabbitmq_node
+  
+  jobLabel: app.kubernetes.io/name
+  sampleLimit: {{ .Values.rabbitmq.monitoring.sampleLimit | default 3000 }}
+
+{{- end }}
+
+---
+# ========================================
+# SERVICE MONITOR - NGINX INGRESS
+# ========================================
+{{- if and .Values.ingress.enabled .Values.ingress.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-nginx-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service-monitor
+    app.kubernetes.io/part-of: snapfix-enterprise
+    app.kubernetes.io/name: nginx-ingress
+    monitoring.coreos.com/type: ingress
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingress-nginx
+      app.kubernetes.io/component: controller
+  
+  namespaceSelector:
+    matchNames:
+      - ingress-nginx
+      - {{ .Release.Namespace }}
+  
+  endpoints:
+    - port: metrics
+      path: {{ .Values.ingress.monitoring.metricsPath | default "/metrics" }}
+      interval: {{ .Values.ingress.monitoring.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.ingress.monitoring.scrapeTimeout | default "10s" }}
+      
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          targetLabel: environment
+          replacement: {{ .Values.global.environment }}
+        
+        - sourceLabels: [__name__]
+          targetLabel: ingress_type
+          replacement: nginx
+        
+        - sourceLabels: [ingress]
+          targetLabel: ingress_name
+        
+        - sourceLabels: [service]
+          targetLabel: backend_service
+        
+        - sourceLabels: [method]
+          targetLabel: http_method
+        
+        - sourceLabels: [status]
+          targetLabel: http_status
+  
+  jobLabel: app.kubernetes.io/name
+  sampleLimit: {{ .Values.ingress.monitoring.sampleLimit | default 5000 }}
+
+{{- end }}
+
+{{- end }}

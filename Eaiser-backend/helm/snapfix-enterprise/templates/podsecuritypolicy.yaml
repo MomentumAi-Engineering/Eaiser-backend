@@ -1,0 +1,565 @@
+{{/*
+🔒 SnapFix Enterprise - Advanced Pod Security Policies
+🛡️ Comprehensive Security Controls for 100,000+ Concurrent Users
+🚫 Zero-Trust Pod Security & Compliance
+*/}}
+{{- if .Values.podSecurityPolicy.enabled }}
+# ========================================
+# POD SECURITY POLICY - RESTRICTED
+# ========================================
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-restricted
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: security-policy
+    app.kubernetes.io/part-of: snapfix-enterprise
+    security.kubernetes.io/policy-level: "restricted"
+  annotations:
+    # Security policy metadata
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/defaultProfileName: 'runtime/default'
+    # Compliance annotations
+    compliance.kubernetes.io/pci-dss: "true"
+    compliance.kubernetes.io/hipaa: "true"
+    compliance.kubernetes.io/gdpr: "true"
+    compliance.kubernetes.io/soc2: "true"
+spec:
+  # ----------------------------------------
+  # PRIVILEGE ESCALATION CONTROLS
+  # ----------------------------------------
+  privileged: false
+  allowPrivilegeEscalation: false
+  
+  # ----------------------------------------
+  # USER AND GROUP CONTROLS
+  # ----------------------------------------
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  runAsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1000
+        max: 65535
+  supplementalGroups:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1000
+        max: 65535
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1000
+        max: 65535
+  
+  # ----------------------------------------
+  # CAPABILITY CONTROLS
+  # ----------------------------------------
+  requiredDropCapabilities:
+    - ALL
+  allowedCapabilities: []
+  defaultAddCapabilities: []
+  
+  # ----------------------------------------
+  # VOLUME CONTROLS
+  # ----------------------------------------
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+    {{- if .Values.podSecurityPolicy.allowedVolumes }}
+    {{- range .Values.podSecurityPolicy.allowedVolumes }}
+    - '{{ . }}'
+    {{- end }}
+    {{- end }}
+  
+  # ----------------------------------------
+  # HOST CONTROLS
+  # ----------------------------------------
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  hostPorts:
+    - min: 0
+      max: 0  # No host ports allowed
+  
+  # ----------------------------------------
+  # SELINUX CONTROLS
+  # ----------------------------------------
+  seLinux:
+    rule: 'RunAsAny'
+  
+  # ----------------------------------------
+  # READ-ONLY ROOT FILESYSTEM
+  # ----------------------------------------
+  readOnlyRootFilesystem: {{ .Values.podSecurityPolicy.readOnlyRootFilesystem | default true }}
+  
+  # ----------------------------------------
+  # ALLOWED UNSAFE SYSCTLS (None)
+  # ----------------------------------------
+  allowedUnsafeSysctls: []
+  forbiddenSysctls:
+    - '*'
+
+---
+# ========================================
+# POD SECURITY POLICY - PRIVILEGED (For System Components)
+# ========================================
+{{- if .Values.podSecurityPolicy.allowPrivileged }}
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-privileged
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: security-policy
+    app.kubernetes.io/part-of: snapfix-enterprise
+    security.kubernetes.io/policy-level: "privileged"
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: '*'
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: '*'
+spec:
+  privileged: true
+  allowPrivilegeEscalation: true
+  allowedCapabilities:
+    - '*'
+  volumes:
+    - '*'
+  hostNetwork: true
+  hostPorts:
+    - min: 0
+      max: 65535
+  hostIPC: true
+  hostPID: true
+  runAsUser:
+    rule: 'RunAsAny'
+  seLinux:
+    rule: 'RunAsAny'
+  supplementalGroups:
+    rule: 'RunAsAny'
+  fsGroup:
+    rule: 'RunAsAny'
+  readOnlyRootFilesystem: false
+
+{{- end }}
+
+---
+# ========================================
+# CLUSTER ROLE - PSP USER
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-psp-user
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: security-rbac
+    app.kubernetes.io/part-of: snapfix-enterprise
+rules:
+  - apiGroups: ['policy']
+    resources: ['podsecuritypolicies']
+    verbs: ['use']
+    resourceNames:
+      - {{ include "snapfix-enterprise.fullname" . }}-restricted
+      {{- if .Values.podSecurityPolicy.allowPrivileged }}
+      - {{ include "snapfix-enterprise.fullname" . }}-privileged
+      {{- end }}
+
+---
+# ========================================
+# CLUSTER ROLE BINDING - PSP USER
+# ========================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-psp-user
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: security-rbac
+    app.kubernetes.io/part-of: snapfix-enterprise
+roleRef:
+  kind: ClusterRole
+  name: {{ include "snapfix-enterprise.fullname" . }}-psp-user
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  # Service account for main application
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+  
+  # Service account for Celery workers
+  {{- if .Values.celery.worker.enabled }}
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.serviceAccountName" . }}-celery-worker
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  
+  # Service account for Celery beat
+  {{- if .Values.celery.beat.enabled }}
+  - kind: ServiceAccount
+    name: {{ include "snapfix-enterprise.serviceAccountName" . }}-celery-beat
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  
+  # Additional service accounts
+  {{- range .Values.podSecurityPolicy.additionalServiceAccounts }}
+  - kind: ServiceAccount
+    name: {{ .name }}
+    namespace: {{ .namespace | default $.Release.Namespace }}
+  {{- end }}
+
+{{- end }}
+
+---
+{{/*
+🔒 Pod Security Standards (PSS) - Kubernetes 1.23+
+*/}}
+{{- if .Values.podSecurityStandards.enabled }}
+# ========================================
+# POD SECURITY STANDARDS NAMESPACE LABELS
+# ========================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    # Pod Security Standards labels
+    pod-security.kubernetes.io/enforce: {{ .Values.podSecurityStandards.enforce | default "restricted" }}
+    pod-security.kubernetes.io/audit: {{ .Values.podSecurityStandards.audit | default "restricted" }}
+    pod-security.kubernetes.io/warn: {{ .Values.podSecurityStandards.warn | default "restricted" }}
+    # Version labels
+    pod-security.kubernetes.io/enforce-version: {{ .Values.podSecurityStandards.version | default "latest" }}
+    pod-security.kubernetes.io/audit-version: {{ .Values.podSecurityStandards.version | default "latest" }}
+    pod-security.kubernetes.io/warn-version: {{ .Values.podSecurityStandards.version | default "latest" }}
+  annotations:
+    # Security annotations
+    security.kubernetes.io/policy-type: "pod-security-standards"
+    security.kubernetes.io/compliance: "pci-dss,hipaa,gdpr,soc2"
+    security.kubernetes.io/environment: "{{ .Values.global.environment }}"
+
+{{- end }}
+
+---
+{{/*
+🔒 Security Context Constraints (OpenShift)
+*/}}
+{{- if and .Values.openshift.enabled .Values.securityContextConstraints.enabled }}
+# ========================================
+# SECURITY CONTEXT CONSTRAINTS
+# ========================================
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-scc
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: security-scc
+    app.kubernetes.io/part-of: snapfix-enterprise
+  annotations:
+    kubernetes.io/description: "Security Context Constraints for SnapFix Enterprise"
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegedContainer: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+requiredDropCapabilities:
+  - ALL
+allowedFlexVolumes: []
+fsGroup:
+  type: MustRunAs
+  ranges:
+    - min: 1000
+      max: 65535
+readOnlyRootFilesystem: {{ .Values.securityContextConstraints.readOnlyRootFilesystem | default true }}
+runAsUser:
+  type: MustRunAsNonRoot
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: MustRunAs
+  ranges:
+    - min: 1000
+      max: 65535
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - persistentVolumeClaim
+  - projected
+  - secret
+users:
+  - system:serviceaccount:{{ .Release.Namespace }}:{{ include "snapfix-enterprise.serviceAccountName" . }}
+  {{- if .Values.celery.worker.enabled }}
+  - system:serviceaccount:{{ .Release.Namespace }}:{{ include "snapfix-enterprise.serviceAccountName" . }}-celery-worker
+  {{- end }}
+  {{- if .Values.celery.beat.enabled }}
+  - system:serviceaccount:{{ .Release.Namespace }}:{{ include "snapfix-enterprise.serviceAccountName" . }}-celery-beat
+  {{- end }}
+groups: []
+priority: 10
+
+{{- end }}
+
+---
+{{/*
+🔒 OPA Gatekeeper Constraints
+*/}}
+{{- if .Values.gatekeeper.enabled }}
+# ========================================
+# GATEKEEPER CONSTRAINT - REQUIRED LABELS
+# ========================================
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-template
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        type: object
+        properties:
+          labels:
+            type: array
+            items:
+              type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlabels
+        
+        violation[{"msg": msg}] {
+          required := input.parameters.labels
+          provided := input.review.object.metadata.labels
+          missing := required[_]
+          not provided[missing]
+          msg := sprintf("Missing required label: %v", [missing])
+        }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLabels
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-required-labels
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraint
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: [{{ .Release.Namespace | quote }}]
+  parameters:
+    labels:
+      - "app.kubernetes.io/name"
+      - "app.kubernetes.io/version"
+      - "app.kubernetes.io/component"
+      - "app.kubernetes.io/part-of"
+      {{- range .Values.gatekeeper.requiredLabels }}
+      - {{ . | quote }}
+      {{- end }}
+
+---
+# ========================================
+# GATEKEEPER CONSTRAINT - SECURITY POLICIES
+# ========================================
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8ssecuritypolicies
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-template
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sSecurityPolicies
+      validation:
+        type: object
+        properties:
+          runAsNonRoot:
+            type: boolean
+          readOnlyRootFilesystem:
+            type: boolean
+          allowPrivilegeEscalation:
+            type: boolean
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8ssecuritypolicies
+        
+        violation[{"msg": msg}] {
+          input.parameters.runAsNonRoot == true
+          not input.review.object.spec.securityContext.runAsNonRoot
+          msg := "Container must run as non-root user"
+        }
+        
+        violation[{"msg": msg}] {
+          input.parameters.readOnlyRootFilesystem == true
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.readOnlyRootFilesystem
+          msg := sprintf("Container %v must have readOnlyRootFilesystem set to true", [container.name])
+        }
+        
+        violation[{"msg": msg}] {
+          input.parameters.allowPrivilegeEscalation == false
+          container := input.review.object.spec.containers[_]
+          container.securityContext.allowPrivilegeEscalation != false
+          msg := sprintf("Container %v must not allow privilege escalation", [container.name])
+        }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sSecurityPolicies
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-security-policies
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraint
+    app.kubernetes.io/part-of: snapfix-enterprise
+spec:
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: [{{ .Release.Namespace | quote }}]
+  parameters:
+    runAsNonRoot: {{ .Values.gatekeeper.securityPolicies.runAsNonRoot | default true }}
+    readOnlyRootFilesystem: {{ .Values.gatekeeper.securityPolicies.readOnlyRootFilesystem | default true }}
+    allowPrivilegeEscalation: {{ .Values.gatekeeper.securityPolicies.allowPrivilegeEscalation | default false }}
+
+{{- end }}
+
+---
+{{/*
+🔒 Falco Security Rules
+*/}}
+{{- if .Values.falco.enabled }}
+# ========================================
+# FALCO CUSTOM RULES
+# ========================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapfix-enterprise.fullname" . }}-falco-rules
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snapfix-enterprise.labels" . | nindent 4 }}
+    app.kubernetes.io/component: falco-rules
+    app.kubernetes.io/part-of: snapfix-enterprise
+data:
+  snapfix_rules.yaml: |
+    # SnapFix Enterprise Custom Security Rules
+    
+    # Detect privilege escalation attempts
+    - rule: SnapFix Privilege Escalation
+      desc: Detect privilege escalation in SnapFix containers
+      condition: >
+        spawned_process and
+        container and
+        k8s.ns.name={{ .Release.Namespace }} and
+        k8s.pod.label["app.kubernetes.io/name"]={{ include "snapfix-enterprise.name" . }} and
+        (proc.name in (sudo, su, doas) or
+         proc.args contains "--privileged" or
+         proc.args contains "--cap-add")
+      output: >
+        Privilege escalation detected in SnapFix container
+        (user=%user.name command=%proc.cmdline container=%container.name
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [security, privilege_escalation, snapfix]
+    
+    # Detect suspicious network activity
+    - rule: SnapFix Suspicious Network Activity
+      desc: Detect suspicious network connections from SnapFix containers
+      condition: >
+        inbound_outbound and
+        container and
+        k8s.ns.name={{ .Release.Namespace }} and
+        k8s.pod.label["app.kubernetes.io/name"]={{ include "snapfix-enterprise.name" . }} and
+        not fd.sport in ({{ .Values.service.port | default 8000 }}, 443, 80, 5432, 6379, 5672, 27017) and
+        not fd.dport in ({{ .Values.service.port | default 8000 }}, 443, 80, 5432, 6379, 5672, 27017, 53)
+      output: >
+        Suspicious network activity in SnapFix container
+        (connection=%fd.name container=%container.name
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: WARNING
+      tags: [network, security, snapfix]
+    
+    # Detect file system modifications
+    - rule: SnapFix Unauthorized File Modification
+      desc: Detect unauthorized file modifications in SnapFix containers
+      condition: >
+        open_write and
+        container and
+        k8s.ns.name={{ .Release.Namespace }} and
+        k8s.pod.label["app.kubernetes.io/name"]={{ include "snapfix-enterprise.name" . }} and
+        fd.name startswith /etc and
+        not proc.name in (apt, yum, dpkg, rpm)
+      output: >
+        Unauthorized file modification in SnapFix container
+        (file=%fd.name process=%proc.name container=%container.name
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: HIGH
+      tags: [filesystem, security, snapfix]
+    
+    # Detect shell access
+    - rule: SnapFix Shell Access
+      desc: Detect shell access to SnapFix containers
+      condition: >
+        spawned_process and
+        container and
+        k8s.ns.name={{ .Release.Namespace }} and
+        k8s.pod.label["app.kubernetes.io/name"]={{ include "snapfix-enterprise.name" . }} and
+        proc.name in (bash, sh, zsh, fish, csh, tcsh)
+      output: >
+        Shell access detected in SnapFix container
+        (shell=%proc.name user=%user.name container=%container.name
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: INFO
+      tags: [shell, access, snapfix]
+    
+    # Detect crypto mining
+    - rule: SnapFix Crypto Mining Detection
+      desc: Detect potential crypto mining in SnapFix containers
+      condition: >
+        spawned_process and
+        container and
+        k8s.ns.name={{ .Release.Namespace }} and
+        k8s.pod.label["app.kubernetes.io/name"]={{ include "snapfix-enterprise.name" . }} and
+        (proc.name in (xmrig, minerd, cpuminer, cgminer, bfgminer) or
+         proc.args contains "stratum+tcp" or
+         proc.args contains "mining.pool")
+      output: >
+        Potential crypto mining detected in SnapFix container
+        (process=%proc.name args=%proc.args container=%container.name
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [crypto, mining, security, snapfix]
+
+{{- end }}
