@@ -107,10 +107,10 @@ async def favicon():
     logger.warning("Favicon file not found")
     raise HTTPException(status_code=404, detail="Favicon not found")
 
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    logger.debug("Health check endpoint called")
+# Database health check endpoint
+@app.get("/db-health")
+async def database_health_check():
+    logger.debug("Database health check endpoint called")
     try:
         from services.mongodb_service import get_db
         db = await get_db()
