@@ -11,6 +11,7 @@ import os
 import uvicorn
 import json
 from pathlib import Path
+from datetime import datetime
 
 # Setup logging with detailed format
 logging.basicConfig(
@@ -70,7 +71,31 @@ async def custom_exception_handler(request: Request, exc: Exception):
 @app.get("/")
 async def read_root():
     logger.debug("Root endpoint accessed")
-    return {"message": "SnapFix AI backend is up and running!"}
+    return {"message": "Eaiser AI backend is up and running!", "status": "healthy", "timestamp": datetime.now().isoformat()}
+
+# Health check endpoint for Render
+@app.get("/health")
+async def health_check():
+    logger.debug("Health check endpoint accessed")
+    try:
+        # Basic health check
+        return {
+            "status": "healthy",
+            "service": "Eaiser AI Backend",
+            "timestamp": datetime.now().isoformat(),
+            "version": "1.0.0",
+            "environment": os.environ.get("ENVIRONMENT", "production")
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+        )
 
 # Favicon route
 @app.get("/favicon.ico")
