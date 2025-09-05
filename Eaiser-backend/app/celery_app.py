@@ -157,7 +157,7 @@ def send_notification_email(self, user_email: str, issue_id: str, notification_t
         logger.info(f"Sending {notification_type} email to {user_email} for issue {issue_id}")
         
         # Import here to avoid circular imports
-        from services.email_service import send_email
+        from services.email_service import send_email_sync
         
         # Email templates based on notification type
         templates = {
@@ -178,10 +178,11 @@ def send_notification_email(self, user_email: str, issue_id: str, notification_t
         template = templates.get(notification_type, templates['issue_created'])
         
         # Send email
-        result = send_email(
+        result = send_email_sync(
             to_email=user_email,
             subject=template['subject'],
-            body=template['body']
+            html_content=template['body'],
+            text_content=template['body']
         )
         
         logger.info(f"Email sent successfully to {user_email}")

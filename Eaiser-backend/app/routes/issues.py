@@ -762,7 +762,7 @@ async def send_authority_email(
                 is_user_review=is_user_review
             )
             logger.debug(f"Sending email to [redacted] for {authority.get('type', 'general')} with subject: {subject}")
-            success = send_email(
+            success = await send_email(
                 to_email=authority.get("email", "snapfix@momntumai.com"),
                 subject=subject,
                 html_content=html_content,

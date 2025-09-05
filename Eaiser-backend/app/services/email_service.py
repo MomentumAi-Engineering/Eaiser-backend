@@ -16,7 +16,9 @@ from sendgrid.helpers.mail import (
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-def send_email(
+import asyncio
+
+async def send_email(
     to_email: str,
     subject: str,
     html_content: str,
@@ -46,10 +48,19 @@ def send_email(
     sendgrid_api_key = os.getenv("SENDGRID_API_KEY")
 
     if not all([email_user, sendgrid_api_key]):
-        logger.error("Missing environment variables: EMAIL_USER, SENDGRID_API_KEY")
+        missing_vars = []
+        if not email_user:
+            missing_vars.append("EMAIL_USER")
+        if not sendgrid_api_key:
+            missing_vars.append("SENDGRID_API_KEY")
+        
+        logger.error(f"❌ Missing environment variables: {', '.join(missing_vars)}")
+        logger.error(f"📧 EMAIL_USER: {'SET' if email_user else 'NOT SET'}")
+        logger.error(f"🔑 SENDGRID_API_KEY: {'SET' if sendgrid_api_key else 'NOT SET'}")
+        
         if os.getenv("ENV") == "production":
-            raise ValueError("Missing email configuration in production")
-        logger.warning("Skipping email sending due to missing configuration")
+            raise ValueError(f"Missing email configuration in production: {', '.join(missing_vars)}")
+        logger.warning("⚠️ Skipping email sending due to missing configuration")
         return False
 
     # Log presence of zip code in content for debugging
@@ -122,4 +133,43 @@ def send_email(
         logger.error(f"❌ Failed to send email to {to_email}: {str(e)}")
         if os.getenv("ENV") == "production":
             raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+        return False
+
+
+def send_email_sync(
+    to_email: str,
+    subject: str,
+    html_content: str,
+    text_content: str,
+    attachments: Optional[List[str]] = None,
+    embedded_images: Optional[List[Tuple[str, str, str]]] = None
+) -> bool:
+    """
+    Synchronous wrapper for send_email function for use in Celery tasks.
+    
+    Args:
+        Same as async send_email function
+        
+    Returns:
+        bool: True if email was sent successfully, False otherwise
+    """
+    try:
+        # Create new event loop for sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                send_email(
+                    to_email=to_email,
+                    subject=subject,
+                    html_content=html_content,
+                    text_content=text_content,
+                    attachments=attachments,
+                    embedded_images=embedded_images
+                )
+            )
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"❌ Sync email wrapper failed: {str(e)}")
         return False
