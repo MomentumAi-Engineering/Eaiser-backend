@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: eaiser-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r app/requirements.txt
+    startCommand: cd app && uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: PYTHONPATH
+        value: /opt/render/project/src/app
+    healthCheckPath: /health
+    autoDeploy: true
+    rootDir: .
+    dockerfilePath: ./Dockerfile
