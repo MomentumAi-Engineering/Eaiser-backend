@@ -12,6 +12,7 @@ from sendgrid.helpers.mail import (
     ContentId,
     Email,
 )
+from python_http_client.exceptions import UnauthorizedError, BadRequestsError
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -61,6 +62,13 @@ async def send_email(
         if os.getenv("ENV") == "production":
             raise ValueError(f"Missing email configuration in production: {', '.join(missing_vars)}")
         logger.warning("⚠️ Skipping email sending due to missing configuration")
+        return False
+    
+    # Validate SendGrid API key format
+    if not sendgrid_api_key.startswith('SG.'):
+        logger.error("❌ Invalid SendGrid API key format. Should start with 'SG.'")
+        if os.getenv("ENV") == "production":
+            raise ValueError("Invalid SendGrid API key format in production")
         return False
 
     # Log presence of zip code in content for debugging
@@ -125,12 +133,22 @@ async def send_email(
             logger.info(f"✅ Email sent successfully to {to_email} via SendGrid (Status: {response.status_code})")
             return True
         else:
-            logger.error(f"❌ SendGrid API returned status {response.status_code} for {to_email}")
+            logger.warning(f"⚠️ SendGrid API returned status {response.status_code} for {to_email}")
             if os.getenv("ENV") == "production":
                 raise HTTPException(status_code=500, detail=f"SendGrid API error: Status {response.status_code}")
             return False
+    except UnauthorizedError:
+        logger.error("❌ SendGrid unauthorized - check API key in environment variables")
+        if os.getenv("ENV") == "production":
+            raise HTTPException(status_code=500, detail="SendGrid unauthorized - invalid API key")
+        return False
+    except BadRequestsError as e:
+        logger.error(f"❌ SendGrid bad request: {str(e)}")
+        if os.getenv("ENV") == "production":
+            raise HTTPException(status_code=500, detail=f"SendGrid bad request: {str(e)}")
+        return False
     except Exception as e:
-        logger.error(f"❌ Failed to send email to {to_email}: {str(e)}")
+        logger.error(f"❌ Unexpected error sending email to {to_email}: {str(e)}")
         if os.getenv("ENV") == "production":
             raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
         return False

@@ -13,13 +13,18 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-# Setup logging with detailed format
+# Setup optimized logging with structured format
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,  # Changed from DEBUG to INFO to reduce noise
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+
+# Set specific loggers to appropriate levels
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)  # Reduce uvicorn noise
+logging.getLogger("pymongo").setLevel(logging.WARNING)  # Reduce MongoDB noise
+logging.getLogger("performance").setLevel(logging.INFO)  # Keep performance logs
 
 # Create FastAPI app
 app = FastAPI(title="Eaiser AI Backend")
@@ -49,13 +54,29 @@ app.add_middleware(TimingMiddleware)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger.debug(f"Incoming request: {request.method} {request.url} from {request.client.host}")
+    # Filter out noisy health check and static file requests
+    path = request.url.path
+    should_log = not any([
+        path in ["/", "/health", "/favicon.ico", "/robots.txt"],
+        path.startswith("/static/"),
+        path.startswith("/assets/"),
+        path.endswith(".ico"),
+        path.endswith(".png"),
+        path.endswith(".jpg"),
+        path.endswith(".css"),
+        path.endswith(".js")
+    ])
+    
+    if should_log:
+        logger.info(f"📥 {request.method} {path} from {request.client.host}")
+    
     try:
         response = await call_next(request)
-        logger.debug(f"Response status: {response.status_code} for {request.method} {request.url}")
+        if should_log and response.status_code >= 400:
+            logger.warning(f"⚠️ {response.status_code} for {request.method} {path}")
         return response
     except Exception as e:
-        logger.error(f"Error processing request {request.method} {request.url}: {str(e)}", exc_info=True)
+        logger.error(f"💥 Error processing {request.method} {path}: {str(e)}", exc_info=True)
         raise
 
 # Global exception handler for unhandled errors
@@ -70,13 +91,11 @@ async def custom_exception_handler(request: Request, exc: Exception):
 # Root route to test backend
 @app.get("/")
 async def read_root():
-    logger.debug("Root endpoint accessed")
     return {"message": "Eaiser AI backend is up and running!", "status": "healthy", "timestamp": datetime.now().isoformat()}
 
 # Health check endpoint for Render
 @app.get("/health")
 async def health_check():
-    logger.debug("Health check endpoint accessed")
     try:
         # Basic health check
         return {
@@ -110,15 +129,14 @@ async def favicon():
 # Database health check endpoint
 @app.get("/db-health")
 async def database_health_check():
-    logger.debug("Database health check endpoint called")
     try:
         from services.mongodb_service import get_db
         db = await get_db()
         await db.command("ping")
-        logger.debug("Database ping successful")
+        logger.info("✅ Database connection healthy")
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
+        logger.error(f"❌ Database health check failed: {str(e)}")
         raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
 
 # Authorities endpoint
@@ -156,17 +174,17 @@ async def get_authorities_by_zip_code(zip_code: str):
 # NEW: JSON report endpoint for programmatic access
 @app.get("/api/report")
 async def get_report_json():
-    logger.debug("Report JSON endpoint accessed")
     try:
         # TODO: Replace with actual data fetching/processing
         report_data = []
+        logger.info("📊 Report generated successfully")
         return {
             "status": "success",
             "message": "Report generated successfully",
             "data": report_data
         }
     except Exception as e:
-        logger.error(f"Error generating report JSON: {str(e)}", exc_info=True)
+        logger.error(f"💥 Error generating report JSON: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate report: {str(e)}"
@@ -201,15 +219,17 @@ app.include_router(issues_router, prefix="/api")
 # Log startup
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starting server on port 10000")
+    logger.info("🚀 Starting Eaiser AI backend server...")
     await init_db()
     await init_redis()  # Initialize Redis caching service
-    logger.info("🚀 Eaiser AI backend started successfully with Redis caching")
+    logger.info("✅ Eaiser AI backend started successfully with Redis caching")
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    logger.info("🔄 Shutting down Eaiser AI backend...")
     await close_db()
     await close_redis()  # Close Redis connection
+    logger.info("✅ Shutdown completed successfully")
 
 # Run the app
 if __name__ == "__main__":

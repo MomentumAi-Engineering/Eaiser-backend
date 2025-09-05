@@ -19,13 +19,17 @@ from typing import List, Optional, Dict, Any
 import gridfs.errors
 import asyncio
 
-# Setup logging
+# Setup optimized logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,  # Changed from DEBUG to INFO
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+
+# Set AI service logger to WARNING to reduce noise
+logging.getLogger("app.services.ai_service").setLevel(logging.WARNING)
+logging.getLogger("app.services.geocode_service").setLevel(logging.WARNING)
 router = APIRouter()
 
 class IssueResponse(BaseModel):
