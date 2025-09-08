@@ -367,7 +367,8 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
         
         # Add index hint for better query performance
         cursor = db.issues.aggregate(pipeline, hint="timestamp_desc")
-        issues = await cursor.to_list(length=None)
+        # Limit cursor to prevent memory issues - use limit parameter
+        issues = await cursor.to_list(length=limit)
         
         for issue in issues:
             # Minimal processing - only set defaults for missing fields

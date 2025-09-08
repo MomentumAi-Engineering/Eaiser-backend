@@ -32,7 +32,7 @@ app = FastAPI(title="Eaiser AI Backend")
 # Templates (for HTML pages)
 templates = Jinja2Templates(directory="templates")
 
-# Enable CORS for frontend access
+# Enable CORS for frontend access with explicit headers
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -45,8 +45,19 @@ app.add_middleware(
         "http://localhost:3001"               # Local development (Alternative port)
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Accept",
+        "Accept-Language",
+        "Content-Language",
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With",
+        "Origin",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers"
+    ],
+    expose_headers=["*"]
 )
 
 # Log all incoming requests
