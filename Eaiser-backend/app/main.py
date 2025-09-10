@@ -153,12 +153,11 @@ async def database_health_check():
 # Authorities endpoint
 @app.get("/api/authorities/{zip_code}")
 async def get_authorities_by_zip_code(zip_code: str):
-    logger.debug(f"Authorities requested for zip code: {zip_code}")
     try:
         # Load authorities from JSON file
         zip_code_authorities_path = Path("app/data/zip_code_authorities.json")
+        
         if not zip_code_authorities_path.exists():
-            logger.error("Zip code authorities file not found")
             raise HTTPException(status_code=404, detail="Authorities data not found")
 
         with open(zip_code_authorities_path, "r") as f:
@@ -168,7 +167,6 @@ async def get_authorities_by_zip_code(zip_code: str):
         if zip_code in authorities_data:
             authorities = authorities_data[zip_code]
         else:
-            logger.warning(f"No authorities found for zip code {zip_code}, using default")
             authorities = authorities_data.get("default", {})
 
         # Format authorities as a list of objects by type
@@ -232,8 +230,14 @@ app.include_router(issues_router, prefix="/api")
 async def startup_event():
     logger.info("🚀 Starting Eaiser AI backend server...")
     await init_db()
-    await init_redis()  # Initialize Redis caching service
-    logger.info("✅ Eaiser AI backend started successfully with Redis caching")
+    
+    # Initialize Redis in background to avoid blocking startup
+    try:
+        await init_redis()  # Initialize Redis caching service
+        logger.info("✅ Eaiser AI backend started successfully with Redis caching")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis initialization failed: {str(e)}. Continuing without Redis.")
+        logger.info("✅ Eaiser AI backend started successfully (Redis unavailable)")
 
 @app.on_event("shutdown")
 async def shutdown_event():

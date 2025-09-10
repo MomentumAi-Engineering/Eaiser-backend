@@ -1560,9 +1560,12 @@ async def send_authority_emails(request: EmailAuthoritiesRequest):
     Send emails to multiple selected authorities for a specific issue
     """
     try:
+        logger.info(f"🚨 AUTHORITY EMAIL ENDPOINT CALLED! 🚨")
         logger.info(f"🔥 DEBUG: Received request to send emails to {len(request.authorities)} authorities for issue {request.issue_id}")
         logger.info(f"🔥 DEBUG: Authorities received: {[auth.get('name', 'Unknown') + ' - ' + auth.get('email', 'No email') for auth in request.authorities]}")
         logger.info(f"🔥 DEBUG: Full authorities data: {request.authorities}")
+        logger.info(f"🔥 DEBUG: Request zip code: {request.zip_code}")
+        logger.info(f"🔥 DEBUG: Request issue ID: {request.issue_id}")
         
         # Get issue details from database
         db = await get_db()
