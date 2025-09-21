@@ -26,6 +26,8 @@ services:
       - key: EMAIL_USER
         value: no-reply@eaiser.ai
       # AI Service Configuration
+      - key: OPENAI_API_KEY
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       # MongoDB Configuration
