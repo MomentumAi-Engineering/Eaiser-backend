@@ -35,32 +35,36 @@ services:
       - key: GOOGLE_API_KEY
         sync: false
       
-      # MongoDB Configuration - Production Ready (Fixed Atlas URI)
+      # MongoDB Configuration - Production Ready
+      # Production MongoDB Atlas URI with proper TLS configuration
       - key: MONGO_URI
-        sync: false  # Set in Render dashboard: mongodb+srv://snapfix:Chrishabh100@snapfixcluster.7po8ntf.mongodb.net/eaiser?retryWrites=true&w=majority&ssl=true&tlsAllowInvalidCertificates=false
+        value: mongodb+srv://snapfix:Chrishabh100@snapfixcluster.7po8ntf.mongodb.net/snapfix?retryWrites=true&w=majority&appName=SnapFixCluster&tls=true&tlsAllowInvalidCertificates=false
+      
+      # Fallback MongoDB keys (if MONGO_URI not set)
       - key: MONGODB_URL
-        sync: false  # Fallback: same as MONGO_URI
+        value: mongodb+srv://snapfix:Chrishabh100@snapfixcluster.7po8ntf.mongodb.net/snapfix?retryWrites=true&w=majority&appName=SnapFixCluster&tls=true&tlsAllowInvalidCertificates=false
       - key: MONGODB_URI
-        sync: false  # Legacy fallback: same as MONGO_URI
+        value: mongodb+srv://snapfix:Chrishabh100@snapfixcluster.7po8ntf.mongodb.net/snapfix?retryWrites=true&w=majority&appName=SnapFixCluster&tls=true&tlsAllowInvalidCertificates=false
       - key: MONGODB_NAME
-        value: eaiser
+        value: snapfix
       
       # Redis Configuration - Production Ready
+      # For production, either add Redis service or disable Redis gracefully
       # Option 1: Use REDIS_URL for cloud providers (Recommended)
       - key: REDIS_URL
-        sync: false  # Set in Render dashboard: redis://default:password@host:port or rediss://default:password@host:port for SSL
+        value: ""  # Leave empty to disable Redis - app will work without caching
       
-      # Option 2: Individual Redis settings (Fallback)
+      # Option 2: Individual Redis settings (Fallback) - all disabled for now
       - key: REDIS_HOST
-        sync: false  # Set to your Redis host (not localhost for production)
+        value: ""  # Empty to disable Redis
       - key: REDIS_PORT
         value: 6379
       - key: REDIS_PASSWORD
-        sync: false  # Required for production Redis
+        value: ""  # Empty - no Redis service
       - key: REDIS_DB
         value: 0
       - key: REDIS_SSL
-        value: true  # Enable SSL for production
+        value: false  # Disabled since no Redis service
       
       # Performance Configuration - Optimized for Render
       - key: MAX_WORKERS

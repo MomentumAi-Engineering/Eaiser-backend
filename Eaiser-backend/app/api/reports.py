@@ -49,7 +49,7 @@ class ReportRequest(BaseModel):
     template: Optional[str] = None
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "report_type": "performance",
                 "format": "json",
@@ -64,7 +64,7 @@ class BulkReportRequest(BaseModel):
     reports: List[ReportRequest] = Field(..., max_items=10, description="Maximum 10 reports per bulk request")
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "reports": [
                     {"report_type": "performance", "format": "json"},
