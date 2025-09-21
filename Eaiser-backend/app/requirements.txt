@@ -105,3 +105,4 @@ slowapi==0.1.9
 redis==5.0.1
 aio-pika==9.2.0
 aiofiles==0.8.0
+poetry
