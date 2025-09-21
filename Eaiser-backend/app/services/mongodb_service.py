@@ -25,10 +25,16 @@ except ImportError:
     raise
 
 # Database connection setup
+# Database connection setup with production support
 MONGO_URI = os.getenv(
     "MONGODB_URL",
-    "mongodb://localhost:27017"  # ✅ default local MongoDB
+    os.getenv("MONGODB_URI", "mongodb://localhost:27017")  # ✅ Support both env vars
 )
+
+# Production MongoDB Atlas URI support
+if not MONGO_URI.startswith("mongodb"):
+    # If MONGODB_URL is not a proper URI, try MONGODB_URI
+    MONGO_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 
 DB_NAME = os.getenv("MONGODB_NAME", "snapfix")
 
@@ -37,6 +43,9 @@ parsed_uri = urlparse(MONGO_URI)
 if parsed_uri.path and parsed_uri.path.strip("/"):
     DB_NAME = parsed_uri.path.strip("/")
 
+logger.info(f"🔧 MongoDB Configuration:")
+logger.info(f"   URI: {MONGO_URI[:20]}{'...' if len(MONGO_URI) > 20 else ''}")
+logger.info(f"   Database: {DB_NAME}")
 
 # Global database connection
 client: Optional[motor.motor_asyncio.AsyncIOMotorClient] = None
@@ -44,22 +53,22 @@ db = None
 fs = None
 
 async def init_db():
-    """Initialize database connection with optimized connection pooling"""
+    """Initialize database connection with optimized connection pooling and error handling"""
     global client, db, fs
     try:
-        # Optimized MongoDB client configuration for high performance
+        # Production-ready MongoDB client configuration
         client = motor.motor_asyncio.AsyncIOMotorClient(
             MONGO_URI,
-            # Connection timeout settings
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=10000,
-            socketTimeoutMS=20000,
+            # Connection timeout settings - optimized for production
+            serverSelectionTimeoutMS=10000,  # Increased for production
+            connectTimeoutMS=20000,          # Increased for production
+            socketTimeoutMS=30000,           # Increased for production
             
             # Connection pooling for high performance
-            maxPoolSize=100,        # Increased from default 100
-            minPoolSize=10,         # Minimum connections to maintain
-            maxIdleTimeMS=30000,    # Keep connections alive for 30s
-            waitQueueTimeoutMS=5000, # Wait time for connection from pool
+            maxPoolSize=50,         # Reduced for Render resource limits
+            minPoolSize=5,          # Minimum connections to maintain
+            maxIdleTimeMS=45000,    # Keep connections alive longer
+            waitQueueTimeoutMS=10000, # Wait time for connection from pool
             
             # Performance optimizations
             retryWrites=True,       # Retry failed writes
@@ -69,20 +78,40 @@ async def init_db():
             # Additional performance settings
             compressors="snappy,zlib",  # Enable compression
             zlibCompressionLevel=6,     # Compression level
+            
+            # Production SSL/TLS settings
+            tls=True if "mongodb+srv" in MONGO_URI else False,
+            tlsAllowInvalidCertificates=False,
         )
         
-        # Test connection
-        await client.admin.command('ping')
+        # Test connection with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await client.admin.command('ping')
+                break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise e
+                logger.warning(f"⚠️ MongoDB connection attempt {attempt + 1} failed, retrying...")
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
         db = client[DB_NAME]
         fs = motor.motor_asyncio.AsyncIOMotorGridFSBucket(db)
         
         logger.info(f"✅ Successfully connected to MongoDB database: {DB_NAME}")
-        logger.info(f"🔧 Connection pool: maxPoolSize=100, minPoolSize=10")
-        logger.info(f"⚡ Performance optimizations: compression enabled, read preference set")
+        logger.info(f"🔧 Connection pool: maxPoolSize=50, minPoolSize=5")
+        logger.info(f"🌐 MongoDB URI type: {'Atlas Cloud' if 'mongodb+srv' in MONGO_URI else 'Local/Self-hosted'}")
+        
+        # Create indexes for better performance
+        await create_indexes()
         
     except Exception as e:
         logger.error(f"❌ Failed to connect to MongoDB: {str(e)}")
-        raise
+        # Don't raise exception to allow app to start without DB
+        # This allows for graceful degradation
+        logger.warning("⚠️ Application starting without MongoDB connection")
+        logger.warning("⚠️ Database operations will fail until connection is restored")
 
 async def close_db():
     """Close database connection"""

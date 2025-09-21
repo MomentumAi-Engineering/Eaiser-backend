@@ -338,12 +338,23 @@ async def get_redis_service() -> RedisService:
 
 async def init_redis():
     """
-    Initialize Redis connection on application startup.
+    Initialize Redis service with graceful error handling.
+    Application will continue to work even if Redis is unavailable.
     """
-    await redis_service.connect()
+    try:
+        success = await redis_service.connect()
+        if success:
+            logger.info("✅ Redis caching service initialized successfully")
+        else:
+            logger.warning("⚠️ Redis unavailable - continuing without caching")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis initialization failed: {str(e)} - continuing without caching")
 
 async def close_redis():
     """
-    Close Redis connection on application shutdown.
+    Gracefully close Redis connection.
     """
-    await redis_service.disconnect()
+    try:
+        await redis_service.disconnect()
+    except Exception as e:
+        logger.error(f"❌ Error closing Redis: {str(e)}")
