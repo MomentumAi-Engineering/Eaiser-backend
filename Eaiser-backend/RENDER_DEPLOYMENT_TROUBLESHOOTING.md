@@ -1,168 +1,317 @@
-# 🚨 Render Deployment Troubleshooting Guide
+# Render Deployment Troubleshooting Guide
 
-## Current Issues Analysis
+## Common Issues and Solutions
 
-### 1. CORS Error
+### 1. Build Failures
+
+#### Issue: Python Version Mismatch
 ```
-Access to fetch at 'https://eaiser-backend.onrender.com/api/authorities/37062' from origin 'https://www.eaiser.ai' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
-```
-
-**Status**: ✅ **RESOLVED** - CORS is properly configured in `main.py`
-
-### 2. MongoDB Connection Error
-```
-Database initialization failed: Failed to connect to MongoDB after 3 attempts: localhost:27017: [Errno 111] Connection refused
+Error: Python version not supported
 ```
 
-**Status**: 🔧 **IN PROGRESS** - MongoDB Atlas connection needs environment variable setup
+**Solution:**
+- Check `runtime.txt` contains: `python-3.11.9`
+- Ensure requirements.txt is compatible with Python 3.11
 
-## 🔧 Immediate Solutions
+#### Issue: Dependencies Installation Failed
+```
+Error: Could not install packages due to an EnvironmentError
+```
 
-### Step 1: Set MongoDB Environment Variable in Render
+**Solution:**
+- Review `requirements.txt` for conflicting versions
+- Remove version pins that cause conflicts
+- Use `pip install --no-cache-dir` in Dockerfile if needed
 
-1. **Go to Render Dashboard**: https://dashboard.render.com
-2. **Select your service**: `eaiser-backend`
-3. **Go to Environment tab**
-4. **Add/Update these variables**:
+### 2. Environment Variables Issues
 
+#### Issue: Missing Environment Variables
+```
+Error: Environment variable 'MONGO_URI' not found
+```
+
+**Solution:**
+1. Go to Render Dashboard → Service → Environment
+2. Add all required environment variables:
+   - `MONGO_URI`
+   - `MONGODB_NAME`
+   - `GOOGLE_API_KEY`
+   - `SENDGRID_API_KEY`
+   - `EMAIL_USER`
+
+#### Issue: Environment Variables Not Loading
+```
+Error: Configuration not found
+```
+
+**Solution:**
+- Ensure environment variables are set in Render dashboard
+- Check variable names match exactly (case-sensitive)
+- Restart the service after adding variables
+
+### 3. Database Connection Issues
+
+#### Issue: MongoDB Connection Timeout
+```
+Error: ServerSelectionTimeoutError: connection timeout
+```
+
+**Solution:**
+1. Verify MongoDB Atlas connection string
+2. Check IP whitelist includes `0.0.0.0/0` for Render
+3. Ensure SSL/TLS is enabled in connection string
+4. Test connection string locally first
+
+#### Issue: Authentication Failed
+```
+Error: Authentication failed
+```
+
+**Solution:**
+- Verify username/password in connection string
+- Check database user permissions
+- Ensure database name exists
+
+### 4. Redis Connection Issues
+
+#### Issue: Redis Connection Refused
+```
+Error: Connection refused to Redis server
+```
+
+**Solution:**
+- Verify Redis host and port
+- Check Redis password
+- Ensure Redis instance is running
+- Test Redis connection locally
+
+#### Issue: Redis SSL/TLS Issues
+```
+Error: SSL connection failed
+```
+
+**Solution:**
+- Set `REDIS_SSL=true` for production
+- Verify Redis provider supports SSL
+- Check certificate validity
+
+### 5. Application Startup Issues
+
+#### Issue: Port Binding Error
+```
+Error: Port already in use
+```
+
+**Solution:**
+- Render automatically assigns port via `$PORT` environment variable
+- Ensure application binds to `0.0.0.0:$PORT`
+- Check `render.yaml` configuration
+
+#### Issue: Import Errors
+```
+Error: ModuleNotFoundError
+```
+
+**Solution:**
+- Verify all dependencies in `requirements.txt`
+- Check Python path configuration
+- Ensure proper package structure
+
+### 6. Performance Issues
+
+#### Issue: Slow Response Times
+```
+Warning: Response time > 30 seconds
+```
+
+**Solution:**
+- Optimize database queries
+- Implement caching with Redis
+- Use connection pooling
+- Consider upgrading Render plan
+
+#### Issue: Memory Limit Exceeded
+```
+Error: Process killed due to memory limit
+```
+
+**Solution:**
+- Optimize memory usage in application
+- Upgrade to higher memory plan
+- Implement proper garbage collection
+
+### 7. SSL/HTTPS Issues
+
+#### Issue: SSL Certificate Error
+```
+Error: SSL certificate verification failed
+```
+
+**Solution:**
+- Render provides automatic SSL
+- Ensure custom domain is properly configured
+- Check DNS settings
+
+### 8. Logging and Monitoring
+
+#### Issue: No Logs Visible
+```
+Warning: Application logs not showing
+```
+
+**Solution:**
+- Check logging configuration in application
+- Use `print()` statements for debugging
+- Verify log level settings
+
+#### Issue: Application Crashes
+```
+Error: Application exited with code 1
+```
+
+**Solution:**
+1. Check Render logs for error details
+2. Test application locally
+3. Verify all environment variables
+4. Check database connections
+
+### 9. Deployment Configuration
+
+#### Issue: render.yaml Not Working
+```
+Error: Invalid render.yaml configuration
+```
+
+**Solution:**
+- Validate YAML syntax
+- Check indentation (use spaces, not tabs)
+- Verify service type and settings
+- Reference Render documentation
+
+#### Issue: Build Command Failed
+```
+Error: Build command exited with code 1
+```
+
+**Solution:**
+- Test build command locally
+- Check file paths and permissions
+- Verify all build dependencies
+
+### 10. API Endpoint Issues
+
+#### Issue: 404 Not Found
+```
+Error: Endpoint not found
+```
+
+**Solution:**
+- Verify route definitions
+- Check URL patterns
+- Ensure proper FastAPI router setup
+
+#### Issue: CORS Errors
+```
+Error: CORS policy blocked request
+```
+
+**Solution:**
+- Configure CORS middleware properly
+- Add allowed origins for frontend
+- Check preflight request handling
+
+## Debugging Steps
+
+### 1. Local Testing
 ```bash
-# Required - MongoDB Atlas Connection
-MONGODB_URL=mongodb+srv://snapfix:Chrishabh100@snapfixcluster.7po8xxx.mongodb.net/eaiser?retryWrites=true&w=majority
+# Test locally first
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
-# Optional - Alternative variable names (for compatibility)
-MONGODB_URI=mongodb+srv://snapfix:Chrishabh100@snapfixcluster.7po8xxx.mongodb.net/eaiser?retryWrites=true&w=majority
-MONGO_URI=mongodb+srv://snapfix:Chrishabh100@snapfixcluster.7po8xxx.mongodb.net/eaiser?retryWrites=true&w=majority
+# Check environment variables
+python check_env.py
 
-# Database name
-MONGODB_NAME=eaiser
-
-# API Keys (if needed)
-GEMINI_API_KEY=your_gemini_api_key_here
+# Test database connections
+curl http://localhost:8000/db-health
+curl http://localhost:8000/redis-health
 ```
 
-### Step 2: Verify MongoDB Atlas Configuration
+### 2. Render Logs Analysis
+1. Go to Render Dashboard
+2. Select your service
+3. Click on "Logs" tab
+4. Look for error messages and stack traces
 
-1. **Check MongoDB Atlas**:
-   - Cluster: `snapfixcluster`
-   - Database: `eaiser`
-   - User: `snapfix` with password `Chrishabh100`
-
-2. **Network Access**:
-   - Ensure `0.0.0.0/0` is whitelisted (allow all IPs)
-   - Or add Render's IP ranges
-
-3. **Database User Permissions**:
-   - User should have `readWrite` access to `eaiser` database
-
-### Step 3: Deploy and Monitor
-
-1. **Trigger Deployment**:
-   - Save environment variables in Render
-   - This will automatically trigger a new deployment
-
-2. **Monitor Logs**:
-   - Watch deployment logs for MongoDB connection success
-   - Look for: `✅ Successfully connected to MongoDB database: eaiser`
-
-## 🔍 Expected Log Output (Success)
-
-```
-🔧 MongoDB Configuration:
-   URI: mongodb+srv://***:***@snapfixcluster.7po8xxx.mongodb.net/eaiser
-   Database: eaiser
-   Environment: Production (Atlas)
-🔄 Attempting to connect to MongoDB...
-🔧 URI Type: Atlas Cloud
-🔒 SSL/TLS enabled for secure connection
-🔄 Connection attempt 1/5...
-✅ MongoDB ping successful on attempt 1
-✅ Successfully connected to MongoDB database: eaiser
-📊 Found X collections in database
-🔧 Connection pool: maxPoolSize=20, minPoolSize=2
-📇 Database indexes created/verified successfully
-```
-
-## 🚨 Common Error Patterns & Solutions
-
-### Error: "Authentication failed"
+### 3. Health Check Endpoints
 ```bash
-# Solution: Check username/password in connection string
-MONGODB_URL=mongodb+srv://correct_username:correct_password@cluster.mongodb.net/eaiser
+# Test health endpoints
+curl https://your-app.onrender.com/health
+curl https://your-app.onrender.com/db-health
+curl https://your-app.onrender.com/redis-health
 ```
 
-### Error: "Connection timeout"
+### 4. Environment Variables Check
 ```bash
-# Solution: Check network access in MongoDB Atlas
-# Whitelist 0.0.0.0/0 or specific Render IP ranges
+# In Render shell (if available)
+echo $MONGO_URI
+echo $REDIS_HOST
+printenv | grep -E "(MONGO|REDIS|API_KEY)"
 ```
 
-### Error: "Database not found"
-```bash
-# Solution: Ensure database name matches
-MONGODB_NAME=eaiser
-# And connection string points to correct database
-```
+## Prevention Best Practices
 
-## 🔧 Environment Variables Priority
+### 1. Pre-deployment Checklist
+- [ ] Test application locally
+- [ ] Verify all environment variables
+- [ ] Test database connections
+- [ ] Check requirements.txt
+- [ ] Validate render.yaml
+- [ ] Test API endpoints
 
-The application checks environment variables in this order:
-1. `MONGODB_URL` (Render standard)
-2. `MONGODB_URI` (Alternative)
-3. `MONGO_URI` (Fallback)
-4. `mongodb://localhost:27017` (Development fallback)
+### 2. Monitoring Setup
+- [ ] Configure health check endpoints
+- [ ] Set up logging
+- [ ] Monitor response times
+- [ ] Track error rates
+- [ ] Set up alerts
 
-## 🧪 Testing After Deployment
+### 3. Backup Strategy
+- [ ] Database backups
+- [ ] Environment variables backup
+- [ ] Code repository backup
+- [ ] Configuration files backup
 
-### 1. Health Check
-```bash
-curl https://eaiser-backend.onrender.com/
-# Expected: {"message": "SnapFix AI backend is up and running!"}
-```
+## Getting Help
 
-### 2. Database Connection Test
-```bash
-curl https://eaiser-backend.onrender.com/api/authorities/37062
-# Should return authority data, not 500 error
-```
+### 1. Render Support
+- Check Render documentation
+- Contact Render support
+- Community forums
 
-### 3. CORS Test
-- Open browser console on https://www.eaiser.ai
-- Try API call - should work without CORS errors
+### 2. Application Logs
+- Enable detailed logging
+- Use structured logging
+- Monitor error patterns
 
-## 📋 Deployment Checklist
+### 3. Database Provider Support
+- MongoDB Atlas support
+- Redis Cloud support
+- Check provider status pages
 
-- [ ] MongoDB Atlas cluster is running
-- [ ] Database user has correct permissions
-- [ ] Network access allows all IPs (0.0.0.0/0)
-- [ ] `MONGODB_URL` environment variable is set in Render
-- [ ] `MONGODB_NAME=eaiser` is set
-- [ ] Deployment triggered and completed
-- [ ] Logs show successful MongoDB connection
-- [ ] API endpoints return data (not 500 errors)
-- [ ] Frontend can access API without CORS errors
+## Emergency Recovery
 
-## 🆘 Emergency Fallback
+### 1. Rollback Deployment
+1. Go to Render Dashboard
+2. Select service
+3. Go to "Deploys" tab
+4. Click "Rollback" on previous working version
 
-If MongoDB Atlas is not working, the application will:
-1. Start without database connection
-2. Log detailed error messages
-3. Continue running (graceful degradation)
-4. Return 500 errors for database operations
+### 2. Quick Fixes
+- Restart service
+- Clear build cache
+- Update environment variables
+- Check external service status
 
-This allows you to:
-1. Debug connection issues
-2. Fix environment variables
-3. Restart without full redeployment
-
-## 📞 Next Steps
-
-1. **Set environment variables in Render**
-2. **Wait for automatic deployment**
-3. **Check logs for MongoDB connection success**
-4. **Test API endpoints**
-5. **Verify frontend integration**
-
----
-
-**Last Updated**: January 2025
-**Status**: MongoDB connection fix in progress
+### 3. Data Recovery
+- Restore from database backup
+- Check data integrity
+- Verify application functionality

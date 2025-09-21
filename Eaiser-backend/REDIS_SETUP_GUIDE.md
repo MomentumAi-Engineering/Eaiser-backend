@@ -1,222 +1,231 @@
-# 🚀 Redis Setup Guide for Render Deployment
+# Redis Setup Guide for Production
 
 ## Overview
-Redis is used for high-performance caching in your SnapFix backend. This guide provides ready-to-use configurations for both development and production deployment on Render.
+Complete guide for setting up Redis for Eaiser Backend in production environment.
 
-## 🔧 Production Setup (Render)
+## Redis Cloud Setup (Recommended)
 
-### Option 1: Redis Cloud (Recommended)
-1. **Sign up for Redis Cloud**: https://redis.com/try-free/
-2. **Create a free database** (30MB free tier)
-3. **Get your connection details**:
-   - Endpoint: `redis-xxxxx.c1.us-east-1-2.ec2.cloud.redislabs.com:12345`
-   - Password: `your-redis-password`
+### 1. Create Redis Cloud Account
+1. Go to [Redis Cloud](https://redis.com/redis-enterprise-cloud/)
+2. Sign up for free tier or paid plan
+3. Create new database instance
 
-### Option 2: Render Redis Add-on
-1. **In your Render dashboard**:
-   - Go to your service
-   - Click "Environment" tab
-   - Add Redis add-on (if available)
-
-### Option 3: External Redis Provider
-- **Upstash Redis**: https://upstash.com/
-- **AWS ElastiCache**: For AWS deployments
-- **Google Cloud Memorystore**: For GCP deployments
-
-## 🌍 Environment Variables for Render
-
-Add these environment variables in your Render dashboard:
-
-### Method 1: Using REDIS_URL (Recommended)
+### 2. Configuration
 ```bash
-# For Redis Cloud
-REDIS_URL=redis://default:your-password@redis-xxxxx.c1.us-east-1-2.ec2.cloud.redislabs.com:12345
-
-# For SSL-enabled Redis (Upstash, etc.)
-REDIS_URL=rediss://default:your-password@redis-xxxxx.upstash.io:6379
-```
-
-### Method 2: Individual Variables
-```bash
-REDIS_HOST=redis-xxxxx.c1.us-east-1-2.ec2.cloud.redislabs.com
-REDIS_PORT=12345
-REDIS_PASSWORD=your-redis-password
+# Redis Cloud provides these details
+REDIS_HOST=redis-xxxxx.c1.us-east-1-1.ec2.cloud.redislabs.com
+REDIS_PORT=6379
+REDIS_PASSWORD=your-generated-password
 REDIS_DB=0
 REDIS_SSL=true
 ```
 
-## 🏠 Development Setup
+### 3. Security Settings
+- Enable password authentication
+- Use SSL/TLS encryption
+- Configure IP whitelist if needed
+- Set memory limits and eviction policies
 
-### Option 1: Docker (Recommended)
+## Self-Hosted Redis Setup
+
+### 1. Installation (Ubuntu/Debian)
 ```bash
-# Run Redis in Docker
-docker run -d -p 6379:6379 --name redis redis:alpine
-
-# With persistence
-docker run -d -p 6379:6379 --name redis -v redis-data:/data redis:alpine redis-server --appendonly yes
-```
-
-### Option 2: Local Installation
-
-#### Windows
-```bash
-# Using Chocolatey
-choco install redis-64
-
-# Using WSL2
-wsl --install
-# Then install Redis in WSL2
-```
-
-#### macOS
-```bash
-# Using Homebrew
-brew install redis
-brew services start redis
-```
-
-#### Linux
-```bash
-# Ubuntu/Debian
 sudo apt update
 sudo apt install redis-server
+```
+
+### 2. Configuration File
+Edit `/etc/redis/redis.conf`:
+```bash
+# Bind to specific IP
+bind 127.0.0.1 your-server-ip
+
+# Set password
+requirepass your-strong-password
+
+# Enable persistence
+save 900 1
+save 300 10
+save 60 10000
+
+# Set memory limit
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+
+# Enable SSL (optional)
+tls-port 6380
+tls-cert-file /path/to/redis.crt
+tls-key-file /path/to/redis.key
+```
+
+### 3. Start Redis Service
+```bash
 sudo systemctl start redis-server
-
-# CentOS/RHEL
-sudo yum install redis
-sudo systemctl start redis
+sudo systemctl enable redis-server
 ```
 
-## 🔍 Testing Your Configuration
+## Application Integration
 
-### 1. Test Locally
+### 1. Environment Variables
 ```bash
-# Start your backend
-cd app
-python -m uvicorn main:app --reload
-
-# Check logs for Redis connection
-# Should see: "✅ Redis connected successfully"
-```
-
-### 2. Test Production
-```bash
-# Deploy to Render and check logs
-# Look for Redis connection messages
-```
-
-## 📊 Redis Configuration Details
-
-Your backend automatically handles:
-
-### Connection Priority
-1. `REDIS_URL` (full connection string) - **Preferred for production**
-2. Individual environment variables (`REDIS_HOST`, `REDIS_PORT`, etc.)
-3. Localhost fallback for development
-
-### SSL/TLS Support
-- Automatically detects `rediss://` URLs for SSL
-- Configures SSL settings for cloud providers
-- Handles certificate validation for managed services
-
-### Graceful Fallback
-- App works without Redis (slower performance)
-- Automatic retry logic
-- Health checks and monitoring
-
-## 🚨 Common Issues & Solutions
-
-### Issue 1: "Connection refused to localhost:6379"
-**Solution**: Set production Redis environment variables
-```bash
-REDIS_URL=redis://your-redis-connection-string
-```
-
-### Issue 2: SSL/TLS errors
-**Solution**: Use `rediss://` for SSL connections
-```bash
-REDIS_URL=rediss://default:password@host:port
-```
-
-### Issue 3: Authentication failed
-**Solution**: Check your Redis password
-```bash
-# Test connection manually
-redis-cli -h your-host -p your-port -a your-password ping
-```
-
-### Issue 4: Timeout errors
-**Solution**: Check network connectivity and Redis service status
-
-## 📈 Performance Benefits
-
-With Redis enabled, you get:
-- **5x faster** API responses for cached data
-- **Reduced database load** by 70-80%
-- **Better user experience** with instant responses
-- **Scalability** for high-traffic scenarios
-
-## 🔧 Ready-to-Use Configurations
-
-### For render.yaml
-```yaml
-services:
-  - type: web
-    name: eaiser-backend
-    env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "cd app && python -m uvicorn main:app --host 0.0.0.0 --port $PORT"
-    envVars:
-      # MongoDB Configuration
-      - key: MONGODB_URL
-        value: "your-mongodb-atlas-connection-string"
-      
-      # Redis Configuration (choose one method)
-      - key: REDIS_URL
-        value: "redis://default:password@host:port"
-      
-      # OR individual variables
-      - key: REDIS_HOST
-        value: "your-redis-host"
-      - key: REDIS_PORT
-        value: "6379"
-      - key: REDIS_PASSWORD
-        value: "your-redis-password"
-      - key: REDIS_SSL
-        value: "true"
-```
-
-### For .env (Development)
-```bash
-# MongoDB
-MONGODB_URL=mongodb+srv://user:pass@cluster.mongodb.net/dbname?retryWrites=true&w=majority
-
-# Redis (Development - Docker)
-REDIS_HOST=localhost
+REDIS_HOST=your-redis-host
 REDIS_PORT=6379
-REDIS_PASSWORD=
+REDIS_PASSWORD=your-redis-password
 REDIS_DB=0
-REDIS_SSL=false
-
-# Redis (Development - Cloud)
-REDIS_URL=redis://default:password@host:port
+REDIS_SSL=true  # for production
 ```
 
-## 🎯 Next Steps
+### 2. Connection Testing
+Use the health check endpoint:
+```bash
+curl http://your-app-url/redis-health
+```
 
-1. **Choose your Redis provider** (Redis Cloud recommended for free tier)
-2. **Set environment variables** in Render dashboard
-3. **Deploy your application**
-4. **Monitor logs** for successful Redis connection
-5. **Test API performance** - should be significantly faster
+### 3. Redis Usage in Application
+- Session storage
+- API response caching
+- Rate limiting data
+- Temporary data storage
 
-## 💡 Pro Tips
+## Performance Tuning
 
-- **Free tiers available**: Redis Cloud (30MB), Upstash (10K requests/day)
-- **Monitor usage**: Set up alerts for memory usage
-- **Cache strategy**: Your app automatically caches frequently accessed data
-- **Backup**: Redis data is automatically persisted in cloud providers
+### 1. Memory Configuration
+```bash
+# Set appropriate memory limit
+maxmemory 512mb
 
----
+# Choose eviction policy
+maxmemory-policy allkeys-lru
+```
 
-**Need help?** Check the logs for detailed error messages and connection status. The backend provides helpful guidance for common issues.
+### 2. Persistence Settings
+```bash
+# RDB snapshots
+save 900 1
+save 300 10
+save 60 10000
+
+# AOF (Append Only File)
+appendonly yes
+appendfsync everysec
+```
+
+### 3. Connection Pooling
+Application uses connection pooling for optimal performance:
+- Max connections: 20
+- Connection timeout: 5 seconds
+- Retry attempts: 3
+
+## Monitoring
+
+### 1. Redis CLI Commands
+```bash
+# Connect to Redis
+redis-cli -h host -p port -a password
+
+# Check memory usage
+INFO memory
+
+# Monitor commands
+MONITOR
+
+# Check connected clients
+CLIENT LIST
+```
+
+### 2. Key Metrics to Monitor
+- Memory usage
+- Connected clients
+- Commands per second
+- Hit/miss ratio
+- Persistence status
+
+## Security Best Practices
+
+### 1. Authentication
+- Always use strong passwords
+- Enable AUTH command
+- Consider using ACL (Access Control Lists)
+
+### 2. Network Security
+- Use SSL/TLS encryption
+- Configure firewall rules
+- Bind to specific interfaces only
+- Use VPN for remote access
+
+### 3. Data Protection
+- Enable persistence (RDB + AOF)
+- Regular backups
+- Monitor for unusual activity
+
+## Troubleshooting
+
+### 1. Connection Issues
+```bash
+# Test connection
+redis-cli -h host -p port ping
+
+# Check if Redis is running
+sudo systemctl status redis-server
+
+# View Redis logs
+sudo journalctl -u redis-server
+```
+
+### 2. Memory Issues
+```bash
+# Check memory usage
+redis-cli INFO memory
+
+# Clear all data (use carefully)
+redis-cli FLUSHALL
+```
+
+### 3. Performance Issues
+```bash
+# Monitor slow queries
+redis-cli --latency
+redis-cli --latency-history
+
+# Check configuration
+redis-cli CONFIG GET "*"
+```
+
+## Backup and Recovery
+
+### 1. RDB Backup
+```bash
+# Manual backup
+redis-cli BGSAVE
+
+# Backup file location
+/var/lib/redis/dump.rdb
+```
+
+### 2. AOF Backup
+```bash
+# AOF file location
+/var/lib/redis/appendonly.aof
+
+# Rewrite AOF
+redis-cli BGREWRITEAOF
+```
+
+### 3. Recovery
+1. Stop Redis service
+2. Replace dump.rdb or appendonly.aof
+3. Start Redis service
+4. Verify data integrity
+
+## Production Checklist
+
+- [ ] Redis instance configured with authentication
+- [ ] SSL/TLS encryption enabled
+- [ ] Memory limits set appropriately
+- [ ] Persistence configured (RDB + AOF)
+- [ ] Monitoring setup
+- [ ] Backup strategy implemented
+- [ ] Security measures in place
+- [ ] Application connection tested
+- [ ] Performance benchmarks established
+- [ ] Documentation updated
