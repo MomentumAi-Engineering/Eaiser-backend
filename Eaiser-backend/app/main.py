@@ -155,8 +155,8 @@ async def database_health_check():
 @app.get("/api/authorities/{zip_code}")
 async def get_authorities_by_zip_code(zip_code: str):
     try:
-        # Load authorities from JSON file
-        zip_code_authorities_path = Path("app/data/zip_code_authorities.json")
+        # Load authorities from JSON file - fix path to be relative to current directory
+        zip_code_authorities_path = Path("data/zip_code_authorities.json")
         
         if not zip_code_authorities_path.exists():
             raise HTTPException(status_code=404, detail="Authorities data not found")
