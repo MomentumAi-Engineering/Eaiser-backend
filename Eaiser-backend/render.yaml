@@ -4,8 +4,7 @@ services:
     env: python
     region: oregon
     plan: free
-    buildCommand: |
-      cd app && pip install --upgrade pip && pip install -r requirements.txt
+    buildCommand: cd app && pip install --upgrade pip && pip install -r requirements.txt
     startCommand: cd app && python -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --loop asyncio --http httptools --access-log --log-level info
     rootDir: ./
     envVars:
