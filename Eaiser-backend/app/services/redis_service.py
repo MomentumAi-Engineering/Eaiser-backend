@@ -11,10 +11,12 @@ Features:
 - JSON serialization/deserialization
 - Connection pooling
 - Error handling with fallback to database
+- Production-ready configuration for Render deployment
 """
 
 import json
 import logging
+import asyncio
 from typing import Any, Optional, List, Dict
 from datetime import datetime, timedelta
 import redis.asyncio as redis
@@ -27,6 +29,58 @@ load_dotenv()
 
 # Setup logging
 logger = logging.getLogger(__name__)
+
+def get_redis_config():
+    """
+    Get Redis configuration with production-ready settings for Render deployment.
+    
+    Returns:
+        tuple: (host, port, password, db, ssl_required)
+    """
+    # Priority order for Redis configuration
+    # 1. REDIS_URL (full connection string) - preferred for production
+    # 2. Individual environment variables
+    # 3. Localhost fallback for development
+    
+    redis_url = os.getenv('REDIS_URL')
+    
+    if redis_url:
+        # Parse Redis URL format: redis://[:password@]host:port[/db]
+        # or rediss://[:password@]host:port[/db] for SSL
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(redis_url)
+            
+            host = parsed.hostname or 'localhost'
+            port = parsed.port or 6379
+            password = parsed.password
+            db = int(parsed.path[1:]) if parsed.path and len(parsed.path) > 1 else 0
+            ssl_required = parsed.scheme == 'rediss'
+            
+            logger.info(f"🔧 Redis URL configured: {parsed.scheme}://{host}:{port}/{db}")
+            return host, port, password, db, ssl_required
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to parse REDIS_URL: {e}")
+    
+    # Fallback to individual environment variables
+    host = os.getenv('REDIS_HOST', 'localhost')
+    port = int(os.getenv('REDIS_PORT', 6379))
+    password = os.getenv('REDIS_PASSWORD', None)
+    db = int(os.getenv('REDIS_DB', 0))
+    ssl_required = os.getenv('REDIS_SSL', 'false').lower() == 'true'
+    
+    # Log configuration (hide sensitive info)
+    password_display = "***" if password else "None"
+    logger.info(f"🔧 Redis Configuration:")
+    logger.info(f"   Host: {host}")
+    logger.info(f"   Port: {port}")
+    logger.info(f"   Password: {password_display}")
+    logger.info(f"   Database: {db}")
+    logger.info(f"   SSL: {ssl_required}")
+    logger.info(f"   Environment: {'Production' if host != 'localhost' else 'Development'}")
+    
+    return host, port, password, db, ssl_required
 
 class RedisService:
     """
@@ -43,45 +97,77 @@ class RedisService:
         self.issues_cache_ttl = 180  # 3 minutes for issues list
         self.health_cache_ttl = 60   # 1 minute for health checks
         
-        # Redis configuration from environment
-        self.redis_host = os.getenv('REDIS_HOST', 'localhost')
-        self.redis_port = int(os.getenv('REDIS_PORT', 6379))
-        self.redis_password = os.getenv('REDIS_PASSWORD', None)
-        self.redis_db = int(os.getenv('REDIS_DB', 0))
-        
+        # Get Redis configuration
+        self.redis_host, self.redis_port, self.redis_password, self.redis_db, self.ssl_required = get_redis_config()
+
     async def connect(self) -> bool:
         """
         Establish connection to Redis server with connection pooling.
+        Production-ready configuration with SSL support and graceful fallback.
         
         Returns:
             bool: True if connection successful, False otherwise
         """
         try:
+            # Check if Redis is available (localhost check for development)
+            if self.redis_host == 'localhost':
+                logger.warning("⚠️ Using localhost Redis - this will fail in production!")
+                logger.warning("⚠️ Please set REDIS_URL environment variable for production deployment")
+                logger.info("💡 For development, you can:")
+                logger.info("   1. Install Redis locally: https://redis.io/download")
+                logger.info("   2. Use Docker: docker run -d -p 6379:6379 redis:alpine")
+                logger.info("   3. Skip Redis (app will work without caching)")
+            
+            # Create connection pool configuration
+            pool_config = {
+                'host': self.redis_host,
+                'port': self.redis_port,
+                'password': self.redis_password,
+                'db': self.redis_db,
+                'decode_responses': True,
+                'max_connections': 20,
+                'retry_on_timeout': True,
+                'socket_connect_timeout': 10,  # Increased for production
+                'socket_timeout': 10,          # Increased for production
+                'health_check_interval': 30,   # Health check every 30 seconds
+            }
+            
+            # Add SSL configuration for production Redis (like Redis Cloud, AWS ElastiCache)
+            if self.ssl_required:
+                pool_config.update({
+                    'ssl': True,
+                    'ssl_check_hostname': False,  # Often needed for cloud Redis services
+                    'ssl_cert_reqs': None,        # Disable certificate verification for managed services
+                })
+                logger.info("🔒 SSL enabled for Redis connection")
+            
             # Create connection pool for better performance
-            self.connection_pool = ConnectionPool(
-                host=self.redis_host,
-                port=self.redis_port,
-                password=self.redis_password,
-                db=self.redis_db,
-                decode_responses=True,
-                max_connections=20,
-                retry_on_timeout=True,
-                socket_connect_timeout=5,
-                socket_timeout=5
-            )
+            self.connection_pool = ConnectionPool(**pool_config)
             
             # Create Redis client
             self.redis_client = redis.Redis(connection_pool=self.connection_pool)
             
-            # Test connection
-            await self.redis_client.ping()
+            # Test connection with timeout
+            await asyncio.wait_for(self.redis_client.ping(), timeout=5.0)
             self.is_connected = True
             
             logger.info(f"✅ Redis connected successfully to {self.redis_host}:{self.redis_port}")
+            logger.info(f"🚀 Redis caching enabled - performance optimized!")
             return True
             
+        except asyncio.TimeoutError:
+            logger.warning(f"⏰ Redis connection timeout to {self.redis_host}:{self.redis_port}")
+            logger.warning("💡 This is normal if Redis is not available - app will work without caching")
+            self.is_connected = False
+            return False
+        except ConnectionRefusedError:
+            logger.warning(f"🚫 Redis connection refused to {self.redis_host}:{self.redis_port}")
+            logger.warning("💡 Redis server not running - app will work without caching")
+            self.is_connected = False
+            return False
         except Exception as e:
-            logger.warning(f"⚠️ Redis connection failed: {str(e)}. Falling back to database only.")
+            logger.warning(f"⚠️ Redis connection failed: {str(e)}")
+            logger.warning("💡 App will continue without caching - performance may be slower")
             self.is_connected = False
             return False
     

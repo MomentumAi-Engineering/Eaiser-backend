@@ -20,57 +20,77 @@ services:
           type: web
           name: eaiser-backend
           property: port
+      
       # Email Configuration
       - key: SENDGRID_API_KEY
         sync: false
       - key: EMAIL_USER
         value: no-reply@eaiser.ai
+      
       # AI Service Configuration
       - key: OPENAI_API_KEY
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      # MongoDB Configuration
+      - key: GOOGLE_API_KEY
+        sync: false
+      
+      # MongoDB Configuration - Production Ready (Fixed Atlas URI)
       - key: MONGO_URI
-        sync: false
+        sync: false  # Set in Render dashboard: mongodb+srv://snapfix:Chrishabh100@snapfixcluster.7po8ntf.mongodb.net/eaiser?retryWrites=true&w=majority&ssl=true&tlsAllowInvalidCertificates=false
       - key: MONGODB_URL
-        sync: false
+        sync: false  # Fallback: same as MONGO_URI
+      - key: MONGODB_URI
+        sync: false  # Legacy fallback: same as MONGO_URI
       - key: MONGODB_NAME
         value: eaiser
-      # Redis Configuration (Optional - graceful degradation if unavailable)
+      
+      # Redis Configuration - Production Ready
+      # Option 1: Use REDIS_URL for cloud providers (Recommended)
+      - key: REDIS_URL
+        sync: false  # Set in Render dashboard: redis://default:password@host:port or rediss://default:password@host:port for SSL
+      
+      # Option 2: Individual Redis settings (Fallback)
       - key: REDIS_HOST
-        value: localhost
+        sync: false  # Set to your Redis host (not localhost for production)
       - key: REDIS_PORT
         value: 6379
       - key: REDIS_PASSWORD
-        sync: false
+        sync: false  # Required for production Redis
       - key: REDIS_DB
         value: 0
-      # Performance Configuration
+      - key: REDIS_SSL
+        value: true  # Enable SSL for production
+      
+      # Performance Configuration - Optimized for Render
       - key: MAX_WORKERS
         value: 4
       - key: WORKER_CONNECTIONS
         value: 1000
       - key: KEEPALIVE_TIMEOUT
-        value: 65
+        value: 2  # Reduced for Render's load balancer
       - key: MAX_REQUESTS
-        value: 10000
+        value: 1000  # Reduced for better memory management
       - key: MAX_REQUESTS_JITTER
-        value: 1000
-      # Cache Configuration
+        value: 50   # Reduced jitter
+      
+      # Cache Configuration - Production Optimized
       - key: CACHE_TTL
-        value: 3600
+        value: 3600  # 1 hour cache
       - key: SESSION_TIMEOUT
-        value: 1800
-      # Security Configuration
+        value: 1800  # 30 minutes
+      
+      # Security Configuration - Production Ready
       - key: JWT_EXPIRE_MINUTES
         value: 30
       - key: RATE_LIMIT_PER_MINUTE
         value: 1000
+      
       # Monitoring Configuration
       - key: METRICS_ENABLED
         value: true
       - key: LOG_LEVEL
         value: INFO
+        
     healthCheckPath: /health
     autoDeploy: true

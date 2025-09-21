@@ -1,91 +1,101 @@
 # 🗄️ Database Connection Utilities
-# MongoDB and Redis connection management
+# MongoDB and Redis connection management with production-ready configurations
 
 import asyncio
 import logging
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 import redis.asyncio as redis
-from pymongo.errors import ConnectionFailure
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+
+# Import production-ready services
+from services.mongodb_service import get_db, initialize_db
+from services.redis_service import RedisService
 
 logger = logging.getLogger(__name__)
 
 # Global connection instances
 _mongodb_client: Optional[AsyncIOMotorClient] = None
+_redis_service: Optional[RedisService] = None
 _redis_client: Optional[redis.Redis] = None
 
 async def get_database():
     """
-    Get MongoDB database connection
+    Get MongoDB database connection using production-ready service
     Returns the database instance for queries
     """
-    global _mongodb_client
-    
-    if _mongodb_client is None:
-        try:
-            # Connect to MongoDB (using existing connection from services)
-            _mongodb_client = AsyncIOMotorClient("mongodb://localhost:27017/")
-            # Test connection
-            await _mongodb_client.admin.command('ping')
-            logger.info("✅ MongoDB connection established")
-        except ConnectionFailure as e:
-            logger.error(f"❌ MongoDB connection failed: {e}")
-            # Return None for graceful degradation
+    try:
+        # Use the production-ready MongoDB service
+        db = await get_db()
+        if db is not None:
+            logger.info("✅ MongoDB connection established via service")
+            return db
+        else:
+            logger.warning("⚠️ MongoDB service returned None - check configuration")
             return None
-        except Exception as e:
-            logger.error(f"❌ Unexpected MongoDB error: {e}")
-            return None
-    
-    return _mongodb_client.eaiser_db
+    except Exception as e:
+        logger.error(f"❌ MongoDB connection failed: {e}")
+        return None
 
 async def get_redis():
     """
-    Get Redis connection for caching
-    Returns Redis client instance
+    Get Redis connection for caching using production-ready service
+    Returns Redis client instance with graceful fallback
     """
-    global _redis_client
+    global _redis_service, _redis_client
     
-    if _redis_client is None:
+    if _redis_service is None:
         try:
-            # Connect to Redis
-            _redis_client = redis.Redis(
-                host='localhost',
-                port=6379,
-                decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5
-            )
-            # Test connection
-            await _redis_client.ping()
-            logger.info("✅ Redis connection established")
+            # Initialize Redis service with production configuration
+            _redis_service = RedisService()
+            connection_success = await _redis_service.connect()
+            
+            if connection_success and _redis_service.is_connected:
+                _redis_client = _redis_service.redis_client
+                logger.info("✅ Redis connection established via service")
+                return _redis_client
+            else:
+                logger.warning("⚠️ Redis service connection failed - continuing without cache")
+                return None
+                
         except Exception as e:
-            logger.warning(f"⚠️ Redis connection failed: {e}")
-            # Return None for graceful degradation
+            logger.warning(f"⚠️ Redis service initialization failed: {e}")
             return None
     
-    return _redis_client
+    # Return existing connection if available
+    if _redis_service and _redis_service.is_connected:
+        return _redis_service.redis_client
+    else:
+        return None
 
 async def close_database_connections():
     """
-    Close all database connections
+    Close all database connections gracefully
     """
-    global _mongodb_client, _redis_client
+    global _redis_service, _redis_client
     
-    if _mongodb_client:
-        _mongodb_client.close()
-        _mongodb_client = None
-        logger.info("✅ MongoDB connection closed")
+    # Close MongoDB connections (handled by mongodb_service)
+    try:
+        # MongoDB connections are handled by the service itself
+        logger.info("✅ MongoDB connection will be closed by service")
+    except Exception as e:
+        logger.warning(f"⚠️ Error closing MongoDB: {e}")
     
-    if _redis_client:
-        await _redis_client.close()
-        _redis_client = None
-        logger.info("✅ Redis connection closed")
+    # Close Redis connections
+    if _redis_service:
+        try:
+            await _redis_service.disconnect()
+            _redis_service = None
+            _redis_client = None
+            logger.info("✅ Redis connection closed")
+        except Exception as e:
+            logger.warning(f"⚠️ Error closing Redis: {e}")
 
 # Dependency functions for FastAPI
 async def get_db_dependency():
-    """FastAPI dependency for MongoDB"""
+    """FastAPI dependency for MongoDB with production configuration"""
     return await get_database()
 
 async def get_redis_dependency():
-    """FastAPI dependency for Redis"""
+    """FastAPI dependency for Redis with production configuration and graceful fallback"""
     return await get_redis()
