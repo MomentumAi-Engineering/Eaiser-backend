@@ -59,7 +59,7 @@ class DatabaseOptimizer:
                 retryReads=True,
                 readPreference='secondaryPreferred',  # Load balancing
                 w='majority',  # Write concern for consistency
-                j=True  # Journal for durability
+                journal=True  # Journal for durability
             )
             
             # Async client for high-performance operations
@@ -360,8 +360,8 @@ class DatabaseOptimizer:
 
 async def main():
     """Main optimization execution function"""
-    # MongoDB connection string for sharded cluster
-    connection_string = "mongodb://mongo-router:27017"
+    # MongoDB connection string for local development
+    connection_string = "mongodb://localhost:27017"
     
     optimizer = DatabaseOptimizer(connection_string)
     await optimizer.run_optimization()

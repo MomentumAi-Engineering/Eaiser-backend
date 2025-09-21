@@ -5,9 +5,9 @@
   "pipelining": 1,
   "duration": 30.18,
   "samples": 30,
-  "start": "2025-09-08T05:27:09.591Z",
-  "finish": "2025-09-08T05:27:39.768Z",
-  "errors": 271200,
+  "start": "2025-09-21T07:55:41.483Z",
+  "finish": "2025-09-21T07:56:11.662Z",
+  "errors": 279100,
   "timeouts": 0,
   "mismatches": 0,
   "non2xx": 0,
@@ -63,7 +63,7 @@
     "p99_9": 0,
     "p99_99": 0,
     "p99_999": 0,
-    "sent": 271300
+    "sent": 279200
   },
   "throughput": {
     "average": 0,

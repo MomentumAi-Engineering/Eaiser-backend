@@ -29,8 +29,8 @@ async def load_json_data(filename: str) -> dict:
     except Exception as e:
         logger.error(f"Error loading JSON file {filename}: {e}")
         return {}
-from app.utils.location import get_authority_by_zip_code, get_authority
-from app.utils.timezone import get_timezone_name
+from utils.location import get_authority_by_zip_code, get_authority
+from utils.timezone import get_timezone_name
 import redis
 import hashlib
 import pickle

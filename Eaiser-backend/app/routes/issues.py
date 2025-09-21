@@ -1,13 +1,13 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from app.services.ai_service import classify_issue
-from app.services.ai_service_optimized import generate_report_optimized as generate_report
-from app.services.email_service import send_email
-from app.services.mongodb_service import store_issue, get_issues, update_issue_status, get_db, get_fs
-from app.services.geocode_service import reverse_geocode, geocode_zip_code
-from app.utils.location import get_authority, get_authority_by_zip_code
-from app.utils.timezone import get_timezone_name
+from services.ai_service import classify_issue
+from services.ai_service_optimized import generate_report_optimized as generate_report
+from services.email_service import send_email
+from services.mongodb_service import store_issue, get_issues, update_issue_status, get_db, get_fs
+from services.geocode_service import reverse_geocode, geocode_zip_code
+from utils.location import get_authority, get_authority_by_zip_code
+from utils.timezone import get_timezone_name
 from bson.objectid import ObjectId
 import uuid
 import logging

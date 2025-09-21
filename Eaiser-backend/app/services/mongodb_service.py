@@ -9,7 +9,7 @@ import os
 from dotenv import load_dotenv
 import asyncio
 from urllib.parse import urlparse
-from app.services.redis_service import get_redis_service
+from services.redis_service import get_redis_service
 
 load_dotenv()
 logger = logging.getLogger(__name__)

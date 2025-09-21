@@ -10,8 +10,8 @@ from datetime import datetime
 import pytz
 import re
 from pathlib import Path
-from app.utils.timezone import get_timezone_name
-from app.utils.location import get_authority_by_zip_code, get_authority
+from utils.timezone import get_timezone_name
+from utils.location import get_authority_by_zip_code, get_authority
 from typing import Optional, Dict, Any
 import asyncio
 

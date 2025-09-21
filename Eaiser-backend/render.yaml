@@ -5,7 +5,7 @@ services:
     region: oregon
     plan: free
     buildCommand: pip install -r app/requirements.txt
-    startCommand: cd app && uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    startCommand: cd app && uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 --loop asyncio --http httptools --access-log --log-level info
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -13,16 +13,63 @@ services:
         value: /opt/render/project/src/app
       - key: ENV
         value: production
+      - key: ENVIRONMENT
+        value: production
+      - key: PORT
+        fromService:
+          type: web
+          name: eaiser-backend
+          property: port
+      # Email Configuration
       - key: SENDGRID_API_KEY
         sync: false
       - key: EMAIL_USER
         value: no-reply@eaiser.ai
+      # AI Service Configuration
       - key: GEMINI_API_KEY
         sync: false
+      # MongoDB Configuration
       - key: MONGO_URI
+        sync: false
+      - key: MONGODB_URL
         sync: false
       - key: MONGODB_NAME
         value: eaiser
+      # Redis Configuration (Optional - graceful degradation if unavailable)
+      - key: REDIS_HOST
+        value: localhost
+      - key: REDIS_PORT
+        value: 6379
+      - key: REDIS_PASSWORD
+        sync: false
+      - key: REDIS_DB
+        value: 0
+      # Performance Configuration
+      - key: MAX_WORKERS
+        value: 4
+      - key: WORKER_CONNECTIONS
+        value: 1000
+      - key: KEEPALIVE_TIMEOUT
+        value: 65
+      - key: MAX_REQUESTS
+        value: 10000
+      - key: MAX_REQUESTS_JITTER
+        value: 1000
+      # Cache Configuration
+      - key: CACHE_TTL
+        value: 3600
+      - key: SESSION_TIMEOUT
+        value: 1800
+      # Security Configuration
+      - key: JWT_EXPIRE_MINUTES
+        value: 30
+      - key: RATE_LIMIT_PER_MINUTE
+        value: 1000
+      # Monitoring Configuration
+      - key: METRICS_ENABLED
+        value: true
+      - key: LOG_LEVEL
+        value: INFO
     healthCheckPath: /health
     autoDeploy: true
     rootDir: .

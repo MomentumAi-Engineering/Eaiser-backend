@@ -1,0 +1,176 @@
+{
+  "test_start_time": "2025-09-21T14:18:58.560776",
+  "system_metrics": {
+    "reports_per_minute": 120,
+    "avg_generation_time": 0.25,
+    "cache_hit_rate": 85.5,
+    "queue_length": 0,
+    "active_workers": 5,
+    "total_reports_today": 2500,
+    "system_status": "optimal",
+    "max_concurrent_reports": 50,
+    "supported_formats": [
+      "json",
+      "html",
+      "csv",
+      "pdf"
+    ],
+    "cache_enabled": true,
+    "queue_processing": true,
+    "last_updated": "2025-09-21T14:18:58.562888"
+  },
+  "tests": {
+    "single_report": {
+      "success": true,
+      "generation_time": 0.12052440643310547,
+      "server_time": 0.11298370361328125,
+      "cache_hit": false,
+      "size_bytes": 439,
+      "report_type": "performance"
+    },
+    "report_types": {
+      "performance": {
+        "success": true,
+        "generation_time": 0.0032906532287597656,
+        "server_time": 0.0013089179992675781,
+        "cache_hit": true,
+        "size_bytes": 0,
+        "report_type": "performance"
+      },
+      "user_analytics": {
+        "success": true,
+        "generation_time": 0.11344051361083984,
+        "server_time": 0.10503387451171875,
+        "cache_hit": false,
+        "size_bytes": 469,
+        "report_type": "user_analytics"
+      },
+      "system_health": {
+        "success": true,
+        "generation_time": 0.0035653114318847656,
+        "server_time": 8.58306884765625e-06,
+        "cache_hit": false,
+        "size_bytes": 455,
+        "report_type": "system_health"
+      },
+      "load_test": {
+        "success": true,
+        "generation_time": 0.0060079097747802734,
+        "server_time": 0.0012111663818359375,
+        "cache_hit": false,
+        "size_bytes": 42,
+        "report_type": "load_test"
+      },
+      "security": {
+        "success": true,
+        "generation_time": 0.004649162292480469,
+        "server_time": 6.198883056640625e-06,
+        "cache_hit": false,
+        "size_bytes": 328,
+        "report_type": "security"
+      },
+      "business": {
+        "success": true,
+        "generation_time": 0.0041010379791259766,
+        "server_time": 6.4373016357421875e-06,
+        "cache_hit": false,
+        "size_bytes": 360,
+        "report_type": "business"
+      }
+    },
+    "concurrent_10": {
+      "concurrent_count": 10,
+      "successful": 10,
+      "failed": 0,
+      "total_time": 0.03405404090881348,
+      "reports_per_second": 293.6509070032836,
+      "avg_generation_time": 0.02328805923461914,
+      "median_generation_time": 0.02582073211669922,
+      "min_generation_time": 0.005141019821166992,
+      "max_generation_time": 0.030080080032348633,
+      "avg_server_time": 0.010280776023864745,
+      "cache_hit_rate": 100.0,
+      "success_rate": 100.0
+    },
+    "concurrent_25": {
+      "concurrent_count": 25,
+      "successful": 25,
+      "failed": 0,
+      "total_time": 0.053545475006103516,
+      "reports_per_second": 466.89286064135786,
+      "avg_generation_time": 0.03534197807312012,
+      "median_generation_time": 0.03936624526977539,
+      "min_generation_time": 0.012848377227783203,
+      "max_generation_time": 0.04433584213256836,
+      "avg_server_time": 0.010907745361328125,
+      "cache_hit_rate": 100.0,
+      "success_rate": 100.0
+    },
+    "concurrent_50": {
+      "concurrent_count": 50,
+      "successful": 50,
+      "failed": 0,
+      "total_time": 0.10467147827148438,
+      "reports_per_second": 477.68504683115276,
+      "avg_generation_time": 0.06680153846740723,
+      "median_generation_time": 0.07373285293579102,
+      "min_generation_time": 0.026700735092163086,
+      "max_generation_time": 0.0817711353302002,
+      "avg_server_time": 0.024644489288330077,
+      "cache_hit_rate": 100.0,
+      "success_rate": 100.0
+    },
+    "bulk_reports": {
+      "success": true,
+      "bulk_size": 5,
+      "total_time": 0.0036478042602539062,
+      "completed": 5,
+      "failed": 0,
+      "reports_per_second": 1370.6875816993463,
+      "results": [
+        {
+          "report_type": "performance",
+          "request_id": "b331f8a3ecee",
+          "status": "queued",
+          "queue_position": 1
+        },
+        {
+          "report_type": "user_analytics",
+          "request_id": "bac525bf7852",
+          "status": "queued",
+          "queue_position": 2
+        },
+        {
+          "report_type": "system_health",
+          "request_id": "cca9352f17e8",
+          "status": "queued",
+          "queue_position": 3
+        },
+        {
+          "report_type": "load_test",
+          "request_id": "d4199a84fa12",
+          "status": "queued",
+          "queue_position": 4
+        },
+        {
+          "report_type": "security",
+          "request_id": "8c065a5e9a29",
+          "status": "queued",
+          "queue_position": 5
+        }
+      ]
+    },
+    "sustained_load": {
+      "duration_seconds": 30.2452654838562,
+      "target_rps": 2,
+      "total_reports": 60,
+      "successful_reports": 60,
+      "failed_reports": 0,
+      "actual_rps": 1.9837815618456307,
+      "success_rate": 100.0,
+      "avg_generation_time": 0.009332410494486491,
+      "median_generation_time": 0.007283210754394531
+    }
+  },
+  "test_end_time": "2025-09-21T14:19:29.905789"
+}

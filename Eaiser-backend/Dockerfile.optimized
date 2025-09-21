@@ -31,31 +31,23 @@ ENV PYTHONUNBUFFERED=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
 # Install system dependencies for building
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
-    gcc \
-    g++ \
-    git \
-    libffi-dev \
-    libssl-dev \
-    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry
-RUN pip install poetry==1.7.1
+RUN pip install --no-cache-dir pip==24.0
 
 # Set work directory
 WORKDIR /app
 
 # Copy dependency files
-COPY pyproject.toml poetry.lock* ./
+COPY app/requirements.txt ./
 
-# Configure poetry and install dependencies
-RUN poetry config virtualenvs.create true && \
-    poetry config virtualenvs.in-project true && \
-    poetry install --only=main --no-dev && \
-    rm -rf $POETRY_CACHE_DIR
+# Install dependencies using pip
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Production stage
 FROM python:3.11-slim as production
@@ -64,7 +56,7 @@ FROM python:3.11-slim as production
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
-    PATH="/app/.venv/bin:$PATH" \
+    PATH="/app:$PATH" \
     ENV=production \
     PORT=10000 \
     WORKERS=4 \
@@ -87,7 +79,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy virtual environment from builder stage
-COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app /app
 
 # Copy application code
 COPY ./app /app/
@@ -97,77 +89,70 @@ RUN mkdir -p /app/logs /app/temp /app/static && \
     chown -R eaiser:eaiser /app && \
     chmod -R 755 /app
 
-# Copy optimized configuration files
-COPY main_optimized.py /app/main.py
-COPY mongodb_optimized_service.py /app/services/mongodb_optimized_service.py
-COPY redis_cluster_service.py /app/services/redis_cluster_service.py
-COPY rate_limiter_service.py /app/services/rate_limiter_service.py
-COPY issues_optimized.py /app/routers/issues_optimized.py
+# Copy application files
+COPY app/main_optimized.py /app/main.py
+COPY app/services/ /app/services/
+COPY app/routers/ /app/routers/
 
 # Create startup script
-RUN cat > /app/start.sh << 'EOF'
-#!/bin/bash
-set -e
-
-# Function to handle graceful shutdown
-shutdown() {
-    echo "Received shutdown signal, gracefully stopping..."
-    kill -TERM "$child" 2>/dev/null
-    wait "$child"
-    exit 0
-}
-
-# Set up signal handlers
-trap shutdown SIGTERM SIGINT
-
-# Wait for dependencies
-echo "Waiting for dependencies..."
-until curl -f http://${REDIS_HOST:-redis-node-1}:${REDIS_PORT:-6379}/ping 2>/dev/null; do
-    echo "Waiting for Redis..."
-    sleep 2
-done
-
-echo "Starting Eaiser Backend API..."
-echo "Environment: ${ENV}"
-echo "Port: ${PORT}"
-echo "Workers: ${WORKERS}"
-echo "Max Connections: ${MAX_CONNECTIONS}"
-
-# Start the application with optimized settings
-exec uvicorn main:app \
-    --host 0.0.0.0 \
-    --port ${PORT} \
-    --workers ${WORKERS} \
-    --worker-class uvicorn.workers.UvicornWorker \
-    --max-requests 1000 \
-    --max-requests-jitter 100 \
-    --timeout-keep-alive ${KEEPALIVE} \
-    --timeout-graceful-shutdown ${GRACEFUL_TIMEOUT} \
-    --access-log \
-    --log-level info \
-    --loop uvloop \
-    --http httptools &
-
-child=$!
-wait "$child"
-EOF
+RUN echo '#!/bin/bash' > /app/start.sh && \
+    echo 'set -e' >> /app/start.sh && \
+    echo '' >> /app/start.sh && \
+    echo '# Function to handle graceful shutdown' >> /app/start.sh && \
+    echo 'shutdown() {' >> /app/start.sh && \
+    echo '    echo "Received shutdown signal, gracefully stopping..."' >> /app/start.sh && \
+    echo '    kill -TERM "$child" 2>/dev/null' >> /app/start.sh && \
+    echo '    wait "$child"' >> /app/start.sh && \
+    echo '    exit 0' >> /app/start.sh && \
+    echo '}' >> /app/start.sh && \
+    echo '' >> /app/start.sh && \
+    echo '# Set up signal handlers' >> /app/start.sh && \
+    echo 'trap shutdown SIGTERM SIGINT' >> /app/start.sh && \
+    echo '' >> /app/start.sh && \
+    echo '# Wait for dependencies' >> /app/start.sh && \
+    echo 'echo "Waiting for dependencies..."' >> /app/start.sh && \
+    echo 'until curl -f http://${REDIS_HOST:-redis-node-1}:${REDIS_PORT:-6379}/ping 2>/dev/null; do' >> /app/start.sh && \
+    echo '    echo "Waiting for Redis..."' >> /app/start.sh && \
+    echo '    sleep 2' >> /app/start.sh && \
+    echo 'done' >> /app/start.sh && \
+    echo '' >> /app/start.sh && \
+    echo 'echo "Starting Eaiser Backend API..."' >> /app/start.sh && \
+    echo 'echo "Environment: ${ENV}"' >> /app/start.sh && \
+    echo 'echo "Port: ${PORT}"' >> /app/start.sh && \
+    echo 'echo "Workers: ${WORKERS}"' >> /app/start.sh && \
+    echo 'echo "Max Connections: ${MAX_CONNECTIONS}"' >> /app/start.sh && \
+    echo '' >> /app/start.sh && \
+    echo '# Start the application with optimized settings' >> /app/start.sh && \
+    echo 'exec uvicorn main_optimized:app \' >> /app/start.sh && \
+    echo '    --host 0.0.0.0 \' >> /app/start.sh && \
+    echo '    --port ${PORT} \' >> /app/start.sh && \
+    echo '    --workers ${WORKERS} \' >> /app/start.sh && \
+    echo '    --max-requests 1000 \' >> /app/start.sh && \
+    echo '    --max-requests-jitter 100 \' >> /app/start.sh && \
+    echo '    --timeout-keep-alive ${KEEPALIVE} \' >> /app/start.sh && \
+    echo '    --timeout-graceful-shutdown ${GRACEFUL_TIMEOUT} \' >> /app/start.sh && \
+    echo '    --access-log \' >> /app/start.sh && \
+    echo '    --log-level info \' >> /app/start.sh && \
+    echo '    --loop uvloop \' >> /app/start.sh && \
+    echo '    --http httptools &' >> /app/start.sh && \
+    echo '' >> /app/start.sh && \
+    echo 'child=$!' >> /app/start.sh && \
+    echo 'wait "$child"' >> /app/start.sh
 
 # Make startup script executable
 RUN chmod +x /app/start.sh
 
 # Create health check script
-RUN cat > /app/healthcheck.sh << 'EOF'
-#!/bin/bash
-set -e
-
-# Health check with timeout
-timeout 10 curl -f http://localhost:${PORT}/health || exit 1
-
-# Check if process is running
-pgrep -f "uvicorn main:app" > /dev/null || exit 1
-
-echo "Health check passed"
-EOF
+RUN echo '#!/bin/bash' > /app/healthcheck.sh && \
+    echo 'set -e' >> /app/healthcheck.sh && \
+    echo '' >> /app/healthcheck.sh && \
+    echo '# Health check with timeout' >> /app/healthcheck.sh && \
+    echo 'timeout 10 curl -f http://localhost:${PORT}/health || exit 1' >> /app/healthcheck.sh && \
+    echo '' >> /app/healthcheck.sh && \
+    echo '# Check if process is running' >> /app/healthcheck.sh && \
+    echo 'pgrep -f "uvicorn main:app" > /dev/null || exit 1' >> /app/healthcheck.sh && \
+    echo '' >> /app/healthcheck.sh && \
+    echo 'echo "Health check passed"' >> /app/healthcheck.sh
 
 RUN chmod +x /app/healthcheck.sh
 

@@ -2,7 +2,7 @@ from typing import List, Dict
 import logging
 import json
 from pathlib import Path
-from app.utils.timezone import get_timezone_name
+from utils.timezone import get_timezone_name
 
 logger = logging.getLogger(__name__)
 

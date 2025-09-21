@@ -42,7 +42,7 @@ from services.mongodb_optimized_service import init_optimized_mongodb, close_opt
 from services.redis_cluster_service import init_redis_cluster, close_redis_cluster, get_redis_cluster_service
 
 # Import routers
-from routers import issues, reports, authorities
+from routers import issues_optimized
 
 # Load environment variables
 load_dotenv()
@@ -502,9 +502,7 @@ async def readiness_check():
         )
 
 # Include routers
-app.include_router(issues.router, prefix="/api", tags=["Issues"])
-app.include_router(reports.router, prefix="/api", tags=["Reports"])
-app.include_router(authorities.router, prefix="/api", tags=["Authorities"])
+app.include_router(issues_optimized.router, prefix="/api", tags=["Issues"])
 
 # Root endpoint
 @app.get("/", tags=["Root"])

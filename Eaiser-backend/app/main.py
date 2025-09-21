@@ -1,11 +1,12 @@
 from fastapi import FastAPI, HTTPException, Request
-from app.utils.timing_middleware import TimingMiddleware
+from utils.timing_middleware import TimingMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
-from app.routes.issues import router as issues_router
-from app.services.mongodb_service import init_db, close_db
-from app.services.redis_service import init_redis, close_redis
+from routes.issues import router as issues_router
+from api.reports import router as reports_router
+from services.mongodb_service import init_db, close_db
+from services.redis_service import init_redis, close_redis
 import logging
 import os
 import uvicorn
@@ -224,6 +225,7 @@ async def get_report_page(request: Request):
 
 # Include API routes
 app.include_router(issues_router, prefix="/api")
+app.include_router(reports_router, prefix="/api/reports")
 
 # Log startup
 @app.on_event("startup")
