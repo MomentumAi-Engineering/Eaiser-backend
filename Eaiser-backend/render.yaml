@@ -72,5 +72,3 @@ services:
         value: INFO
     healthCheckPath: /health
     autoDeploy: true
-    rootDir: .
-    dockerfilePath: ./Dockerfile
