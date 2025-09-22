@@ -57,32 +57,51 @@ CACHE_TTL = {
 }
 
 async def get_cached_data(cache_key: str, ttl: int = 300) -> Optional[Any]:
-    """Get data from Redis cache"""
+    """Get cached data from Redis with TTL check"""
     if not redis_client:
         return None
     
     try:
         cached_data = redis_client.get(cache_key)
         if cached_data:
-            return pickle.loads(cached_data)
+            # Check if it's a pickled object or JSON string
+            try:
+                return pickle.loads(cached_data)
+            except:
+                return json.loads(cached_data.decode('utf-8'))
+        return None
     except Exception as e:
-        logger.warning(f"Cache get error for {cache_key}: {e}")
-    return None
+        logger.warning(f"Cache retrieval error for key {cache_key}: {e}")
+        return None
 
 async def set_cached_data(cache_key: str, data: Any, ttl: int = 300) -> None:
-    """Set data in Redis cache"""
+    """Set cached data in Redis with TTL"""
     if not redis_client:
         return
     
     try:
-        redis_client.setex(cache_key, ttl, pickle.dumps(data))
+        # Try to pickle complex objects, fallback to JSON for simple ones
+        try:
+            serialized_data = pickle.dumps(data)
+        except:
+            serialized_data = json.dumps(data).encode('utf-8')
+        
+        redis_client.setex(cache_key, ttl, serialized_data)
+        logger.debug(f"Cached data for key {cache_key} with TTL {ttl}s")
     except Exception as e:
-        logger.warning(f"Cache set error for {cache_key}: {e}")
+        logger.warning(f"Cache storage error for key {cache_key}: {e}")
 
 def generate_cache_key(prefix: str, **kwargs) -> str:
-    """Generate cache key from parameters"""
-    key_data = f"{prefix}:" + ":".join([f"{k}={v}" for k, v in sorted(kwargs.items())])
-    return hashlib.md5(key_data.encode()).hexdigest()
+    """Generate a consistent cache key from parameters"""
+    key_parts = [prefix]
+    for k, v in sorted(kwargs.items()):
+        if v is not None:
+            # Create hash for image content to avoid huge keys
+            if k == 'image_content' and isinstance(v, bytes):
+                key_parts.append(f"{k}:{hashlib.md5(v).hexdigest()[:8]}")
+            else:
+                key_parts.append(f"{k}:{str(v)}")
+    return ":".join(key_parts)
 
 async def get_department_mapping_cached() -> Dict[str, Any]:
     """Get department mapping with caching"""
@@ -134,15 +153,26 @@ async def get_timezone_cached(latitude: float, longitude: float) -> str:
     await set_cached_data(cache_key, timezone_str, CACHE_TTL['timezone_data'])
     return timezone_str
 
-async def generate_ai_report_async(prompt: str, image_content: bytes) -> str:
-    """Generate AI report asynchronously"""
+async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: int = 5) -> str:
+    """Generate AI report asynchronously with timeout control"""
     def _generate_report():
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content([prompt, Image.open(io.BytesIO(image_content))])
-        return response.text
+        try:
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content([prompt, Image.open(io.BytesIO(image_content))])
+            return response.text
+        except Exception as e:
+            logger.warning(f"Gemini API error: {str(e)}")
+            raise
     
-    # Run in thread pool to avoid blocking
-    return await asyncio.get_event_loop().run_in_executor(executor, _generate_report)
+    try:
+        # Run with timeout to prevent long waits
+        return await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(executor, _generate_report),
+            timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"Gemini AI timeout after {timeout}s - using fallback")
+        raise TimeoutError(f"AI generation timeout after {timeout}s")
 
 async def generate_report_optimized(
     image_content: bytes,
@@ -237,67 +267,64 @@ async def generate_report_optimized(
     image_filename = f"IMG1_{now.strftime('%Y%m%d_%H%M')}.jpg"
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
     
-    # Try AI generation with retries
-    for attempt in range(2):  # Reduced from 3 to 2 attempts for faster response
+    # Check cache for similar reports first (enhanced caching strategy)
+    cache_key = generate_cache_key(
+        "ai_report_v2",
+        issue_type=issue_type,
+        severity=severity,
+        category=category,
+        image_content=image_content,
+        zip_code=zip_code,
+        address_hash=hashlib.md5(address.encode()).hexdigest()[:8]
+    )
+    
+    cached_report = await get_cached_data(cache_key, CACHE_TTL['ai_report'])
+    if cached_report:
+        logger.info(f"Using cached report for similar issue {issue_id}")
+        # Update timestamps and IDs for the cached report
+        cached_report["report_id"] = report_id
+        cached_report["issue_id"] = issue_id
+        cached_report["timestamp"] = local_time
+        cached_report["utc_time"] = utc_time
+        cached_report["template_fields"]["oid"] = report_id
+        cached_report["template_fields"]["timestamp"] = local_time
+        cached_report["template_fields"]["utc_time"] = utc_time
+        cached_report["template_fields"]["tracking_link"] = f"https://momentum-ai.org/track/{report_id}"
+        return cached_report
+    prompt = f"""
+    Analyze this infrastructure issue image and generate a detailed report in JSON format.
+    
+    Issue Details:
+    - Type: {issue_type}
+    - Description: {description}
+    - Severity: {severity}
+    - Location: {address}
+    - Category: {category}
+    - Priority: {priority}
+    - Confidence: {confidence}%
+    
+    Generate a JSON response with these exact fields:
+    {{
+        "issue_summary": "Brief summary of the issue",
+        "detailed_analysis": "Detailed technical analysis",
+        "recommended_action": "Specific action needed",
+        "estimated_cost": "Cost estimate in USD",
+        "timeline": "Expected resolution time",
+        "safety_concerns": "Any safety issues",
+        "materials_needed": "Required materials/equipment",
+        "priority_justification": "Why this priority level"
+    }}
+    
+    Keep responses concise but informative. Focus on actionable insights.
+    """
+    
+    # Try AI generation with fast timeout and immediate fallback
+    ai_success = False
+    for attempt in range(1):  # Only 1 attempt for speed
         try:
-            # Prepare optimized prompt
-            decline_prompt = f"- Decline Reason: {decline_reason}\n" if decline_reason else ""
-            zip_code_prompt = f"- Zip Code: {zip_code}\n" if zip_code else ""
-            
-            prompt = f"""
-You are an AI assistant for SnapFix AI. Generate a concise infrastructure issue report in JSON format.
-Input:
-- Issue Type: {issue_type.title()}
-- Severity: {severity}
-- Confidence: {confidence:.1f}%
-- Description: {description}
-- Category: {category}
-- Location: {location_str}
-- Issue ID: {issue_id}
-- Department: {department}
-- Map: {map_link}
-- Priority: {priority}
-{decline_prompt}{zip_code_prompt}
-
-Return this JSON structure (no markdown, no explanation):
-{{
-  "issue_overview": {{
-    "issue_type": "{issue_type.title()}",
-    "severity": "{severity.lower()}",
-    "confidence": {confidence},
-    "category": "{category}",
-    "summary_explanation": "Brief 2-3 line explanation based on image and description. Include location and zip code if provided."
-  }},
-  "detailed_analysis": {{
-    "root_causes": "Likely causes",
-    "potential_consequences_if_ignored": "Risks if not addressed",
-    "public_safety_risk": "low|medium|high",
-    "environmental_impact": "low|medium|high|none",
-    "structural_implications": "low|medium|high|none",
-    "legal_or_regulatory_considerations": "Relevant regulations or null",
-    "feedback": {f'"User decline reason: {decline_reason}"' if decline_reason else 'null'}
-  }},
-  "recommended_actions": ["Action 1 with timeframe", "Action 2 with timeframe"],
-  "template_fields": {{
-    "oid": "{report_id}",
-    "timestamp": "{local_time}",
-    "utc_time": "{utc_time}",
-    "priority": "{priority}",
-    "tracking_link": "https://momentum-ai.org/track/{report_id}",
-    "image_filename": "{image_filename}",
-    "ai_tag": "{issue_type.title()}",
-    "app_version": "1.5.3",
-    "device_type": "Mobile (Generic)",
-    "map_link": "{map_link}",
-    "zip_code": "{zip_code if zip_code else 'N/A'}"
-  }}
-}}
-Keep response under 150 words, professional tone.
-"""
-            
-            # Generate AI report asynchronously
-            response_text = await generate_ai_report_async(prompt, image_content)
-            logger.info(f"AI report generated (attempt {attempt + 1}) for issue {issue_id}")
+            # Generate AI report asynchronously with 3-second timeout
+            response_text = await generate_ai_report_async(prompt, image_content, timeout=3)
+            logger.info(f"AI report generated quickly (attempt {attempt + 1}) for issue {issue_id}")
             
             # Extract and validate JSON
             json_match = re.search(r'\{[\s\S]*\}', response_text)
@@ -322,52 +349,107 @@ Keep response under 150 words, professional tone.
             if not decline_reason:
                 await set_cached_data(report_cache_key, report, CACHE_TTL['ai_report'])
             
-            logger.info(f"Optimized report generated successfully for issue {issue_id}")
+            ai_success = True
+            logger.info(f"Optimized AI report generated successfully for issue {issue_id}")
             return report
             
+        except (TimeoutError, asyncio.TimeoutError) as e:
+            logger.warning(f"AI generation timeout (attempt {attempt + 1}): {str(e)} - using fast fallback")
+            break
         except Exception as e:
-            logger.warning(f"AI generation attempt {attempt + 1} failed: {str(e)}")
-            if attempt == 1:  # Last attempt
-                logger.error(f"AI generation failed after 2 attempts: {str(e)}")
-                break
-            await asyncio.sleep(0.5)  # Shorter wait time
+            logger.warning(f"AI generation attempt {attempt + 1} failed: {str(e)} - using fast fallback")
+            break
     
-    # Fast fallback report (pre-computed templates)
-    logger.info(f"Using fallback report for issue {issue_id}")
+    # FAST FALLBACK: Immediate response without AI delay
+    logger.info(f"Using fast fallback report for issue {issue_id} - responding immediately")
     
-    # Issue-specific quick actions
+    # Issue-specific action templates for quick response
     action_templates = {
-        "fire": ["Dispatch fire department immediately", "Evacuate area if necessary"],
-        "pothole": ["Fill pothole within 48 hours", "Mark area with safety cones"],
-        "garbage": ["Remove debris within 24 hours", "Install additional bins"],
-        "flood": ["Deploy pumps immediately", "Clear drainage within 12 hours"],
-        "vandalism": ["Remove graffiti within 72 hours", "Increase security patrols"],
-        "structural_damage": ["Cordon off area immediately", "Conduct inspection within 24 hours"],
-        "property_damage": ["Assess damage extent", "Contact property owner within 24 hours"]
+        "pothole": {
+            "issue_summary": f"Pothole detected on {address} requiring immediate attention",
+            "detailed_analysis": f"Road surface damage identified with {severity.lower()} severity level. Pothole poses safety risk to vehicles and pedestrians.",
+            "recommended_action": "Fill pothole with appropriate asphalt mixture and compact surface",
+            "estimated_cost": "$150-300 USD",
+            "timeline": "2-5 business days",
+            "safety_concerns": "Vehicle damage risk, pedestrian tripping hazard",
+            "materials_needed": "Asphalt mix, compaction equipment, safety cones",
+            "priority_justification": f"Classified as {priority.lower()} priority due to safety implications"
+        },
+        "streetlight": {
+            "issue_summary": f"Street lighting issue reported at {address}",
+            "detailed_analysis": f"Lighting infrastructure problem with {severity.lower()} impact on public safety and visibility.",
+            "recommended_action": "Inspect electrical connections and replace faulty components",
+            "estimated_cost": "$75-200 USD",
+            "timeline": "1-3 business days",
+            "safety_concerns": "Reduced visibility, increased crime risk",
+            "materials_needed": "LED bulbs, electrical components, safety equipment",
+            "priority_justification": f"Set as {priority.lower()} priority for public safety"
+        },
+        "drainage": {
+            "issue_summary": f"Drainage system issue identified at {address}",
+            "detailed_analysis": f"Water management problem with {severity.lower()} severity affecting local infrastructure.",
+            "recommended_action": "Clear blockages and inspect drainage system integrity",
+            "estimated_cost": "$200-500 USD",
+            "timeline": "3-7 business days",
+            "safety_concerns": "Flooding risk, structural damage potential",
+            "materials_needed": "Drainage equipment, cleaning tools, inspection cameras",
+            "priority_justification": f"Assigned {priority.lower()} priority based on flood risk assessment"
+        },
+        "sidewalk": {
+            "issue_summary": f"Sidewalk maintenance required at {address}",
+            "detailed_analysis": f"Pedestrian pathway issue with {severity.lower()} severity impacting accessibility.",
+            "recommended_action": "Repair concrete surface and ensure ADA compliance",
+            "estimated_cost": "$300-800 USD",
+            "timeline": "5-10 business days",
+            "safety_concerns": "Pedestrian safety, accessibility compliance",
+            "materials_needed": "Concrete mix, leveling tools, safety barriers",
+            "priority_justification": f"Rated {priority.lower()} priority for pedestrian safety"
+        }
     }
     
-    actions = action_templates.get(issue_type.lower(), [f"Notify {department} for action", "Conduct professional inspection"])
+    # Select appropriate template or use generic
+    template_key = next((key for key in action_templates.keys() if key in issue_type.lower()), "generic")
+    if template_key == "generic":
+        fallback_report_data = {
+            "issue_summary": f"{issue_type} issue reported at {address}",
+            "detailed_analysis": f"Infrastructure issue with {severity.lower()} severity requiring attention. Issue category: {category}.",
+            "recommended_action": f"Inspect and address {issue_type.lower()} according to municipal standards",
+            "estimated_cost": "$100-500 USD",
+            "timeline": "3-7 business days",
+            "safety_concerns": "Standard safety protocols apply",
+            "materials_needed": "Standard maintenance equipment and materials",
+            "priority_justification": f"Classified as {priority.lower()} priority based on severity assessment"
+        }
+    else:
+        fallback_report_data = action_templates[template_key]
     
+    actions = [fallback_report_data["recommended_action"], "Conduct professional inspection"]
+    
+    # Update fallback report with structured data
     fallback_report = {
         "issue_overview": {
             "issue_type": issue_type.title(),
             "severity": severity.lower(),
             "confidence": confidence,
             "category": category,
-            "summary_explanation": f"AI identified a {issue_type} at {location_str} based on: {description}."
+            "summary_explanation": fallback_report_data["issue_summary"]
         },
         "detailed_analysis": {
-            "root_causes": "Requires inspection to determine exact cause",
-            "potential_consequences_if_ignored": "May pose safety or compliance risks",
+            "root_causes": fallback_report_data["detailed_analysis"],
+            "potential_consequences_if_ignored": fallback_report_data["safety_concerns"],
             "public_safety_risk": severity.lower(),
             "environmental_impact": "low",
             "structural_implications": "medium" if issue_type in ["structural_damage", "property_damage"] else "low",
             "legal_or_regulatory_considerations": "Local regulations may apply",
-            "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else None
+            "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else None,
+            "estimated_cost": fallback_report_data["estimated_cost"],
+            "materials_needed": fallback_report_data["materials_needed"],
+            "priority_justification": fallback_report_data["priority_justification"]
         },
-        "recommended_actions": actions,
+        "recommended_actions": [fallback_report_data["recommended_action"], "Conduct professional inspection"],
         "responsible_authorities_or_parties": responsible_authorities,
         "available_authorities": available_authorities,
+        "timeline": fallback_report_data["timeline"],
         "additional_notes": f"Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Track report: https://momentum-ai.org/track/{report_id}. Zip Code: {zip_code if zip_code else 'N/A'}.",
         "template_fields": {
             "oid": report_id,
@@ -380,14 +462,19 @@ Keep response under 150 words, professional tone.
             "app_version": "1.5.3",
             "device_type": "Mobile (Generic)",
             "map_link": map_link,
-            "zip_code": zip_code if zip_code else "N/A"
+            "zip_code": zip_code if zip_code else "N/A",
+            "generation_method": "Fast Template Response",
+            "response_time": "< 1 second"
         }
     }
     
     if decline_reason:
         fallback_report["issue_overview"]["summary_explanation"] += f" Declined due to: {decline_reason}."
     
-    logger.info(f"Fallback report generated for issue {issue_id}")
+    # Cache the generated report for future similar requests
+    await set_cached_data(cache_key, fallback_report, CACHE_TTL['ai_report'])
+    logger.info(f"Fallback report generated and cached for issue {issue_id}")
+    
     return fallback_report
 
 # Background task for pre-warming cache

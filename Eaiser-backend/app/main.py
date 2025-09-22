@@ -12,7 +12,7 @@ parent_dir = current_dir.parent
 if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -77,8 +77,10 @@ logging.getLogger("performance").setLevel(logging.INFO)  # Keep performance logs
 # Create FastAPI app
 app = FastAPI(title="Eaiser AI Backend")
 
-# Templates (for HTML pages)
-templates = Jinja2Templates(directory="templates")
+# Templates (for HTML pages) - Using absolute path for proper template loading
+import os
+template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+templates = Jinja2Templates(directory=template_dir)
 
 # Enable CORS for frontend access with explicit headers
 app.add_middleware(
@@ -228,23 +230,71 @@ async def get_authorities_by_zip_code(zip_code: str):
         logger.error(f"Error fetching authorities for zip code {zip_code}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching authorities: {str(e)}")
 
-# NEW: JSON report endpoint for programmatic access
+# 🚀 OPTIMIZED: High-Performance Report Generation Endpoint
 @app.get("/api/report")
-async def get_report_json():
+async def get_report_json(
+    report_type: str = Query(default="performance", description="Type of report to generate"),
+    format: str = Query(default="json", description="Report format (json/html/csv)"),
+    cache_ttl: int = Query(default=300, description="Cache TTL in seconds"),
+    use_cache: bool = Query(default=True, description="Use cached results if available")
+):
+    """
+    🚀 Ultra-fast report generation endpoint
+    Performance target: < 5 seconds
+    """
+    import time
+    from services.report_generation_service import (
+        HighPerformanceReportGenerator, 
+        ReportType, 
+        ReportConfig,
+        create_report_generator
+    )
+    from core.database import get_db_dependency as get_database, get_redis_dependency as get_redis
+    
+    start_time = time.time()
+    
     try:
-        # TODO: Replace with actual data fetching/processing
-        report_data = []
-        logger.info("📊 Report generated successfully")
+        # Initialize high-performance report generator
+        mongodb_client = await get_database()
+        redis_client = await get_redis()
+        generator = await create_report_generator(mongodb_client, redis_client)
+        
+        # Create optimized report configuration
+        config = ReportConfig(
+            report_type=ReportType(report_type.lower()),
+            format=format.lower(),
+            cache_ttl=cache_ttl if use_cache else 0,  # Disable cache if requested
+            priority=1,  # High priority for fast generation
+            filters={}
+        )
+        
+        # Generate report with maximum speed optimization
+        result = await generator.generate_report_fast(config)
+        
+        generation_time = time.time() - start_time
+        
+        logger.info(f"⚡ Report generated in {generation_time:.3f}s (Target: <5s)")
+        
         return {
             "status": "success",
-            "message": "Report generated successfully",
-            "data": report_data
+            "message": f"Report generated successfully in {generation_time:.3f} seconds",
+            "data": result["data"],
+            "metadata": {
+                "report_type": report_type,
+                "format": format,
+                "generation_time": generation_time,
+                "cache_hit": result.get("cache_hit", False),
+                "generated_at": result["generated_at"].isoformat(),
+                "performance_target_met": generation_time < 5.0
+            }
         }
+        
     except Exception as e:
-        logger.error(f"💥 Error generating report JSON: {str(e)}", exc_info=True)
+        generation_time = time.time() - start_time
+        logger.error(f"💥 Error generating report in {generation_time:.3f}s: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate report: {str(e)}"
+            detail=f"Failed to generate report: {str(e)} (Time: {generation_time:.3f}s)"
         )
 
 # UPDATED: HTML report page for browser access

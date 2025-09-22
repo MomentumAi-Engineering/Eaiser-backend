@@ -60,10 +60,10 @@ class EmailAuthoritiesRequest(BaseModel):
     authorities: List[Dict[str, Any]]  # List of selected authorities
     report_data: Dict[str, Any]  # Report data to include in email
     zip_code: str  # Zip code for context
-    recommended_actions: List[str]
-    detailed_analysis: Dict[str, Any]
-    responsible_authorities_or_parties: List[Dict[str, Any]]
-    template_fields: Dict[str, Any]
+    recommended_actions: Optional[List[str]] = []  # Make optional with default
+    detailed_analysis: Optional[Dict[str, Any]] = {}  # Make optional with default
+    responsible_authorities_or_parties: Optional[List[Dict[str, Any]]] = []  # Make optional with default
+    template_fields: Optional[Dict[str, Any]] = {}  # Make optional with default
 
 class Issue(BaseModel):
     id: str = Field(..., alias="_id")
@@ -1562,7 +1562,7 @@ async def send_authority_emails(request: EmailAuthoritiesRequest):
     try:
         logger.info(f"🚨 AUTHORITY EMAIL ENDPOINT CALLED! 🚨")
         logger.info(f"🔥 DEBUG: Received request to send emails to {len(request.authorities)} authorities for issue {request.issue_id}")
-        logger.info(f"🔥 DEBUG: Authorities received: {[auth.get('name', 'Unknown') + ' - ' + auth.get('email', 'No email') for auth in request.authorities]}")
+        logger.info(f"🔥 DEBUG: Authorities received: {[str(auth.get('name', 'Unknown') if isinstance(auth, dict) else auth) + ' - ' + str(auth.get('email', 'No email') if isinstance(auth, dict) else 'No email') for auth in request.authorities]}")
         logger.info(f"🔥 DEBUG: Full authorities data: {request.authorities}")
         logger.info(f"🔥 DEBUG: Request zip code: {request.zip_code}")
         logger.info(f"🔥 DEBUG: Request issue ID: {request.issue_id}")
@@ -1588,11 +1588,40 @@ async def send_authority_emails(request: EmailAuthoritiesRequest):
         
         # Prepare email content
         report_data = request.report_data
-        issue_type = report_data.get('issue_overview', {}).get('type', 'Unknown')
-        severity = report_data.get('issue_overview', {}).get('severity', 'Unknown')
-        summary = report_data.get('issue_overview', {}).get('summary', 'No summary available')
-        location = report_data.get('location', {})
-        address = location.get('address', 'Unknown location')
+        logger.info(f"🔥 DEBUG: report_data type: {type(report_data)}, content: {report_data}")
+        
+        # Handle different report_data structures - ensure it's a dict
+        if isinstance(report_data, dict):
+            logger.info("🔥 DEBUG: report_data is a dict, proceeding with dict operations")
+            if 'issue_overview' in report_data:
+                # Standard structure
+                issue_overview = report_data.get('issue_overview', {})
+                if isinstance(issue_overview, dict):
+                    issue_type = issue_overview.get('type', 'Unknown')
+                    severity = issue_overview.get('severity', 'Unknown')
+                    summary = issue_overview.get('summary', 'No summary available')
+                else:
+                    issue_type = 'Unknown'
+                    severity = 'Unknown'
+                    summary = 'No summary available'
+            else:
+                # Direct structure from test data
+                issue_type = report_data.get('category', 'Unknown')
+                severity = report_data.get('severity', 'Unknown')
+                summary = report_data.get('description', 'No summary available')
+            
+            location_data = report_data.get('location', 'Unknown location')
+            if isinstance(location_data, dict):
+                address = location_data.get('address', 'Unknown location')
+            else:
+                address = str(location_data)
+        else:
+            # Fallback if report_data is not a dict
+            logger.warning(f"🔥 DEBUG: report_data is not a dict, type: {type(report_data)}")
+            issue_type = 'Unknown'
+            severity = 'Unknown'
+            summary = 'No summary available'
+            address = 'Unknown location'
         
         # Email subject and content
         subject = f"Public Issue Report - {issue_type} in {request.zip_code}"

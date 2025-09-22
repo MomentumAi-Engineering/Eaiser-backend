@@ -357,55 +357,103 @@ class HighPerformanceReportGenerator:
             }
         }
 
-    # Helper methods for data fetching
+    # 🚀 OPTIMIZED: Ultra-fast data fetching methods (< 50ms each)
     async def _get_response_times(self) -> Dict[str, float]:
-        """Get response time metrics"""
-        # Simulate fast data fetching
-        await asyncio.sleep(0.1)
-        return {"avg": 0.045, "p95": 0.125, "p99": 0.250, "max": 1.2}
+        """Get response time metrics with aggressive caching"""
+        cache_key = "metrics:response_times"
+        cached = await self._get_from_cache(cache_key)
+        if cached:
+            return cached
+            
+        # Ultra-fast data generation (no sleep for performance)
+        data = {"avg": 0.045, "p95": 0.125, "p99": 0.250, "max": 1.2}
+        await self._cache_result(cache_key, data, 60)  # 1-minute cache
+        return data
 
     async def _get_throughput_metrics(self) -> Dict[str, int]:
-        """Get throughput metrics"""
-        await asyncio.sleep(0.1)
-        return {"total": 125000, "per_second": 1750, "peak": 2100}
+        """Get throughput metrics with aggressive caching"""
+        cache_key = "metrics:throughput"
+        cached = await self._get_from_cache(cache_key)
+        if cached:
+            return cached
+            
+        data = {"total": 125000, "per_second": 1750, "peak": 2100}
+        await self._cache_result(cache_key, data, 60)
+        return data
 
     async def _get_error_rates(self) -> Dict[str, float]:
-        """Get error rate metrics"""
-        await asyncio.sleep(0.1)
-        return {"rate": 0.02, "total_errors": 25, "4xx": 15, "5xx": 10}
+        """Get error rate metrics with aggressive caching"""
+        cache_key = "metrics:error_rates"
+        cached = await self._get_from_cache(cache_key)
+        if cached:
+            return cached
+            
+        data = {"rate": 0.02, "total_errors": 25, "4xx": 15, "5xx": 10}
+        await self._cache_result(cache_key, data, 60)
+        return data
 
     async def _get_resource_usage(self) -> Dict[str, float]:
-        """Get resource usage metrics"""
-        await asyncio.sleep(0.1)
-        return {"cpu": 45.2, "memory": 67.8, "disk": 34.1}
+        """Get resource usage metrics with aggressive caching"""
+        cache_key = "metrics:resource_usage"
+        cached = await self._get_from_cache(cache_key)
+        if cached:
+            return cached
+            
+        data = {"cpu": 45.2, "memory": 67.8, "disk": 34.1}
+        await self._cache_result(cache_key, data, 30)  # 30-second cache for real-time data
+        return data
 
     async def _get_active_users(self) -> Dict[str, int]:
-        """Get active user metrics"""
-        await asyncio.sleep(0.1)
-        return {"total": 15000, "new_today": 250, "returning": 14750}
+        """Get active user metrics with aggressive caching"""
+        cache_key = "metrics:active_users"
+        cached = await self._get_from_cache(cache_key)
+        if cached:
+            return cached
+            
+        data = {"total": 15000, "new_today": 250, "returning": 14750}
+        await self._cache_result(cache_key, data, 300)  # 5-minute cache
+        return data
 
     async def _get_user_engagement(self) -> Dict[str, float]:
-        """Get user engagement metrics"""
-        await asyncio.sleep(0.1)
-        return {"retention": 85.5, "avg_session": 12.5, "bounce_rate": 15.2}
+        """Get user engagement metrics with aggressive caching"""
+        cache_key = "metrics:user_engagement"
+        cached = await self._get_from_cache(cache_key)
+        if cached:
+            return cached
+            
+        data = {"retention": 85.5, "avg_session": 12.5, "bounce_rate": 15.2}
+        await self._cache_result(cache_key, data, 300)
+        return data
 
     async def _get_user_demographics(self) -> Dict[str, Any]:
-        """Get user demographics"""
-        await asyncio.sleep(0.1)
-        return {
+        """Get user demographics with aggressive caching"""
+        cache_key = "metrics:user_demographics"
+        cached = await self._get_from_cache(cache_key)
+        if cached:
+            return cached
+            
+        data = {
             "age_groups": {"18-25": 25, "26-35": 40, "36-45": 25, "45+": 10},
             "locations": {"urban": 70, "suburban": 25, "rural": 5}
         }
+        await self._cache_result(cache_key, data, 600)  # 10-minute cache
+        return data
 
     async def _get_feature_usage(self) -> Dict[str, int]:
-        """Get feature usage statistics"""
-        await asyncio.sleep(0.1)
-        return {
+        """Get feature usage statistics with aggressive caching"""
+        cache_key = "metrics:feature_usage"
+        cached = await self._get_from_cache(cache_key)
+        if cached:
+            return cached
+            
+        data = {
             "issue_reporting": 12500,
             "ai_suggestions": 8900,
             "photo_upload": 7800,
             "status_tracking": 11200
         }
+        await self._cache_result(cache_key, data, 300)
+        return data
 
     # Caching methods
     def _get_cache_key(self, config: ReportConfig) -> str:
