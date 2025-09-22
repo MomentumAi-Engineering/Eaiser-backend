@@ -1,18 +1,65 @@
+import sys
+import os
+from pathlib import Path
+
+# Add current directory to Python path for Render deployment compatibility
+current_dir = Path(__file__).parent.absolute()
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+
+# Also add parent directory to handle different deployment structures
+parent_dir = current_dir.parent
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
+
 from fastapi import FastAPI, HTTPException, Request
-from utils.timing_middleware import TimingMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
-from routes.issues import router as issues_router
-from api.reports import router as reports_router
-from services.mongodb_service import init_db, close_db
-from services.redis_service import init_redis, close_redis
 import logging
-import os
 import uvicorn
 import json
-from pathlib import Path
 from datetime import datetime
+
+# Import local modules with proper error handling
+try:
+    from utils.timing_middleware import TimingMiddleware
+except ImportError:
+    try:
+        from app.utils.timing_middleware import TimingMiddleware
+    except ImportError:
+        # Fallback: create a simple timing middleware if import fails
+        from fastapi import Request
+        from starlette.middleware.base import BaseHTTPMiddleware
+        import time
+        
+        class TimingMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):
+                start_time = time.time()
+                response = await call_next(request)
+                process_time = time.time() - start_time
+                response.headers["X-Process-Time"] = str(process_time)
+                return response
+
+try:
+    from routes.issues import router as issues_router
+except ImportError:
+    from app.routes.issues import router as issues_router
+
+try:
+    from api.reports import router as reports_router
+except ImportError:
+    from app.api.reports import router as reports_router
+
+try:
+    from services.mongodb_service import init_db, close_db
+except ImportError:
+    from app.services.mongodb_service import init_db, close_db
+
+try:
+    from services.redis_service import init_redis, close_redis
+except ImportError:
+    from app.services.redis_service import init_redis, close_redis
 
 # Setup optimized logging with structured format
 logging.basicConfig(
