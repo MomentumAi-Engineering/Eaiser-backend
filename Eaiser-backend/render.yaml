@@ -48,35 +48,40 @@ services:
       - key: MONGODB_NAME
         value: snapfix
       
-      # Redis Configuration - Production Ready
-      # For production, either add Redis service or disable Redis gracefully
-      # Option 1: Use REDIS_URL for cloud providers (Recommended)
+      # Redis Configuration - Production Ready with Upstash Redis
+      # Using Upstash Redis for production caching (free tier available)
       - key: REDIS_URL
-        value: ""  # Leave empty to disable Redis - app will work without caching
+        sync: false  # Set this in Render dashboard with your Upstash Redis URL
       
-      # Option 2: Individual Redis settings (Fallback) - all disabled for now
+      # Fallback Redis settings for development
       - key: REDIS_HOST
-        value: ""  # Empty to disable Redis
+        value: "localhost"  # Fallback for development
       - key: REDIS_PORT
         value: 6379
       - key: REDIS_PASSWORD
-        value: ""  # Empty - no Redis service
+        value: ""  # Will use REDIS_URL in production
       - key: REDIS_DB
         value: 0
       - key: REDIS_SSL
-        value: false  # Disabled since no Redis service
+        value: true  # Enable SSL for production Redis
       
-      # Performance Configuration - Optimized for Render
+      # Performance Configuration - Optimized for Render Production
       - key: MAX_WORKERS
         value: 4
       - key: WORKER_CONNECTIONS
         value: 1000
       - key: KEEPALIVE_TIMEOUT
-        value: 2  # Reduced for Render's load balancer
+        value: 5  # Increased for production stability
       - key: MAX_REQUESTS
-        value: 1000  # Reduced for better memory management
+        value: 2000  # Increased for better throughput
       - key: MAX_REQUESTS_JITTER
-        value: 50   # Reduced jitter
+        value: 100   # Increased jitter
+      
+      # AI Service Configuration - Production Timeouts
+      - key: AI_TIMEOUT
+        value: 15  # Increased timeout for AI service in production
+      - key: GEMINI_TIMEOUT
+        value: 15  # Specific timeout for Gemini API calls
       
       # Cache Configuration - Production Optimized
       - key: CACHE_TTL

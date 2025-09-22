@@ -153,8 +153,12 @@ async def get_timezone_cached(latitude: float, longitude: float) -> str:
     await set_cached_data(cache_key, timezone_str, CACHE_TTL['timezone_data'])
     return timezone_str
 
-async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: int = 5) -> str:
+async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: int = None) -> str:
     """Generate AI report asynchronously with timeout control"""
+    # Use environment variable for production timeout, fallback to 5 seconds for development
+    if timeout is None:
+        timeout = int(os.getenv('AI_TIMEOUT', '5'))
+    
     def _generate_report():
         try:
             model = genai.GenerativeModel("gemini-1.5-flash")
@@ -171,8 +175,28 @@ async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: i
             timeout=timeout
         )
     except asyncio.TimeoutError:
-        logger.warning(f"Gemini AI timeout after {timeout}s - using fallback")
-        raise TimeoutError(f"AI generation timeout after {timeout}s")
+        logger.warning(f"AI report generation timed out after {timeout} seconds, using fallback")
+        # Return a structured fallback report instead of empty string
+        fallback_report = {
+            "status": "timeout_fallback",
+            "message": "AI service timeout - using cached template",
+            "report": {
+                "summary": "Report generation timed out. Please try again or contact support.",
+                "recommendations": [
+                    "Check your internet connection",
+                    "Try uploading a smaller image",
+                    "Contact support if the issue persists"
+                ],
+                "severity": "medium",
+                "timestamp": datetime.now().isoformat()
+            }
+        }
+        
+        # Cache the fallback report for future use
+        cache_key = f"fallback_report_{hash(str(image_content[:100]))}"
+        await set_cached_data(cache_key, fallback_report, CACHE_TTL['ai_report'])
+        logger.info(f"Generated and cached fallback report due to timeout after {timeout}s")
+        return json.dumps(fallback_report, indent=2)
 
 async def generate_report_optimized(
     image_content: bytes,
