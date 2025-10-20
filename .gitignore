@@ -1,0 +1,9 @@
+# Backend repo ignores
+app/.env
+__pycache__/
+*.pyc
+*.log
+.env
+.env.*
+.DS_Store
+Thumbs.db
