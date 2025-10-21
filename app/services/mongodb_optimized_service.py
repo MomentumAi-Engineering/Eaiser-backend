@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 import time
 from contextlib import asynccontextmanager
 from services.redis_cluster_service import get_redis_cluster_service
+from pymongo.read_preferences import ReadPreference
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -141,54 +142,32 @@ class OptimizedMongoDBService:
             bool: True if connection successful, False otherwise
         """
         try:
-            # Primary client for writes (with write concern)
+            # Primary client for writes (with safe options)
             self.primary_client = AsyncIOMotorClient(
                 self.mongo_uri,
-                # Connection timeout settings
                 serverSelectionTimeoutMS=5000,
                 connectTimeoutMS=10000,
                 socketTimeoutMS=20000,
-                
-                # Connection pooling for high performance
-                maxPoolSize=200,        # Increased for 1 lakh users
-                minPoolSize=20,         # Minimum connections
-                maxIdleTimeMS=30000,    # Keep connections alive
+                maxPoolSize=200,
+                minPoolSize=20,
+                maxIdleTimeMS=30000,
                 waitQueueTimeoutMS=5000,
-                
-                # Write optimizations
                 retryWrites=True,
-                w="majority",           # Write concern for consistency
-                j=True,                 # Journal writes
-                
-                # Performance optimizations
-                compressors="snappy,zlib",
-                zlibCompressionLevel=6,
-                
-                # Read preference for writes
-                readPreference="primary"
+                compressors=['zlib'],
             )
             
-            # Secondary client for reads (with read preference)
+            # Secondary client for reads (prefer secondary)
             self.read_client = AsyncIOMotorClient(
                 self.mongo_uri,
-                # Connection settings
                 serverSelectionTimeoutMS=3000,
                 connectTimeoutMS=8000,
                 socketTimeoutMS=15000,
-                
-                # Connection pooling for reads
-                maxPoolSize=300,        # More connections for reads
+                maxPoolSize=300,
                 minPoolSize=30,
                 maxIdleTimeMS=45000,
                 waitQueueTimeoutMS=3000,
-                
-                # Read optimizations
-                readPreference="secondaryPreferred",  # Prefer secondary for reads
-                readConcern={"level": "majority"},
-                
-                # Performance optimizations
-                compressors="snappy,zlib",
-                zlibCompressionLevel=6
+                compressors=['zlib'],
+                readPreference=ReadPreference.SECONDARY_PREFERRED,
             )
             
             # Test connections
@@ -284,6 +263,16 @@ class OptimizedMongoDBService:
             AsyncIOMotorCollection: Collection instance
         """
         db = self.read_db if read_only else self.db
+        if db is None:
+            # Attempt to reconnect once if clients are not initialized
+            logger.warning("MongoDB DB handle is None; attempting reconnect...")
+            try:
+                await self.connect()
+            except Exception as e:
+                logger.error(f"Reconnect failed: {e}")
+            db = self.read_db if read_only else self.db
+            if db is None:
+                raise ConnectionFailure("MongoDB database not initialized")
         return db[self.collections.get(collection_name, collection_name)]
     
     async def find_with_cache(self, collection_name: str, filter_dict: Dict, 
@@ -567,6 +556,10 @@ class OptimizedMongoDBService:
         }
         
         try:
+            # Guard against uninitialized clients
+            if not self.primary_client or not self.read_client:
+                raise Exception('MongoDB clients not initialized')
+            
             # Test primary connection
             start_time = time.time()
             await self.primary_client.admin.command('ping')

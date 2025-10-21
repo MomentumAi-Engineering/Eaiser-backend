@@ -105,7 +105,7 @@ class RedisClusterService:
         self.fallback_redis_host = os.getenv('REDIS_HOST', 'localhost')
         self.fallback_redis_port = int(os.getenv('REDIS_PORT', 6379))
         self.redis_password = os.getenv('REDIS_PASSWORD', None)
-        
+
     async def connect(self) -> bool:
         """
         Establish connection to Redis cluster with automatic failover.
@@ -380,37 +380,43 @@ class RedisClusterService:
             return 0
     
     async def get_cache_stats(self) -> Dict[str, Any]:
-        """
-        Get comprehensive cache performance statistics.
-        
-        Returns:
-            Dict: Cache statistics and performance metrics
-        """
-        stats = {
-            'is_connected': self.is_connected,
+        return {
             'cache_hits': self.cache_hits,
             'cache_misses': self.cache_misses,
             'total_operations': self.total_operations,
-            'hit_rate': (self.cache_hits / max(self.total_operations, 1)) * 100,
-            'circuit_breaker_state': self.circuit_breaker.state,
-            'circuit_breaker_failures': self.circuit_breaker.failure_count
+            'connected': self.is_connected
         }
-        
-        if self.is_connected:
-            try:
-                # Get Redis cluster info
-                info = await self.redis_cluster.info()
-                stats.update({
-                    'redis_version': info.get('redis_version', 'unknown'),
-                    'connected_clients': info.get('connected_clients', 0),
-                    'used_memory_human': info.get('used_memory_human', '0B'),
-                    'keyspace_hits': info.get('keyspace_hits', 0),
-                    'keyspace_misses': info.get('keyspace_misses', 0)
-                })
-            except Exception as e:
-                logger.error(f"❌ Failed to get Redis info: {str(e)}")
-        
-        return stats
+
+    async def get_performance_stats(self) -> Dict[str, Any]:
+        """Provide performance metrics for monitoring endpoints."""
+        return await self.get_cache_stats()
+
+    async def health_check(self) -> Dict[str, Any]:
+        """Perform basic health check for Redis service."""
+        status = 'healthy' if self.is_connected else 'unhealthy'
+        checks: Dict[str, Any] = {}
+        try:
+            if self.redis_cluster:
+                start = time.time()
+                await self.redis_cluster.ping()
+                latency_ms = (time.time() - start) * 1000
+                checks['redis_ping'] = {
+                    'status': 'healthy',
+                    'latency_ms': round(latency_ms, 2)
+                }
+            else:
+                raise Exception('Redis client not initialized')
+        except Exception as e:
+            status = 'unhealthy'
+            checks['redis_ping'] = {
+                'status': 'unhealthy',
+                'error': str(e)
+            }
+        return {
+            'status': status,
+            'timestamp': datetime.utcnow().isoformat(),
+            'checks': checks
+        }
     
     async def warm_cache(self, cache_type: str, data_loader_func, identifiers: List[str]) -> int:
         """

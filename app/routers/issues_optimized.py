@@ -50,13 +50,13 @@ class IssueCreate(BaseModel):
     latitude: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
     longitude: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
     issue_type: str = Field(..., min_length=3, max_length=100, description="Type of issue")
-    severity: str = Field(..., regex="^(low|medium|high|critical)$", description="Issue severity")
+    severity: str = Field(..., pattern="^(low|medium|high|critical)$", description="Issue severity")
     description: str = Field(..., min_length=10, max_length=2000, description="Issue description")
     user_email: str = Field(..., description="Reporter email")
     phone_number: Optional[str] = Field(None, max_length=15, description="Reporter phone")
     images: Optional[List[str]] = Field(default=[], description="Image URLs")
     category: Optional[str] = Field("general", max_length=50, description="Issue category")
-    priority: Optional[str] = Field("normal", regex="^(low|normal|high|urgent)$", description="Issue priority")
+    priority: Optional[str] = Field("normal", pattern="^(low|normal|high|urgent)$", description="Issue priority")
     
     @validator('user_email')
     def validate_email_format(cls, v):
@@ -94,9 +94,9 @@ class IssueResponse(BaseModel):
 
 class IssueUpdate(BaseModel):
     """Model for updating an issue."""
-    status: Optional[str] = Field(None, regex="^(open|in_progress|resolved|closed)$")
-    severity: Optional[str] = Field(None, regex="^(low|medium|high|critical)$")
-    priority: Optional[str] = Field(None, regex="^(low|normal|high|urgent)$")
+    status: Optional[str] = Field(None, pattern="^(open|in_progress|resolved|closed)$")
+    severity: Optional[str] = Field(None, pattern="^(low|medium|high|critical)$")
+    priority: Optional[str] = Field(None, pattern="^(low|normal|high|urgent)$")
     description: Optional[str] = Field(None, min_length=10, max_length=2000)
     resolution_notes: Optional[str] = Field(None, max_length=1000)
     estimated_resolution_time: Optional[str] = Field(None, max_length=50)

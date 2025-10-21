@@ -19,14 +19,40 @@ import asyncio
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 # Load environment variables from root directory
-load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / '.env')
+load_dotenv(dotenv_path=Path(__file__).parent.parent / '.env')
 
 # Initialize Gemini API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    logger.error("GEMINI_API_KEY is not set in environment variables")
-    raise ValueError("GEMINI_API_KEY is not set")
-genai.configure(api_key=GEMINI_API_KEY)
+    logger.warning("GEMINI_API_KEY is not set; disabling AI features.")
+else:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        logger.warning(f"Failed to configure Gemini API: {e}. Disabling AI features.")
+        GEMINI_API_KEY = None
+
+# Add a safe model getter with fallbacks
+
+def get_gemini_model():
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    try:
+        return genai.GenerativeModel(model_name)
+    except Exception as e:
+        logger.warning(f"{model_name} not available for current API version; attempting fallbacks: {e}")
+        for alt in [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.0-pro-vision",
+            "gemini-1.0-pro"
+        ]:
+            try:
+                logger.info(f"Trying fallback model: {alt}")
+                return genai.GenerativeModel(alt)
+            except Exception as e2:
+                logger.warning(f"Fallback model {alt} failed: {e2}")
+        raise
 
 # Cache for JSON data to reduce file I/O
 _json_cache = {}
@@ -53,10 +79,44 @@ async def load_json_data(file_name: str) -> dict:
 
 async def classify_issue(image_content: bytes, description: str) -> tuple[str, str, float, str, str]:
     """Classify an infrastructure issue based on image and description."""
-    for attempt in range(3):  # Retry up to 3 times
+    # Fallback heuristic if Gemini is disabled
+    if not GEMINI_API_KEY:
+        issue_category_map = await load_json_data("issue_category_map.json")
+        description_lower = description.lower()
+        issue_keywords = {
+            "fire": ["fire", "smoke", "flame", "burn", "blaze"],
+            "pothole": ["pothole", "road damage", "crack", "hole", "ft wide", "deep", "swerve"],
+            "garbage": ["trash", "litter", "garbage", "debris", "waste"],
+            "property_damage": ["damage", "broken", "destruction"],
+            "flood": ["flood", "water", "inundation", "leak"],
+            "vandalism": ["graffiti", "vandalism", "deface", "tagging"],
+            "structural_damage": ["crack", "collapse", "structural", "foundation"]
+        }
+        issue_type = "unknown"
+        for issue, keywords in issue_keywords.items():
+            if any(keyword in description_lower for keyword in keywords):
+                issue_type = issue
+                break
+        # Cap confidence and determine severity
+        confidence = 92.0 if issue_type == "pothole" else (85.0 if issue_type != "unknown" else 50.0)
+        high_severity_issues = ["fire", "flood", "structural_damage"]
+        high_severity_keywords = ["urgent", "emergency", "critical", "severe"]
+        medium_severity_issues = ["pothole", "vandalism"]
+        severity = (
+            "High" if issue_type in high_severity_issues or any(k in description_lower for k in high_severity_keywords)
+            else "Medium" if issue_type in medium_severity_issues or confidence >= 85
+            else "Low"
+        )
+        category = issue_category_map.get(issue_type, "public")
+        priority = "High" if severity == "High" or confidence > 90 else "Medium"
+        logger.info(f"Heuristic classification (no Gemini): {issue_type}, severity {severity}, confidence {confidence}")
+        return issue_type, severity, confidence, category, priority
+    
+    for attempt in range(1):  # Retry reduced to 1 to cut latency
         try:
             image = Image.open(io.BytesIO(image_content))
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            # Use model with fallbacks
+            model = get_gemini_model()
 
             # Load issue types
             issue_category_map = await load_json_data("issue_category_map.json")
@@ -75,7 +135,6 @@ Ensure the issue_type matches one of the specified options. For descriptions men
             # Run Gemini API call in a separate thread
             response = await asyncio.to_thread(model.generate_content, [prompt, image, f"Description: {description}"])
             logger.info(f"Gemini classification raw output (attempt {attempt + 1}): {response.text}")
-
             # Extract and validate JSON
             json_match = re.search(r'\{[\s\S]*\}', response.text)
             if not json_match:
@@ -131,10 +190,8 @@ Ensure the issue_type matches one of the specified options. For descriptions men
             return issue_type, severity, confidence, category, priority
         except Exception as e:
             logger.warning(f"Attempt {attempt + 1} failed to classify issue: {str(e)}")
-            if attempt == 2:
-                logger.error(f"Failed to classify issue after 3 attempts: {str(e)}")
-                return "unknown", "Medium", 50.0, "public", "Medium"
-            await asyncio.sleep(1)  # Wait before retry
+            # Immediate fallback to avoid multiple retries
+            return "unknown", "Medium", 50.0, "public", "Medium"
 
 async def generate_report(
     image_content: bytes,
@@ -152,9 +209,10 @@ async def generate_report(
     decline_reason: Optional[str] = None
 ) -> Dict[str, Any]:
     """Generate a detailed report for an infrastructure issue."""
-    for attempt in range(3):  # Retry up to 3 times
+    for attempt in range(1):  # Retry reduced to 1 to cut latency
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            # Use model with fallbacks
+            model = get_gemini_model()
             location_str = (
                 f"{address}, {zip_code}" if address and address.lower() != "not specified" and zip_code
                 else address if address and address.lower() != "not specified"
@@ -250,10 +308,10 @@ Return this structure:
     "root_causes": "Possible causes of the issue.",
     "potential_consequences_if_ignored": "Risks if the issue is not addressed.",
     "public_safety_risk": "low|medium|high",
-    "environmental_impact": "low|medium|high|none",
-    "structural_implications": "low|medium|high|none",
-    "legal_or_regulatory_considerations": "Relevant regulations or null",
-    "feedback": "User-provided decline reason: {decline_reason}" if decline_reason else null
+    "environmental_impact": "none" if issue_type == "pothole" else "low",
+    "structural_implications": "low" if issue_type not in ["structural_damage", "property_damage"] else "medium",
+    "legal_or_regulatory_considerations": "Road safety regulations." if issue_type == "pothole" else "Local regulations may apply.",
+    "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else null
   }},
   "recommended_actions": ["Action 1", "Action 2"],
   "responsible_authorities_or_parties": {json.dumps(responsible_authorities)},
@@ -303,10 +361,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
             return report
         except Exception as e:
             logger.warning(f"Attempt {attempt + 1} failed to generate report: {str(e)}")
-            if attempt == 2:
-                logger.error(f"Failed to generate report after 3 attempts: {str(e)}")
-                break
-            await asyncio.sleep(1)  # Wait before retry
+            break
 
     # Fallback report
     timezone_str = await asyncio.to_thread(get_timezone_name, latitude, longitude) or "UTC"
@@ -392,3 +447,45 @@ Keep the report under 200 words, professional, and specific to the issue type an
         report["issue_overview"]["summary_explanation"] += f" Declined due to: {decline_reason}."
     logger.info(f"Fallback report generated for issue {issue_id} with issue_type {issue_type}")
     return report
+
+
+class AIService:
+    async def analyze_issue(self, description: str, issue_type: str, severity: str) -> Dict[str, Any]:
+        for attempt in range(2):
+            try:
+                model = get_gemini_model()
+                prompt = (
+                    "You are an expert civil infrastructure AI. Given an issue description, "
+                    "type and severity, produce JSON with: summary (string), risk_level (low|medium|high), "
+                    "confidence (0-100), recommended_actions (array of 3 short actions). Only JSON.\n"
+                    f"Description: {description}\nIssue Type: {issue_type}\nSeverity: {severity}"
+                )
+                response = await asyncio.to_thread(model.generate_content, prompt)
+                text = response.text or ""
+                match = re.search(r"\{[\s\S]*\}", text)
+                if match:
+                    return json.loads(match.group(0))
+                # Fallback simple analysis if parsing failed
+                break
+            except Exception:
+                await asyncio.sleep(0.5)
+        # Heuristic fallback without AI
+        description_lower = description.lower()
+        risk_level = "high" if any(k in description_lower for k in ["urgent", "emergency", "critical", "severe"]) else (
+            "medium" if any(k in description_lower for k in ["risk", "unsafe", "accident"]) else "low"
+        )
+        actions = [
+            "Log and prioritize in maintenance queue",
+            "Notify responsible department",
+            "Schedule inspection within 24-72 hours"
+        ]
+        return {
+            "summary": f"Issue '{issue_type}' with {severity} severity. Description analyzed.",
+            "risk_level": risk_level,
+            "confidence": 80,
+            "recommended_actions": actions
+        }
+
+
+def get_ai_service() -> AIService:
+    return AIService()

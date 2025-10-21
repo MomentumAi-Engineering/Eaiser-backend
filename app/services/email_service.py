@@ -13,6 +13,7 @@ from sendgrid.helpers.mail import (
     Email,
 )
 from python_http_client.exceptions import UnauthorizedError, BadRequestsError
+from typing import Dict, Any
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -191,3 +192,46 @@ def send_email_sync(
     except Exception as e:
         logger.error(f"❌ Sync email wrapper failed: {str(e)}")
         return False
+
+
+class EmailService:
+    async def send_issue_notification(self, authorities: List[Dict[str, Any]], issue_data: Dict[str, Any], issue_id: str) -> bool:
+        try:
+            subject = f"New Issue Report #{issue_data.get('report_id', issue_id)}"
+            # Construct a concise text and HTML content
+            text_content = (
+                f"Issue ID: {issue_id}\n"
+                f"Type: {issue_data.get('issue_type')}\n"
+                f"Severity: {issue_data.get('severity')}\n"
+                f"Description: {issue_data.get('description')}\n"
+                f"Location: {issue_data.get('address', 'N/A')} (ZIP: {issue_data.get('zip_code', 'N/A')})\n"
+            )
+            html_content = (
+                f"<h3>New Issue Report</h3>"
+                f"<p><strong>Issue ID:</strong> {issue_id}</p>"
+                f"<p><strong>Type:</strong> {issue_data.get('issue_type')}</p>"
+                f"<p><strong>Severity:</strong> {issue_data.get('severity')}</p>"
+                f"<p><strong>Description:</strong> {issue_data.get('description')}</p>"
+                f"<p><strong>Location:</strong> {issue_data.get('address', 'N/A')} (ZIP: {issue_data.get('zip_code', 'N/A')})</p>"
+            )
+
+            # Send notification to each authority with an email
+            sent_any = False
+            for auth in authorities:
+                to_email = auth.get('email') or auth.get('contact_email')
+                if not to_email:
+                    continue
+                ok = await send_email(
+                    to_email=to_email,
+                    subject=subject,
+                    html_content=html_content,
+                    text_content=text_content,
+                )
+                sent_any = sent_any or ok
+            return sent_any
+        except Exception:
+            return False
+
+
+def get_email_service() -> EmailService:
+    return EmailService()

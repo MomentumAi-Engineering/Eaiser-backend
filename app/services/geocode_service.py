@@ -46,7 +46,7 @@ async def geocode_zip_code(zip_code: str) -> Dict[str, Any]:
         data = response.json()
 
         if data["status"] != "OK":
-            logger.error(f"Zip code geocoding failed: {data['status']}")
+            logger.warning(f"Zip code geocoding failed: {data['status']}")
             if os.getenv("ENV") == "production":
                 raise HTTPException(status_code=500, detail=f"Zip code geocoding failed: {data['status']}")
             return {"address": "Unknown Address", "latitude": 0.0, "longitude": 0.0, "zip_code": zip_code}
@@ -102,7 +102,7 @@ def geocode_address(address: str) -> Dict[str, Any]:
         data = response.json()
 
         if data["status"] != "OK":
-            logger.error(f"Geocoding failed for address {address}: {data['status']}")
+            logger.warning(f"Geocoding failed for address {address}: {data['status']}")
             if os.getenv("ENV") == "production":
                 raise HTTPException(status_code=500, detail=f"Geocoding failed: {data['status']}")
             return {"latitude": 0.0, "longitude": 0.0, "address": address, "zip_code": ""}
@@ -159,7 +159,7 @@ def reverse_geocode(latitude: float, longitude: float) -> Dict[str, str]:
         data = response.json()
 
         if data["status"] != "OK":
-            logger.error(f"Reverse geocoding failed for {latitude}, {longitude}: {data['status']}")
+            logger.warning(f"Reverse geocoding failed for {latitude}, {longitude}: {data['status']}")
             if os.getenv("ENV") == "production":
                 raise HTTPException(status_code=500, detail=f"Reverse geocoding failed: {data['status']}")
             return {"address": "Unknown Address", "zip_code": ""}
@@ -181,3 +181,18 @@ def reverse_geocode(latitude: float, longitude: float) -> Dict[str, str]:
         if os.getenv("ENV") == "production":
             raise HTTPException(status_code=500, detail=f"Reverse geocoding error: {str(e)}")
         return {"address": "Unknown Address", "zip_code": ""}
+
+
+class GeocodeService:
+    async def geocode_zip(self, zip_code: str) -> Dict[str, Any]:
+        return await geocode_zip_code(zip_code)
+
+    def geocode(self, address: str) -> Dict[str, Any]:
+        return geocode_address(address)
+
+    def reverse(self, latitude: float, longitude: float) -> Dict[str, str]:
+        return reverse_geocode(latitude, longitude)
+
+
+def get_geocode_service() -> GeocodeService:
+    return GeocodeService()
