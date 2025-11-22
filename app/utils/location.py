@@ -28,7 +28,8 @@ def get_authority(address: str, issue_type: str, latitude: float, longitude: flo
     """
     try:
         issue_type = issue_type.lower() if issue_type else "unknown"
-        issue_category_map = load_json_data("issue_category_map.json")
+        raw_cat = load_json_data("issue_category_map.json")
+        issue_category_map = {str(k).lower(): v for k, v in raw_cat.items()}  # normalize keys
         issue_category = category if category else issue_category_map.get(issue_type, "public")
         timezone = get_timezone_name(latitude, longitude) or "UTC"
         logger.debug(f"Resolved timezone for coordinates ({latitude}, {longitude}): {timezone}")
@@ -81,13 +82,15 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
             logger.warning(f"Invalid zip code format: {zip_code}. Returning unavailable message.")
             return {
                 "responsible_authorities": [],
-                "available_authorities": [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+                "available_authorities": [{"message": "eaiser services are not available in this area, coming soon in the future"}]
             }
 
         issue_type = issue_type.lower() if issue_type else "unknown"
-        issue_category_map = load_json_data("issue_category_map.json")
+        raw_cat = load_json_data("issue_category_map.json")
+        issue_category_map = {str(k).lower(): v for k, v in raw_cat.items()}  # normalize keys
         issue_category = category if category else issue_category_map.get(issue_type, "public")
-        issue_department_map = load_json_data("issue_department_map.json")
+        raw_dept = load_json_data("issue_department_map.json")
+        issue_department_map = {str(k).lower(): v for k, v in raw_dept.items()}  # normalize keys
         departments = issue_department_map.get(issue_type, ["general"])
 
         zip_code_authorities = load_json_data("zip_code_authorities.json")
@@ -96,7 +99,7 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
             logger.warning(f"Zip code {zip_code} not found in database. Returning unavailable message.")
             return {
                 "responsible_authorities": [],
-                "available_authorities": [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+                "available_authorities": [{"message": "eaiser services are not available in this area, coming soon in the future"}]
             }
 
         # Get responsible authorities from zip_code_authorities (issue-specific)
@@ -125,7 +128,7 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
             logger.warning(f"No matching authorities for zip code {zip_code} and issue type {issue_type}. Returning unavailable message.")
             return {
                 "responsible_authorities": [],
-                "available_authorities": [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+                "available_authorities": [{"message": "eaiser services are not available in this area, coming soon in the future"}]
             }
 
         result = {
@@ -138,5 +141,5 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
         logger.error(f"Failed to determine authorities for zip code {zip_code} and issue type {issue_type}: {str(e)}")
         return {
             "responsible_authorities": [],
-            "available_authorities": [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+            "available_authorities": [{"message": "eaiser services are not available in this area, coming soon in the future"}]
         }

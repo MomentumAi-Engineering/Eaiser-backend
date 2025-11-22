@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 import redis.asyncio as redis
 from redis.asyncio import RedisCluster, ConnectionPool
 import os
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 import hashlib
 import time
@@ -105,6 +106,21 @@ class RedisClusterService:
         self.fallback_redis_host = os.getenv('REDIS_HOST', 'localhost')
         self.fallback_redis_port = int(os.getenv('REDIS_PORT', 6379))
         self.redis_password = os.getenv('REDIS_PASSWORD', None)
+        self.env = os.getenv('ENV', 'development').lower()
+
+        # Respect REDIS_URL if provided
+        redis_url = os.getenv('REDIS_URL')
+        if redis_url:
+            try:
+                parsed = urlparse(redis_url)
+                if parsed.hostname:
+                    self.fallback_redis_host = parsed.hostname
+                if parsed.port:
+                    self.fallback_redis_port = parsed.port
+                if parsed.password:
+                    self.redis_password = parsed.password
+            except Exception as e:
+                logger.warning(f"Invalid REDIS_URL '{redis_url}': {e}")
 
     async def connect(self) -> bool:
         """
@@ -141,7 +157,11 @@ class RedisClusterService:
                 return True
                 
             except Exception as cluster_error:
-                logger.warning(f"⚠️ Redis Cluster connection failed: {cluster_error}")
+                # Reduce noise in non-production environments
+                if self.env == 'production':
+                    logger.warning(f"⚠️ Redis Cluster connection failed: {cluster_error}")
+                else:
+                    logger.info(f"ℹ️ Redis Cluster not available (env={self.env}): {cluster_error}")
                 logger.info("🔄 Falling back to single Redis instance...")
                 
                 # Fallback to single Redis instance
@@ -162,7 +182,11 @@ class RedisClusterService:
                 return True
                 
         except Exception as e:
-            logger.error(f"❌ All Redis connections failed: {str(e)}")
+            # In dev, don't spam logs; provide a succinct note
+            if self.env == 'production':
+                logger.error(f"❌ All Redis connections failed: {str(e)}")
+            else:
+                logger.info(f"ℹ️ Redis not connected (env={self.env}): {str(e)}")
             self.is_connected = False
             return False
     

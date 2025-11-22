@@ -45,18 +45,37 @@ async def load_json_data(filename: str) -> dict:
 from utils.location import get_authority_by_zip_code, get_authority
 from utils.timezone import get_timezone_name
 import redis
+from urllib.parse import urlparse
 import hashlib
 import pickle
 from concurrent.futures import ThreadPoolExecutor
+from services.report_summary_service import ReportSummaryBuilder
 
-# Redis connection for caching
+# Redis connection for caching (ENV-aware, REDIS_URL respected)
 try:
-    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
+    env = os.getenv("ENV", "development").lower()
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url:
+        parsed = urlparse(redis_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 6379
+        password = parsed.password
+        db = int((parsed.path or "/0").lstrip("/") or 0)
+        redis_client = redis.Redis(host=host, port=port, password=password, db=db, decode_responses=False)
+    else:
+        host = os.getenv("REDIS_HOST", "localhost")
+        port = int(os.getenv("REDIS_PORT", "6379"))
+        password = os.getenv("REDIS_PASSWORD")
+        db = int(os.getenv("REDIS_DB", "0"))
+        redis_client = redis.Redis(host=host, port=port, password=password, db=db, decode_responses=False)
+
+    # Attempt ping; reduce noise in dev
     redis_client.ping()
-    logger.info("Redis connected for AI service caching")
+    logger.info(f"Redis connected for AI service caching ({host}:{port}, db={db})")
 except Exception as e:
     redis_client = None
-    logger.warning(f"Redis not available for AI service: {e}")
+    log_fn = logger.warning if env == "production" else logger.info
+    log_fn(f"Redis not available for AI service (env={os.getenv('ENV','development')}): {e}")
 
 # Thread pool for CPU-bound operations
 executor = ThreadPoolExecutor(max_workers=4)
@@ -192,26 +211,29 @@ async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: i
     """Generate AI report asynchronously with timeout control"""
     # Use environment variable for production timeout, fallback to 5 seconds for development
     if timeout is None:
-        timeout = int(os.getenv('AI_TIMEOUT', '5'))
+        timeout = int(os.getenv('AI_TIMEOUT', '15'))
     
     def _generate_report():
         try:
             # Use model with fallbacks
             model = get_gemini_model()
-            response = model.generate_content([prompt, Image.open(io.BytesIO(image_content))])
+            # Open image in a context manager to avoid resource leaks
+            with Image.open(io.BytesIO(image_content)) as img:
+                response = model.generate_content([prompt, img])
             return response.text
         except Exception as e:
+            # Log and propagate to trigger fallback upstream
             logger.warning(f"Gemini API error: {str(e)}")
             raise
     
     try:
         # Run with timeout to prevent long waits
-        return await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(executor, _generate_report),
-            timeout=timeout
-        )
+        # Use asyncio.to_thread for clarity and proper cooperative scheduling
+        return await asyncio.wait_for(asyncio.to_thread(_generate_report), timeout=timeout)
     except asyncio.TimeoutError:
         logger.warning(f"AI report generation timed out after {timeout} seconds, using fallback")
+        logger.info("⚠️ Gemini response delayed — falling back gracefully instead of freezing")
+
         # Return a structured fallback report instead of empty string
         fallback_report = {
             "status": "timeout_fallback",
@@ -259,25 +281,99 @@ async def generate_report_optimized(
         category=category,
         description_hash=hashlib.md5(description.encode()).hexdigest()[:8]
     )
-    
-    # Check if similar report exists in cache
+
+    # NEW: define runtime fields and identifiers used later
+    timezone_str = await get_timezone_cached(latitude, longitude)
+    timezone = pytz.timezone(timezone_str or "UTC")
+    now = datetime.now(timezone)
+    local_time = now.strftime("%Y-%m-%d %H:%M")
+    utc_time = now.astimezone(pytz.UTC).strftime("%H:%M")
+    report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
+    report_id = f"eaiser-{now.year}-{report_number}"
+    image_filename = f"IMG1_{now.strftime('%Y%m%d_%H%M')}.jpg"
+    map_link = (
+        f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
+    )
+
+    # Enrich address for UI if original address is unknown
+    addr_clean = (address or "").strip()
+    addr_unknown = addr_clean.lower() in {"unknown address", "not specified", "", "n/a"}
+    display_address = addr_clean if not addr_unknown else (
+        (f"Zip {zip_code}" if zip_code else (f"Coordinates: {latitude}, {longitude}" if latitude and longitude else "Unknown Location"))
+    )
+    # Attempt to enrich display_address with city/state using zip authorities
+    try:
+        zip_authorities = await load_json_data("zip_code_authorities.json")
+        if zip_code and isinstance(zip_authorities, dict):
+            z = zip_authorities.get(str(zip_code)) or zip_authorities.get(zip_code)
+            if isinstance(z, dict) and addr_unknown:
+                # First try explicit city/state keys
+                city = z.get("city") or z.get("City")
+                state = z.get("state") or z.get("State")
+                if city and state:
+                    display_address = f"{city}, {state}"
+                else:
+                    # Derive city prefix from any authority 'name' like 'Fairview City Department'
+                    # Prefer 'general', fallback to first available list
+                    auth_lists = []
+                    if "general" in z and isinstance(z["general"], list) and z["general"]:
+                        auth_lists = z["general"]
+                    else:
+                        for v in z.values():
+                            if isinstance(v, list) and v:
+                                auth_lists = v
+                                break
+                    if auth_lists:
+                        name = auth_lists[0].get("name", "")
+                        m = re.match(r"^([A-Za-z][A-Za-z\s'-]+?)(?:\s+(City|Public|Sanitation|Police|Emergency|Fire|Building|Animal|Environmental|Water|Code|Transportation)\b|\s+Department\b|\s+Works\b)", name)
+                        city_guess = (m.group(1).strip() if m else name.split()[0]).strip()
+                        if city_guess:
+                            display_address = city_guess
+    except Exception:
+        pass
+
+    # Check if similar report exists in cache and refresh dynamic fields
     cached_report = await get_cached_data(report_cache_key, CACHE_TTL['ai_report'])
     if cached_report:
-        logger.info(f"Using cached AI report for issue {issue_id}")
+        logger.info(f"Using cached AI report for issue {issue_id} (refreshing runtime fields)")
+        tf = cached_report.get("template_fields", {})
+        tf["oid"] = report_id
+        tf["timestamp"] = local_time
+        tf["utc_time"] = utc_time
+        tf["map_link"] = map_link
+        tf["zip_code"] = zip_code if zip_code else "N/A"
+        tf["address"] = display_address
+        tf["image_filename"] = tf.get("image_filename") or image_filename
+        cached_report["template_fields"] = tf
+
+        # Ensure aliases for UI
+        overview = cached_report.get("issue_overview", {})
+        if overview:
+            overview["type"] = overview.get("type") or overview.get("issue_type") or (issue_type.title() if issue_type else "Issue")
+            expl = (overview.get("summary_explanation") or "").strip()
+            overview["summary"] = (expl.split("\n")[0].strip() if "\n" in expl else expl) or f"{overview['type']} reported at {display_address}."
+            cached_report["issue_overview"] = overview
+
+        detailed = cached_report.get("detailed_analysis", {})
+        if detailed and "potential_consequences_if_ignored" in detailed:
+            detailed["potential_impact"] = detailed["potential_consequences_if_ignored"]
+            cached_report["detailed_analysis"] = detailed
+
+        # Refresh the address in additional notes, if present
+        if isinstance(cached_report.get("additional_notes"), str):
+            cached_report["additional_notes"] = re.sub(r"Location: .*?\. ", f"Location: {display_address}. ", cached_report["additional_notes"]) 
+
         return cached_report
 
     # Build location string
     location_str = (
-        f"{address}, {zip_code}" if address and address.lower() != "not specified" and zip_code
-        else address if address and address.lower() != "not specified"
-        else f"Coordinates: {latitude}, {longitude}" if latitude and longitude
-        else "Unknown Location"
+        f"{display_address}. Zip: {zip_code}" if zip_code else display_address
     )
 
     # Authority data with caching
     authority_data = await get_authority_data_cached(zip_code, address, issue_type, latitude, longitude, category)
-    responsible_authorities = authority_data.get("responsible_authorities", [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}])
-    available_authorities = authority_data.get("available_authorities", [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}])
+    responsible_authorities = authority_data.get("responsible_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
+    available_authorities = authority_data.get("available_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
 
     # Time and IDs
     timezone_str = await get_timezone_cached(latitude, longitude)
@@ -286,7 +382,7 @@ async def generate_report_optimized(
     local_time = now.strftime("%Y-%m-%d %H:%M")
     utc_time = now.astimezone(pytz.UTC).strftime("%H:%M")
     report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
-    report_id = f"SNAPFIX-{now.year}-{report_number}"
+    report_id = f"eaiser-{now.year}-{report_number}"
     image_filename = f"IMG1_{now.strftime('%Y%m%d_%H%M')}.jpg"
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
@@ -310,7 +406,7 @@ async def generate_report_optimized(
     zip_code_prompt = f"- Zip Code: {zip_code}\n" if zip_code else ""
 
     prompt = f"""
-You are an AI assistant for SnapFix AI, generating infrastructure issue reports.
+You are an AI assistant for eaiser AI, generating infrastructure issue reports.
 Analyze the input below and return a structured JSON report (no markdown, no explanation).
 Input:
 - Issue Type: {issue_type.title()}
@@ -331,13 +427,20 @@ For recommended_actions, provide 2-3 specific, actionable steps with timeframes.
 - Broken Streetlight: ["Schedule bulb replacement within 3 days.", "Check wiring and restore power."]
 - Water Leakage: ["Inspect pipeline and stop leakage within 24 hours.", "Fix joints and test pressure."]
 
-Return ONLY JSON with this schema:
+Return ONLY JSON with actual values filled in (do NOT use template variables like {{Issue_Type}} - use the actual values I provided above):
 {{
   "issue_overview": {{
     "type": "{issue_type.title()}",
     "severity": "{severity}",
-    "summary_explanation": "Brief summary of the issue and impact.",
+    "summary_explanation": "Our AI detected a {issue_type} in {location_str}. The image shows {description}. Based on the location and context, this incident has been classified as {priority} due to {category}. Report ID: {report_id}.",
     "confidence": {confidence:.1f}
+  }},
+  "ai_evaluation": {{
+    "image_analysis": "Describe what is happening in the image and which visual cues support your conclusion.",
+    "issue_detected": true|false,
+    "detected_issue_type": "Pothole|Tree|Graffiti|Fire|Road Damage|Animal|Other|None",
+    "ai_confidence_percent": 0,
+    "rationale": "Brief justification referencing image clarity and visual evidence. Use integer for ai_confidence_percent only (no %). If issue_detected is false, set ai_confidence_percent between 0 and 10; if true, set between 10 and 100 based on clarity and understanding."
   }},
   "detailed_analysis": {{
     "root_causes": "Possible causes of the issue.",
@@ -382,6 +485,52 @@ Keep the report under 200 words, professional, and specific to the issue type an
         json_text = json_match.group(0)
         report = json.loads(json_text)
 
+        # Helper to ensure required fields exist with sane defaults
+        def _ensure_required_fields(rep: Dict[str, Any]) -> Dict[str, Any]:
+            """Soft-fill missing required fields to avoid brittle failures.
+
+            Adds keys with minimal, valid defaults so downstream consumers
+            do not choke on missing fields when AI output is partial.
+            """
+            rep.setdefault("issue_overview", {
+                "type": issue_type.title() if issue_type else "Issue",
+                "category": category.title(),
+                "severity": severity,
+                "summary_explanation": description or "",
+                "confidence": int(round(confidence))
+            })
+            rep.setdefault("detailed_analysis", {
+                "root_causes": "Undetermined; requires inspection.",
+                "potential_consequences_if_ignored": "Potential safety or compliance risks.",
+                "public_safety_risk": severity.lower(),
+                "environmental_impact": "low",
+                "structural_implications": "low",
+                "legal_or_regulatory_considerations": "Local regulations may apply.",
+                "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else None
+            })
+            rep.setdefault("recommended_actions", [
+                "Inspect site",
+                "Schedule maintenance"
+            ])
+            rep.setdefault("responsible_authorities_or_parties", responsible_authorities)
+            rep.setdefault("available_authorities", available_authorities)
+            rep.setdefault("additional_notes", f"Location: {location_str}. View: {map_link}. Issue ID: {issue_id}. Zip: {zip_code or 'N/A'}.")
+            tf = rep.setdefault("template_fields", {})
+            tf.setdefault("oid", report_id)
+            tf.setdefault("timestamp", local_time)
+            tf.setdefault("utc_time", utc_time)
+            tf.setdefault("priority", priority)
+            tf.setdefault("tracking_link", f"https://momentum-ai.org/track/{report_id}")
+            tf.setdefault("image_filename", image_filename)
+            tf.setdefault("ai_tag", (issue_type or "Issue").title())
+            tf.setdefault("app_version", "1.5.3")
+            tf.setdefault("device_type", "Mobile (Generic)")
+            tf.setdefault("map_link", map_link)
+            tf.setdefault("zip_code", zip_code or "N/A")
+            tf.setdefault("address", display_address)
+            rep["template_fields"] = tf
+            return rep
+
         # Validate report structure
         required_fields = [
             "issue_overview",
@@ -394,19 +543,162 @@ Keep the report under 200 words, professional, and specific to the issue type an
         ]
         missing_fields = [field for field in required_fields if field not in report]
         if missing_fields:
-            raise ValueError(f"Missing required fields in report: {missing_fields}")
+            logger.info(f"Soft-filling missing fields in AI report: {missing_fields}")
+            report = _ensure_required_fields(report)
+            # Re-check after fill; only fail if still missing critical structure
+            missing_fields = [field for field in required_fields if field not in report]
+            if missing_fields:
+                raise ValueError(f"Missing required fields in report after fill: {missing_fields}")
 
         # Update report fields
         report["additional_notes"] = f"Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Track report: https://momentum-ai.org/track/{report_id}. Zip Code: {zip_code if zip_code else 'N/A'}."
         report["template_fields"]["map_link"] = map_link
         report["template_fields"]["zip_code"] = zip_code if zip_code else "N/A"
-        report["template_fields"]["address"] = address if address else "Not specified"
+        report["template_fields"]["address"] = display_address
         report["responsible_authorities_or_parties"] = responsible_authorities
         report["available_authorities"] = available_authorities
+
+        # Ensure UI-friendly aliases for primary path and enforce minimum 6-line summary_explanation
+        overview = report.get("issue_overview") or {}
+        if overview:
+            overview["type"] = overview.get("type") or overview.get("issue_type") or (issue_type.title() if issue_type else "Issue")
+            ai_eval = report.get("ai_evaluation") or {}
+            detected_type = (ai_eval.get("detected_issue_type") or "").strip()
+            if detected_type and detected_type.lower() != "none":
+                overview["type"] = detected_type
+            expl = (overview.get("summary_explanation") or "").strip()
+            ai_analysis = (ai_eval.get("image_analysis") or "").strip()
+            if ai_analysis and not expl.startswith("AI Analysis:"):
+                expl = f"AI Analysis: {ai_analysis}\n{expl}".strip()
+            lines = [l for l in expl.split("\n") if l.strip()]
+            ai_conf = ai_eval.get("ai_confidence_percent")
+            try:
+                ai_conf_val = int(round(float(ai_conf))) if ai_conf is not None else None
+            except Exception:
+                ai_conf_val = None
+            if ai_conf_val is not None:
+                overview["confidence"] = ai_conf_val
+            if len(lines) < 6:
+                extras = [
+                    f"Location context: {location_str}.",
+                    f"Issue type: {overview.get('type')}, severity: {severity.lower()}, confidence: {overview.get('confidence', confidence):.0f}%.",
+                    f"Category: {category}.",
+                    f"Potential impact: {report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')}.",
+                    f"Initial action: {', '.join(report.get('recommended_actions', [])[:2]) or 'N/A'}.",
+                    f"Tracking reference: {report.get('template_fields', {}).get('oid', '')}."
+                ]
+                for x in extras:
+                    if len(lines) >= 6:
+                        break
+                    lines.append(x)
+                overview["summary_explanation"] = "\n".join(lines)
+                expl = overview["summary_explanation"]
+            overview["summary"] = (expl.split("\n")[0].strip() if "\n" in expl else expl) or f"{overview['type']} reported at {display_address}."
+            report["issue_overview"] = overview
+            # Normalize ai_evaluation fields with sensible defaults
+            if ai_eval:
+                ai_eval["issue_detected"] = bool(ai_eval.get("issue_detected")) if ai_eval.get("issue_detected") is not None else (overview.get("type") not in (None, "", "None"))
+                if ai_conf_val is None:
+                    try:
+                        ai_eval["ai_confidence_percent"] = int(round(float(overview.get("confidence", confidence))))
+                    except Exception:
+                        ai_eval["ai_confidence_percent"] = int(round(confidence))
+                else:
+                    ai_eval["ai_confidence_percent"] = ai_conf_val
+                if not detected_type:
+                    ai_eval["detected_issue_type"] = overview.get("type")
+                if not ai_analysis:
+                    ai_eval["image_analysis"] = "No explicit image analysis provided."
+                ai_eval["rationale"] = ai_eval.get("rationale") or "Rationale not provided."
+                report["ai_evaluation"] = ai_eval
+        detailed = report.get("detailed_analysis") or {}
+        if detailed and "potential_consequences_if_ignored" in detailed:
+            detailed["potential_impact"] = detailed["potential_consequences_if_ignored"]
+            report["detailed_analysis"] = detailed
+
+        # Build concise summary per strict template (City, State, ZIP)
+        def _extract_city_state(addr: str) -> (str, str):
+            """Try to split 'City, State' from address; fallback to Unknowns."""
+            if not addr:
+                return "Unknown City", "Unknown State"
+            parts = [p.strip() for p in str(addr).split(",") if p.strip()]
+            if len(parts) >= 2:
+                return parts[0], parts[1]
+            # If only one part, treat as city
+            return parts[0] if parts else "Unknown City", "Unknown State"
+
+        # Determine risk tags from detailed analysis signals
+        da = report.get("detailed_analysis", {}) or {}
+        risk_tags: list = []
+        for key in ["public_safety_risk", "environmental_impact", "structural_implications"]:
+            val = (da.get(key) or "").strip()
+            if val and val.lower() not in {"none", "", "n/a"}:
+                # Convert snake_case key to readable words
+                risk_tags.append(key.replace("_", " ").title())
+
+        city_val, state_val = _extract_city_state(display_address)
+        short_desc = overview.get("summary") or description or "no clear visual description"
+
+        summary_builder = ReportSummaryBuilder()
+        summary_text = summary_builder.build({
+            "Issue_Type": overview.get("type") or issue_type,
+            "City": city_val,
+            "State": state_val,
+            "Zip_Code": zip_code or "N/A",
+            "Short_Visual_Description": short_desc,
+            "Priority_Label": priority,
+            "Risk_Tags": risk_tags,
+        })
+
+        # Attach concise summary to report for downstream consumers
+        report["summary"] = summary_text
 
         # Cache the generated report
         await set_cached_data(report_cache_key, report, CACHE_TTL['ai_report'])
         logger.info(f"Optimized report generated and cached for issue {issue_id}")
+
+        # === EAiSER FORMATTED ALERT TEMPLATE (Concise SUMMARY enforced) ===
+        formatted_alert = f"""
+Subject: EAiSER Alert – {overview.get('type', issue_type).title()} (ID: {report_id})
+🚨 EAiSER INFRASTRUCTURE ALERT 🚨
+Detected by EAiSER Ai Automated System
+________________________________________
+🧾 SUMMARY
+{summary_text}
+Report ID: {report_id}
+________________________________________
+📍 LOCATION DETAILS
+Field\tInformation
+Address\t{display_address}
+Zip Code\t{zip_code or 'N/A'}
+Coordinates\t{latitude}, {longitude}
+Map Link\t{map_link}
+________________________________________
+🧠 AI REPORT SUMMARY
+Field\tDetails
+Issue Type\t{issue_type.title()}
+AI Confidence\t{confidence:.2f}%
+Priority\t{priority}
+Time Reported\t{local_time} {timezone_str}
+Report ID\t{report_id}
+Impact Summary\t{report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'Not available')}
+Location Context\t{report.get('issue_overview', {}).get('location_context', display_address)}
+________________________________________
+🖼️ PHOTO EVIDENCE
+📎 File: {image_filename}
+________________________________________
+📬 CONTACT & FOLLOW-UP
+Please review and address this issue as soon as feasible.
+For questions or to confirm completion, contact:
+📧 support@momntumai.com
+🔗 View Report on Map: {map_link}
+________________________________________
+Automated report generated via EAiSER AI by MomntumAI
+© 2025 MomntumAI | All Rights Reserved
+"""
+        # Add formatted alert into report dictionary
+        report["formatted_report"] = formatted_alert
+
         return report
     except Exception as e:
         # Fallback structured report
@@ -420,13 +712,56 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 "Monitor area for changes."
             ]
         )
+        is_tree_issue = "tree" in (issue_type or "").lower() or "fallen" in (description or "").lower()
+        is_animal_issue = "animal" in (issue_type or "").lower() or "animal" in (description or "").lower()
+        if is_tree_issue:
+            actions = [
+                "Dispatch public works to clear fallen tree within 24 hours.",
+                "Inspect area for powerline damage; coordinate with utilities.",
+                "Place safety cones and detour signs until cleared."
+            ]
+        elif is_animal_issue:
+            actions = [
+                "Dispatch animal control officer within 2 hours.",
+                "Secure area and notify nearby residents.",
+                "Capture/relocate animal; document incident and outcomes."
+            ]
+        # Build fallback ai_evaluation
+        _detected_type = issue_type.title() if issue_type else "None"
+        _issue_detected = bool(issue_type and issue_type.strip().lower() not in ("none", "unknown", ""))
+        try:
+            _base_conf = int(round(float(confidence)))
+        except Exception:
+            _base_conf = 50
+        _ai_confidence_percent = max(10, min(100, _base_conf)) if _issue_detected else max(0, min(10, _base_conf))
+        _image_analysis = (
+            f"{_detected_type if _issue_detected else 'No obvious issue detected'}; "
+            f"severity {severity.lower()}, confidence {_ai_confidence_percent}% based on available visual indicators and metadata."
+        )
+
         fallback_report = {
             "issue_overview": {
-                "type": issue_type.title(),
+                "type": _detected_type,
                 "category": category.title(),
                 "severity": severity,
-                "summary_explanation": f"Issue reported at {location_str}. {decline_reason or ''}".strip(),
-                "confidence": confidence
+                "summary_explanation": (
+                    f"AI Analysis: {_image_analysis}\n"
+                    f"Issue reported at {location_str}.\n"
+                    f"Map context: {map_link}.\n"
+                    f"Zip code context: {zip_code if zip_code else 'N/A'}; coordinates: {latitude}, {longitude}.\n"
+                    f"The issue type is {_detected_type}; severity assessed as {severity.lower()} with {_ai_confidence_percent}% confidence.\n"
+                    f"Visual indicators and metadata support the classification and estimated impact.\n"
+                    f"Initial actions recommended: {actions[0]}{(' ' + actions[1]) if len(actions) > 1 else ''}.\n"
+                    f"Please review and escalate to the appropriate authorities for resolution."
+                ),
+                "confidence": _ai_confidence_percent
+            },
+            "ai_evaluation": {
+                "image_analysis": _image_analysis,
+                "issue_detected": _issue_detected,
+                "detected_issue_type": _detected_type,
+                "ai_confidence_percent": _ai_confidence_percent,
+                "rationale": "Derived from supplied fields; image clarity unverifiable in fallback."
             },
             "detailed_analysis": {
                 "root_causes": "Possible causes of the issue.",
@@ -453,11 +788,102 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 "device_type": "Mobile (Generic)",
                 "map_link": map_link,
                 "zip_code": zip_code if zip_code else "N/A",
-                "address": address if address else "Not specified"
+                "address": display_address
             }
         }
         if decline_reason:
             fallback_report["issue_overview"]["summary_explanation"] += f" Declined due to: {decline_reason}."
+        # UI-friendly aliases and mapping
+        try:
+            expl = (fallback_report.get("issue_overview", {}).get("summary_explanation") or "").strip()
+            fallback_report["issue_overview"]["summary"] = (expl.split("\n")[0].strip() if "\n" in expl else expl) or f"{issue_type.title()} reported at {display_address}."
+            da = fallback_report.get("detailed_analysis", {})
+            if "potential_consequences_if_ignored" in da:
+                da["potential_impact"] = da["potential_consequences_if_ignored"]
+                fallback_report["detailed_analysis"] = da
+        except Exception:
+            pass
+
+        # Build a concise human-readable summary for fallback using the ReportSummaryBuilder
+        # This ensures the SUMMARY section is consistent even when AI times out.
+        try:
+            # Derive risk tags in a lightweight way from available signals
+            risk_tags_fb = []
+            da_fb = fallback_report.get("detailed_analysis", {})
+            public_risk = (da_fb.get("public_safety_risk") or "").lower()
+            if public_risk in ("medium", "high"):
+                risk_tags_fb.append("Public Safety Risk")
+            if (severity or "").lower() == "high":
+                risk_tags_fb.append("Severe Issue")
+            if (priority or "").lower() in ("urgent", "high"):
+                risk_tags_fb.append("High Priority")
+            # Deduplicate and cap to 6 tags
+            risk_tags_fb = list(dict.fromkeys(risk_tags_fb))[:6]
+
+            # Compose a short visual description from user description if available
+            short_desc_fb = (description or f"{issue_type.title() if issue_type else 'Issue'} observed.").strip()
+
+            # Use ReportSummaryBuilder to render the concise template
+            builder_fb = ReportSummaryBuilder()
+            summary_text_fb = builder_fb.build({
+                # Prefer detected type when available
+                "issue_type": fallback_report.get("ai_evaluation", {}).get("detected_issue_type") or (issue_type.title() if issue_type else "Issue"),
+                # City/State may be unavailable in fallback; keep None for clarity
+                "city": None,
+                "state": None,
+                "zip_code": zip_code or None,
+                "short_visual_description": short_desc_fb,
+                "priority_label": priority or "N/A",
+                "risk_tags": risk_tags_fb,
+            })
+
+            # Attach concise summary to fallback report for downstream consumers
+            fallback_report["summary"] = summary_text_fb
+        except Exception as _e:
+            # If summary construction fails, omit but do not block fallback
+            logger.warning(f"Failed to build concise fallback summary: {_e}")
+
+        # === EAiSER FORMATTED ALERT TEMPLATE for fallback ===
+        formatted_alert = f"""
+Subject: EAiSER Alert – {issue_type.title() if issue_type else 'Issue'} (ID: {report_id})
+🚨 EAiSER INFRASTRUCTURE ALERT 🚨
+Detected by EAiSER Ai Automated System
+________________________________________
+🧾 SUMMARY
+{fallback_report.get('summary', 'No summary available')}
+Report ID: {report_id}
+________________________________________
+📍 LOCATION DETAILS
+Field\tInformation
+Address\t{display_address}
+Zip Code\t{zip_code or 'N/A'}
+Coordinates\t{latitude}, {longitude}
+Map Link\t{map_link}
+________________________________________
+🧠 AI REPORT SUMMARY
+Field\tDetails
+Issue Type\t{issue_type.title() if issue_type else 'N/A'}
+AI Confidence\t{_ai_confidence_percent}%
+Priority\t{priority}
+Time Reported\t{local_time} {timezone_str}
+Report ID\t{report_id}
+Impact Summary\t{fallback_report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'Not available')}
+Location Context\t{display_address}
+________________________________________
+🖼️ PHOTO EVIDENCE
+📎 File: {image_filename}
+________________________________________
+📬 CONTACT & FOLLOW-UP
+Please review and address this issue as soon as feasible.
+For questions or to confirm completion, contact:
+📧 support@momntumai.com
+🔗 View Report on Map: {map_link}
+________________________________________
+Automated report generated via EAiSER AI by MomntumAI
+© 2025 MomntumAI | All Rights Reserved
+"""
+        fallback_report["formatted_report"] = formatted_alert
+
         await set_cached_data(report_cache_key, fallback_report, CACHE_TTL['ai_report'])
         logger.info(f"Fallback optimized report cached for issue {issue_id}")
         return fallback_report

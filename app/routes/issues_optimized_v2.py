@@ -37,9 +37,11 @@ from services.mongodb_optimized_service import get_optimized_mongodb_service
 from services.redis_cluster_service import get_redis_cluster_service
 from services.ai_service import classify_issue
 from services.ai_service_optimized import generate_report_optimized as generate_report
-from services.email_service import send_email
+# import both send_email (existing) and send_formatted_ai_alert (new)
+from services.email_service import send_email, send_formatted_ai_alert
 from services.geocode_service import reverse_geocode, geocode_zip_code
-from services.rate_limiter_service import RateLimiterService, RateLimitTier
+from services.report_generation_service import build_unified_issue_json
+from services.rate_limiter_service import AdvancedRateLimiter, RateLimitTier
 
 # Utilities
 from utils.location import get_authority, get_authority_by_zip_code
@@ -62,7 +64,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Initialize rate limiter
-rate_limiter = RateLimiterService()
+rate_limiter = AdvancedRateLimiter()
 
 # ========================================
 # PERFORMANCE MONITORING
@@ -178,10 +180,11 @@ async def get_cached_data(cache_key: str) -> Optional[Dict]:
     try:
         redis_service = await get_redis_cluster_service()
         if redis_service:
-            cached_data = await redis_service.get(cache_key)
+            # Use the new get_cache method with api_response cache type
+            cached_data = await redis_service.get_cache('api_response', cache_key)
             if cached_data:
                 performance_metrics.record_cache_hit()
-                return json.loads(cached_data)
+                return cached_data
         performance_metrics.record_cache_miss()
         return None
     except Exception as e:
@@ -194,8 +197,8 @@ async def set_cached_data(cache_key: str, data: Dict, ttl: int = 300) -> bool:
     try:
         redis_service = await get_redis_cluster_service()
         if redis_service:
-            await redis_service.setex(cache_key, ttl, json.dumps(data, default=str))
-            return True
+            # Use the new set_cache method with api_response cache type
+            return await redis_service.set_cache('api_response', cache_key, data, ttl)
         return False
     except Exception as e:
         logger.warning(f"Cache set failed for key {cache_key}: {e}")
@@ -206,16 +209,11 @@ async def set_cached_data(cache_key: str, data: Dict, ttl: int = 300) -> bool:
 # ========================================
 async def rate_limit_dependency(request: Request):
     """Rate limiting dependency for endpoints"""
-    client_ip = request.client.host if request.client else "127.0.0.1"
-    endpoint = str(request.url.path)
-    method = request.method
-    
-    # Check rate limit
-    is_allowed = await rate_limiter.check_rate_limit(
-        identifier=client_ip,
-        endpoint=endpoint,
-        method=method,
-        tier=RateLimitTier.FREE  # Default tier, can be upgraded based on API key
+    # Check rate limit using the correct method signature
+    is_allowed, rate_limit_info = await rate_limiter.check_rate_limit(
+        request=request,
+        endpoint=str(request.url.path),
+        method=request.method
     )
     
     if not is_allowed:
@@ -241,9 +239,12 @@ async def process_issue_background(
     issue_type: str
 ):
     """Process issue in background for better performance"""
+    start_time = time.time()
     try:
-        start_time = time.time()
-        
+        # === Dispatch Guard import (local to function to avoid cold-start cost) ===
+        # Hinglish: Yeh guard prank/false reports ko rokne me help karta hai.
+        from services.dispatch_guard_service import AuthorityDispatchGuard
+
         # AI Classification (can be cached based on image hash)
         image_hash = hashlib.md5(image_content).hexdigest()
         cache_key = generate_cache_key("ai_classification", image_hash=image_hash)
@@ -328,8 +329,11 @@ async def process_issue_background(
             )
             
             # Cache report (without sensitive data)
-            report_to_cache = {k: v for k, v in report.items() if k not in ["template_fields"]}
-            await set_cached_data(report_cache_key, report_to_cache, ttl=1800)  # Cache for 30 minutes
+            try:
+                report_to_cache = {k: v for k, v in report.items() if k not in ["template_fields"]}
+                await set_cached_data(report_cache_key, report_to_cache, ttl=1800)  # Cache for 30 minutes
+            except Exception as e:
+                logger.warning(f"Failed to cache report for {issue_id}: {e}")
         
         # Get authorities (can be cached based on location)
         authority_cache_key = generate_cache_key(
@@ -349,9 +353,77 @@ async def process_issue_background(
             except Exception as e:
                 logger.warning(f"Failed to fetch authorities: {e}")
                 authority_data = {
-                    "responsible_authorities": [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}],
-                    "available_authorities": [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+                    "responsible_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}],
+                    "available_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
                 }
+
+        # === Dispatch Guard Evaluation (before sending emails) ===
+        try:
+            # Basic metadata completeness: address or valid coords + image
+            metadata_complete = bool(final_address) or (float(latitude) != 0.0 and float(longitude) != 0.0)
+            metadata_complete = metadata_complete and bool(image_content)
+
+            # Lightweight duplicate check: if classification cache hit on same image hash
+            is_duplicate = bool(cached_classification)
+
+            # Policy conflict placeholder: e.g., controlled bonfire in permitted area
+            policy_conflict = False
+
+            # Reporter trust default (enhance later from user profile)
+            reporter_trust_score = 50.0
+
+            # Rate-limit breach (handled at endpoint via dependency, assume False here)
+            rate_limit_breached = False
+
+            guard_payload = {
+                "severity": severity,
+                "priority": priority,
+                "public_safety_risk": (report or {}).get("detailed_analysis", {}).get("public_safety_risk", ""),
+                "image_analysis": (report or {}).get("ai_evaluation", {}).get("image_analysis", {}),
+                "ai_confidence_percent": float(confidence or 0),
+                "metadata_complete": metadata_complete,
+                "is_duplicate": is_duplicate,
+                "policy_conflict": policy_conflict,
+                "reporter_trust_score": reporter_trust_score,
+                "rate_limit_breached": rate_limit_breached,
+            }
+
+            guard = AuthorityDispatchGuard()
+            decision = guard.evaluate(guard_payload)
+
+            # Attach decision to report for downstream UI/ops
+            try:
+                if report is not None:
+                    report["dispatch_decision"] = {
+                        "action": decision.action,
+                        "risk_score": decision.risk_score,
+                        "fraud_score": decision.fraud_score,
+                        "reasons": decision.reasons,
+                        "suggested_next_steps": decision.suggested_next_steps,
+                    }
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"Dispatch guard evaluation failed for issue {issue_id}: {e}")
+            decision = None
+
+        # === NEW: Dispatch EAiSER formatted alert emails in background ===
+        try:
+            # Use the AI-generated formatted_report if present
+            # Non-blocking: create background task so DB store is not delayed
+            if report and (not decision or decision.action == "auto_dispatch"):
+                try:
+                    # fire-and-forget background send (safe)
+                    asyncio.create_task(send_formatted_ai_alert(report, background=True))
+                    logger.info(f"Dispatched EAiSER alert email task for issue {issue_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to create email dispatch task for issue {issue_id}: {e}")
+            else:
+                # Hold or reject: do not email authority
+                if decision:
+                    logger.info(f"Email dispatch skipped for issue {issue_id} due to guard action: {decision.action}")
+        except Exception as e:
+            logger.warning(f"Unexpected error while preparing to send EAiSER email for {issue_id}: {e}")
         
         # Store in optimized MongoDB
         mongodb_service = await get_optimized_mongodb_service()
@@ -359,6 +431,39 @@ async def process_issue_background(
             performance_metrics.record_db_query()
             
             # Prepare issue document
+            # Compute time context for unified JSON
+            try:
+                timezone_name = get_timezone_name(latitude, longitude) or "UTC"
+            except Exception:
+                timezone_name = "UTC"
+            timestamp_formatted = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+
+            # Build unified report JSON for consistent UI/Email rendering
+            try:
+                conf_val = 0.0
+                try:
+                    conf_val = float((report or {}).get("template_fields", {}).get("confidence", 0) or 0)
+                except Exception:
+                    conf_val = 0.0
+                unified_report = build_unified_issue_json(
+                    report=report or {},
+                    issue_id=issue_id,
+                    issue_type=issue_type,
+                    category=category,
+                    severity=severity,
+                    priority=priority,
+                    confidence=conf_val,
+                    address=final_address,
+                    zip_code=zip_code or "N/A",
+                    latitude=latitude,
+                    longitude=longitude,
+                    timestamp_formatted=timestamp_formatted,
+                    timezone_name=timezone_name,
+                    department_type=None,
+                    is_user_review=False,
+                )
+            except Exception:
+                unified_report = {}
             issue_doc = {
                 "_id": issue_id,
                 "address": final_address,
@@ -371,6 +476,7 @@ async def process_issue_background(
                 "priority": priority,
                 "status": "pending",
                 "report": report,
+                "unified_report": unified_report,
                 "user_email": user_email,
                 "authority_data": authority_data,
                 "confidence": confidence,
@@ -387,6 +493,12 @@ async def process_issue_background(
     except Exception as e:
         logger.error(f"Background processing failed for issue {issue_id}: {e}", exc_info=True)
         performance_metrics.record_request(time.time() - start_time, error=True)
+    finally:
+        # record request processing time (even on failure)
+        try:
+            performance_metrics.record_request(time.time() - start_time)
+        except Exception:
+            pass
 
 # ========================================
 # OPTIMIZED ENDPOINTS
@@ -489,10 +601,13 @@ async def get_issue_optimized(
             processing_time = (time.time() - start_time) * 1000
             performance_metrics.record_request(time.time() - start_time)
             
-            return Issue(
-                **cached_issue,
-                processing_time_ms=processing_time
-            )
+            # Convert datetime objects to strings for JSON serialization
+            if 'timestamp' in cached_issue and hasattr(cached_issue['timestamp'], 'strftime'):
+                cached_issue['timestamp'] = cached_issue['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Merge processing_time_ms into cached_issue to avoid duplicate parameter error
+            cached_issue['processing_time_ms'] = processing_time
+            return Issue(**cached_issue)
         
         # Get from database
         mongodb_service = await get_optimized_mongodb_service()
@@ -511,10 +626,13 @@ async def get_issue_optimized(
         processing_time = (time.time() - start_time) * 1000
         performance_metrics.record_request(time.time() - start_time)
         
-        return Issue(
-            **issue_data,
-            processing_time_ms=processing_time
-        )
+        # Convert datetime objects to strings for JSON serialization
+        if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'strftime'):
+            issue_data['timestamp'] = issue_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Merge processing_time_ms into issue_data to avoid duplicate parameter error
+        issue_data['processing_time_ms'] = processing_time
+        return Issue(**issue_data)
         
     except HTTPException:
         raise
@@ -551,12 +669,17 @@ async def get_issues_optimized(
         
         # Check cache first
         cached_issues = await get_cached_data(cache_key)
-        if cached_issues:
+        if cached_issues is not None:
             processing_time = (time.time() - start_time) * 1000
             performance_metrics.record_request(time.time() - start_time)
             
+            # Convert datetime objects to strings for JSON serialization
+            for issue_data in cached_issues:
+                if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'strftime'):
+                    issue_data['timestamp'] = issue_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            
             return [
-                Issue(**issue_data, processing_time_ms=processing_time)
+                Issue(**{**issue_data, 'processing_time_ms': processing_time})
                 for issue_data in cached_issues
             ]
         
@@ -588,8 +711,13 @@ async def get_issues_optimized(
         processing_time = (time.time() - start_time) * 1000
         performance_metrics.record_request(time.time() - start_time)
         
+        # Convert datetime objects to strings for JSON serialization
+        for issue_data in issues_data:
+            if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'strftime'):
+                issue_data['timestamp'] = issue_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+        
         return [
-            Issue(**issue_data, processing_time_ms=processing_time)
+            Issue(**{**issue_data, 'processing_time_ms': processing_time})
             for issue_data in issues_data
         ]
         
@@ -649,9 +777,9 @@ async def update_issue_status_optimized(
             for cache_key in cache_keys_to_invalidate:
                 if "*" in cache_key:
                     # Delete pattern-based keys
-                    await redis_service.delete_pattern(cache_key)
+                    await redis_service.delete_cache_pattern('api_response', cache_key)
                 else:
-                    await redis_service.delete(cache_key)
+                    await redis_service.delete_cache('api_response', cache_key)
         
         processing_time = (time.time() - start_time) * 1000
         performance_metrics.record_request(time.time() - start_time)
@@ -818,9 +946,9 @@ async def delete_issue_optimized(
             
             for cache_key in cache_keys_to_delete:
                 if "*" in cache_key:
-                    await redis_service.delete_pattern(cache_key)
+                    await redis_service.delete_cache_pattern('api_response', cache_key)
                 else:
-                    await redis_service.delete(cache_key)
+                    await redis_service.delete_cache('api_response', cache_key)
         
         processing_time = (time.time() - start_time) * 1000
         performance_metrics.record_request(time.time() - start_time)

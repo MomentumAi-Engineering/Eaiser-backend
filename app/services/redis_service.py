@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Redis Caching Service for SnapFix API
+Redis Caching Service for eaiser API
 
 This service provides high-performance caching capabilities to reduce database load
 and improve API response times, especially for frequently accessed data like issues list.
@@ -319,7 +319,7 @@ class RedisService:
             logger.warning(f"⚠️ Redis pattern invalidation error for {pattern}: {str(e)}")
             return 0
     
-    # Specialized cache methods for SnapFix API
+    # Specialized cache methods for eaiser API
     
     async def cache_issues_list(self, issues: List[Dict], limit: int, skip: int) -> bool:
         """

@@ -259,14 +259,14 @@ async def generate_report(
             local_time = now.strftime("%Y-%m-%d %H:%M")
             utc_time = now.astimezone(pytz.UTC).strftime("%H:%M")
             report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
-            report_id = f"SNAPFIX-{now.year}-{report_number}"
+            report_id = f"eaiser-{now.year}-{report_number}"
             image_filename = f"IMG1_{now.strftime('%Y%m%d_%H%M')}.jpg"
 
             # Prepare prompt
             decline_prompt = f"- Decline Reason: {decline_reason}\n" if decline_reason else ""
             zip_code_prompt = f"- Zip Code: {zip_code}\n" if zip_code else ""
             prompt = f"""
-You are an AI assistant for SnapFix AI, generating infrastructure issue reports.
+You are an AI assistant for eaiser AI, generating infrastructure issue reports.
 Analyze the input below and return a structured JSON report (no markdown, no explanation).
 Input:
 - Issue Type: {issue_type.title()}
@@ -302,7 +302,12 @@ Return this structure:
     "severity": "{severity.lower()}",
     "confidence": {confidence},
     "category": "{category}",
-    "summary_explanation": "Write a 4 to 5 line detailed explanation based on the provided image and description. Mention what visual elements helped identify the issue, how the description supported the classification, and specify the location clearly (include zip code if provided). If a decline reason is provided, include it. The tone should be professional and focused on public infrastructure impact."
+    "summary_explanation": (
+    "Our AI detected a {issue_type} in {location_str}. "
+    "The image shows {description}. "
+    "Based on the location and context, this incident has been classified as {priority} "
+    "due to {category}. "
+    "Report ID: {report_id}."
   }},
   "detailed_analysis": {{
     "root_causes": "Possible causes of the issue.",
@@ -356,6 +361,48 @@ Keep the report under 200 words, professional, and specific to the issue type an
             report["template_fields"]["zip_code"] = zip_code if zip_code else "N/A"
             report["responsible_authorities_or_parties"] = responsible_authorities
             report["available_authorities"] = available_authorities
+            
+            # UI-friendly aliases for frontend consumption
+            issue_overview = report.get("issue_overview", {})
+            if "type" not in issue_overview:
+                issue_overview["type"] = issue_overview.get("issue_type", issue_type.title())
+            if "summary" not in issue_overview:
+                issue_overview["summary"] = issue_overview.get(
+                    "summary_explanation",
+                    f"Issue reported at {location_str}."
+                )
+            report["issue_overview"] = issue_overview
+            
+            detailed_analysis = report.get("detailed_analysis", {})
+            if "potential_impact" not in detailed_analysis:
+                detailed_analysis["potential_impact"] = detailed_analysis.get(
+                    "potential_consequences_if_ignored",
+                    "Potential risks if ignored."
+                )
+            report["detailed_analysis"] = detailed_analysis
+
+            # Enforce minimum 6-line summary
+            issue_overview = report.get("issue_overview", {})
+            lines = [l for l in (issue_overview.get("summary_explanation", "") or "").split("\n") if l.strip()]
+            if len(lines) < 6:
+                extras = [
+                    f"Location context: {location_str}.",
+                    f"Issue type: {issue_type.title()}, severity: {severity.lower()}, confidence: {confidence:.1f}%.",
+                    f"Category: {category}.",
+                    f"Potential impact: {report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')}.",
+                    f"Initial action: {', '.join(report.get('recommended_actions', [])[:2]) or 'N/A'}.",
+                    f"Tracking reference: {report.get('template_fields', {}).get('oid', '')}."
+                ]
+                for x in extras:
+                    if len(lines) >= 6:
+                        break
+                    lines.append(x)
+                issue_overview["summary_explanation"] = "\n".join(lines)
+
+            # Ensure alias fields reflect final summary
+            if "summary" not in issue_overview or issue_overview.get("summary") != issue_overview.get("summary_explanation"):
+                issue_overview["summary"] = issue_overview.get("summary_explanation", "")
+            report["issue_overview"] = issue_overview
 
             logger.info(f"Report generated for issue {issue_id} with issue_type {issue_type}")
             return report
@@ -370,7 +417,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
     local_time = now.strftime("%Y-%m-%d %H:%M")
     utc_time = now.astimezone(pytz.UTC).strftime("%H:%M")
     report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
-    report_id = f"SNAPFIX-{now.year}-{report_number}"
+    report_id = f"eaiser-{now.year}-{report_number}"
     image_filename = f"IMG1_{now.strftime('%Y%m%d_%H%M')}.jpg"
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
     location_str = (
@@ -414,7 +461,14 @@ Keep the report under 200 words, professional, and specific to the issue type an
             "severity": severity.lower(),
             "confidence": confidence,
             "category": category,
-            "summary_explanation": f"AI identified a {issue_type} at {location_str} based on: {description}."
+            "summary_explanation": (
+                f"This report documents a public infrastructure issue detected at {location_str}." "\n"
+                f"Zip code context: {zip_code if zip_code else 'N/A'}; coordinates: {latitude}, {longitude}." "\n"
+                f"The issue type is {issue_type.title()}; severity assessed as {severity.lower()} with {confidence:.1f}% confidence." "\n"
+                f"Visual indicators and metadata support the classification and estimated impact." "\n"
+                f"Initial actions recommended: {actions[0]}{(' ' + actions[1]) if len(actions) > 1 else ''}." "\n"
+                f"Please review and escalate to the appropriate authorities for resolution."
+            )
         },
         "detailed_analysis": {
             "root_causes": "Wear and tear or heavy traffic." if issue_type == "pothole" else "Undetermined; requires inspection.",
@@ -444,7 +498,37 @@ Keep the report under 200 words, professional, and specific to the issue type an
         }
     }
     if decline_reason:
-        report["issue_overview"]["summary_explanation"] += f" Declined due to: {decline_reason}."
+        report["issue_overview"]["summary_explanation"] += f"\nDecline reason: {decline_reason}."
+
+    # Alias fields and minimum-lines enforcement in fallback
+    issue_overview = report.get("issue_overview", {})
+    if "type" not in issue_overview:
+        issue_overview["type"] = issue_overview.get("issue_type", issue_type.title())
+    if "summary" not in issue_overview:
+        issue_overview["summary"] = issue_overview.get("summary_explanation", "")
+    lines = [l for l in issue_overview.get("summary_explanation", "").split("\n") if l.strip()]
+    if len(lines) < 6:
+        extras = [
+            f"Location context: {location_str}.",
+            f"Issue type: {issue_type.title()}, severity: {severity.lower()}, confidence: {confidence:.1f}%.",
+            f"Category: {category}.",
+            f"Potential impact: {report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')}.",
+            f"Initial action: {', '.join(report.get('recommended_actions', [])[:2]) or 'N/A'}.",
+            f"Tracking reference: {report.get('template_fields', {}).get('oid', '')}."
+        ]
+        for x in extras:
+            if len(lines) >= 6:
+                break
+            lines.append(x)
+        issue_overview["summary_explanation"] = "\n".join(lines)
+        issue_overview["summary"] = issue_overview["summary_explanation"]
+    report["issue_overview"] = issue_overview
+
+    md = report.get("detailed_analysis", {})
+    if "potential_impact" not in md:
+        md["potential_impact"] = md.get("potential_consequences_if_ignored", "Potential risks if ignored.")
+    report["detailed_analysis"] = md
+
     logger.info(f"Fallback report generated for issue {issue_id} with issue_type {issue_type}")
     return report
 

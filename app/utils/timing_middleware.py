@@ -1,5 +1,6 @@
 import time
 import logging
+import os
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -57,8 +58,12 @@ class TimingMiddleware(BaseHTTPMiddleware):
         ])
         
         if should_log:
-            if process_time > 1000:  # Log slow requests as warnings
-                logger.warning(f"🐌 Slow request {request.method} {path} took {process_time:.2f} ms")
+            # Read configurable thresholds from environment
+            slow_ms = int(os.getenv("SLOW_REQUEST_MS", "2500"))  # default 2500 ms
+            log_slow = (os.getenv("LOG_SLOW_REQUESTS", "true").lower() == "true")
+
+            if log_slow and process_time > slow_ms:
+                logger.warning(f"🐌 Slow request {request.method} {path} took {process_time:.2f} ms (threshold {slow_ms} ms)")
             else:
                 logger.info(f"⏱️ Request {request.method} {path} took {process_time:.2f} ms")
 

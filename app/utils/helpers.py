@@ -3,7 +3,7 @@ import random as _rand
 from typing import List, Dict, Any, Optional
 
 
-def generate_report_id(prefix: str = "SNAPFIX") -> str:
+def generate_report_id(prefix: str = "eaiser") -> str:
     now = _dt.datetime.utcnow()
     report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
     return f"{prefix}-{now.year}-{report_number}"

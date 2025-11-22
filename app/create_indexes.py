@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Database Index Creation Script for SnapFix MongoDB
+Database Index Creation Script for eaiser MongoDB
 
 This script creates optimized indexes for better query performance,
 especially for the /api/issues endpoint that was showing high latency.
@@ -158,7 +158,7 @@ async def main():
     """
     Main function to create database indexes.
     """
-    logger.info("🎯 SnapFix Database Optimization Script")
+    logger.info("🎯 eaiser Database Optimization Script")
     logger.info("="*50)
     
     # Check existing indexes first
@@ -173,7 +173,7 @@ async def main():
     await create_database_indexes()
     
     logger.info("\n✅ Database optimization completed successfully!")
-    logger.info("🚀 Your SnapFix API is now ready for 1 lakh+ traffic!")
+    logger.info("🚀 Your eaiser API is now ready for 1 lakh+ traffic!")
 
 if __name__ == "__main__":
     asyncio.run(main())

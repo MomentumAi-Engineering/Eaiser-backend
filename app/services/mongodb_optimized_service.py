@@ -72,7 +72,7 @@ class OptimizedMongoDBService:
     def __init__(self):
         # Connection configuration
         self.mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-        self.db_name = os.getenv("MONGODB_NAME", "snapfix")
+        self.db_name = os.getenv("MONGODB_NAME", "eaiser")
         
         # Parse database name from URI if provided
         parsed_uri = urlparse(self.mongo_uri)
@@ -167,7 +167,7 @@ class OptimizedMongoDBService:
                 maxIdleTimeMS=45000,
                 waitQueueTimeoutMS=3000,
                 compressors=['zlib'],
-                readPreference=ReadPreference.SECONDARY_PREFERRED,
+                read_preference=ReadPreference.SECONDARY_PREFERRED,
             )
             
             # Test connections
@@ -304,23 +304,47 @@ class OptimizedMongoDBService:
                 return cached_result
         
         # Cache miss - query database
-        logger.info(f"❌ Cache MISS: Fetching from MongoDB (limit: {limit}, skip: {skip})")
+        # NOTE: Add defensive defaults to avoid unbounded/slow queries on miss
+        default_limit = 50 if (limit is None or (isinstance(limit, int) and limit <= 0)) else limit
+        safe_skip = max(0, skip or 0)
+        logger.info(f"❌ Cache MISS: Fetching from MongoDB (limit: {default_limit}, skip: {safe_skip})")
+        
+        # Read per-query list timeout (ms) from environment for client-side guard
+        # Comment: Prevents lingering waits even if server-side max_time_ms fails to abort
+        LIST_TIMEOUT_MS = int(os.getenv("LIST_TIMEOUT_MS", "5000"))
+        LIST_TIMEOUT_S = max(1.0, LIST_TIMEOUT_MS / 1000.0)
         
         async with self._safe_operation('read'):
             collection = await self.get_collection(collection_name, read_only=True)
             
             # Build query cursor
+            # - Add per-query timeout and batch size to prevent hanging
+            # - Apply sort/pagination safely
             cursor = collection.find(filter_dict)
-            
+
+            # Apply defensive per-query options
+            cursor = cursor.max_time_ms(5000)  # Abort if server takes >5s
+            cursor = cursor.batch_size(500)    # Reasonable batch to stream results
+
             if sort:
                 cursor = cursor.sort(sort)
-            if skip:
-                cursor = cursor.skip(skip)
-            if limit:
-                cursor = cursor.limit(limit)
-            
+            if safe_skip > 0:
+                cursor = cursor.skip(safe_skip)
+            if default_limit and default_limit > 0:
+                cursor = cursor.limit(default_limit)
+
             # Execute query and convert to list
-            results = await cursor.to_list(length=limit)
+            # Always use a concrete length to avoid unbounded cursor consumption
+            try:
+                # Cooperative client-side timeout to complement server-side max_time_ms
+                results = await asyncio.wait_for(cursor.to_list(length=default_limit), timeout=LIST_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ MongoDB find_with_cache timed out after {LIST_TIMEOUT_MS} ms (limit={default_limit}, skip={safe_skip})")
+                results = []
+            except Exception as e:
+                # Catch timeouts or server-side query failures and fail fast
+                logger.error(f"❌ MongoDB find_with_cache failed: {str(e)}")
+                results = []
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -329,6 +353,7 @@ class OptimizedMongoDBService:
             
             # Cache the results
             if redis_service and cache_key:
+                # Cache only if we have a result set (including empty arrays for consistency)
                 await redis_service.set_cache('api_response', cache_key, results, cache_ttl)
             
             return results
@@ -363,8 +388,17 @@ class OptimizedMongoDBService:
             collection = await self.get_collection(collection_name, read_only=True)
             
             # Execute aggregation
-            cursor = collection.aggregate(pipeline)
-            results = await cursor.to_list(length=None)
+            # - Add per-query timeout and batch size to prevent hanging on large pipelines
+            cursor = collection.aggregate(pipeline, allowDiskUse=True)
+            cursor = cursor.max_time_ms(5000).batch_size(500)
+            
+            # Keep length=None to respect pipeline limits; timeout still applies
+            try:
+                results = await cursor.to_list(length=None)
+            except Exception as e:
+                # Fail fast on aggregation timeout/errors to avoid hanging requests
+                logger.error(f"❌ MongoDB aggregate_with_cache failed: {str(e)}")
+                results = []
             
             # Convert ObjectId to string
             for result in results:
@@ -542,6 +576,305 @@ class OptimizedMongoDBService:
         
         return stats
     
+    async def get_issue_by_id(self, issue_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a single issue by ID with optimized query.
+        
+        Args:
+            issue_id: The issue ID to fetch
+            
+        Returns:
+            Optional[Dict]: Issue data or None if not found
+        """
+        try:
+            async with self._safe_operation('read'):
+                collection = await self.get_collection('issues', read_only=True)
+                
+                # Query by ID with per-query maxTimeMS to avoid long waits
+                # Motor supports max_time_ms in find_one kwargs
+                issue_data = await collection.find_one({"_id": issue_id}, max_time_ms=3000)
+                
+                if issue_data:
+                    # Convert ObjectId to string for JSON serialization
+                    if '_id' in issue_data:
+                        issue_data['_id'] = str(issue_data['_id'])
+                    
+                    logger.info(f"✅ Found issue {issue_id}")
+                    return issue_data
+                else:
+                    logger.warning(f"❌ Issue {issue_id} not found")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"❌ Failed to get issue {issue_id}: {str(e)}")
+            raise e
+    
+    async def get_issues_optimized(self, filter_query: Dict[str, Any], skip: int = 0, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get multiple issues with optimized query and pagination.
+        
+        Args:
+            filter_query: MongoDB filter query
+            skip: Number of documents to skip
+            limit: Maximum number of documents to return
+            
+        Returns:
+            List[Dict]: List of issue data
+        """
+        try:
+            async with self._safe_operation('read'):
+                collection = await self.get_collection('issues', read_only=True)
+                
+                # Read per-query list timeout (ms) from environment for client-side guard
+                # Comment: Keeps listing responsive under intermittent network lag
+                LIST_TIMEOUT_MS = int(os.getenv("LIST_TIMEOUT_MS", "5000"))
+                LIST_TIMEOUT_S = max(1.0, LIST_TIMEOUT_MS / 1000.0)
+
+                # Build optimized query cursor
+                cursor = collection.find(filter_query)
+                cursor = cursor.max_time_ms(5000).batch_size(500)  # Defensive query options
+                
+                # Apply sorting by timestamp (newest first)
+                cursor = cursor.sort([('timestamp', DESCENDING)])
+                
+                # Apply pagination
+                if skip > 0:
+                    cursor = cursor.skip(skip)
+                if limit > 0:
+                    cursor = cursor.limit(limit)
+                
+                # Execute query and convert to list with cooperative timeout
+                try:
+                    issues = await asyncio.wait_for(cursor.to_list(length=limit), timeout=LIST_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ MongoDB get_issues_optimized timed out after {LIST_TIMEOUT_MS} ms (limit={limit}, skip={skip}, filter={filter_query})")
+                    issues = []
+
+                # Convert ObjectId to string for JSON serialization
+                for issue in issues:
+                    if '_id' in issue:
+                        issue['_id'] = str(issue['_id'])
+                
+                logger.info(f"✅ Found {len(issues)} issues with filter {filter_query}")
+                return issues
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to get issues with filter {filter_query}: {str(e)}")
+            raise e
+    
+    async def update_issue_status(self, issue_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update issue status with optimized operation.
+        
+        Args:
+            issue_id: The issue ID to update
+            update_data: Data to update
+            
+        Returns:
+            bool: True if update was successful
+        """
+        try:
+            async with self._safe_operation('write'):
+                collection = await self.get_collection('issues', read_only=False)
+                
+                # Update the issue
+                result = await collection.update_one(
+                    {"_id": issue_id},
+                    {"$set": update_data}
+                )
+                
+                success = result.modified_count > 0
+                
+                if success:
+                    logger.info(f"✅ Updated issue {issue_id} status")
+                else:
+                    logger.warning(f"❌ No changes made to issue {issue_id}")
+                
+                return success
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to update issue {issue_id}: {str(e)}")
+            raise e
+    
+    async def soft_delete_issue(self, issue_id: str) -> bool:
+        """
+        Soft delete an issue by marking it as deleted.
+        
+        Args:
+            issue_id: The issue ID to delete
+            
+        Returns:
+            bool: True if deletion was successful
+        """
+        try:
+            # Use the existing update method to mark as deleted
+            update_data = {
+                "status": "deleted",
+                "deleted_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+            
+            return await self.update_issue_status(issue_id, update_data)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to soft delete issue {issue_id}: {str(e)}")
+            raise e
+    
+    async def store_issue_optimized(self, issue_doc: Dict[str, Any], image_content: bytes) -> str:
+        """
+        Store issue with optimized batch operation.
+        
+        Args:
+            issue_doc: Issue document to store
+            image_content: Image binary content
+            
+        Returns:
+            str: Inserted document ID
+        """
+        try:
+            # Store the main issue document
+            issue_id = await self.insert_one_optimized('issues', issue_doc)
+            
+            # Store image in GridFS if provided
+            if image_content:
+                try:
+                    # This would typically use GridFS for large images
+                    # For now, we'll store a reference to the image
+                    await self.update_one_optimized(
+                        'issues',
+                        {"_id": issue_doc['_id']},
+                        {"$set": {"image_stored": True, "image_size": len(image_content)}}
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to store image for issue {issue_doc['_id']}: {e}")
+            
+            logger.info(f"✅ Stored issue {issue_doc['_id']} with optimized operation")
+            return issue_id
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to store issue: {str(e)}")
+            raise e
+    
+    async def get_analytics_summary(self, start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+        """
+        Get analytics summary for the specified date range.
+        
+        Args:
+            start_date: Start date for analytics
+            end_date: End date for analytics
+            
+        Returns:
+            Dict: Analytics summary data
+        """
+        try:
+            async with self._safe_operation('read'):
+                collection = await self.get_collection('issues', read_only=True)
+                
+                # Build aggregation pipeline
+                pipeline = [
+                    {
+                        "$match": {
+                            "timestamp": {
+                                "$gte": start_date,
+                                "$lte": end_date
+                            }
+                        }
+                    },
+                    {
+                        "$group": {
+                            "_id": None,
+                            "total_issues": {"$sum": 1},
+                            "open_issues": {
+                                "$sum": {
+                                    "$cond": [{"$eq": ["$status", "pending"]}, 1, 0]
+                                }
+                            },
+                            "resolved_issues": {
+                                "$sum": {
+                                    "$cond": [{"$eq": ["$status", "resolved"]}, 1, 0]
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "$project": {
+                            "_id": 0,
+                            "total_issues": 1,
+                            "open_issues": 1,
+                            "resolved_issues": 1
+                        }
+                    }
+                ]
+                
+                # Execute aggregation
+                cursor = collection.aggregate(pipeline)
+                result = await cursor.to_list(length=1)
+                
+                analytics_data = result[0] if result else {
+                    "total_issues": 0,
+                    "open_issues": 0,
+                    "resolved_issues": 0
+                }
+                
+                # Add issues by type and severity
+                type_pipeline = [
+                    {
+                        "$match": {
+                            "timestamp": {
+                                "$gte": start_date,
+                                "$lte": end_date
+                            }
+                        }
+                    },
+                    {
+                        "$group": {
+                            "_id": "$issue_type",
+                            "count": {"$sum": 1}
+                        }
+                    }
+                ]
+                
+                severity_pipeline = [
+                    {
+                        "$match": {
+                            "timestamp": {
+                                "$gte": start_date,
+                                "$lte": end_date
+                            }
+                        }
+                    },
+                    {
+                        "$group": {
+                            "_id": "$severity",
+                            "count": {"$sum": 1}
+                        }
+                    }
+                ]
+                
+                type_cursor = collection.aggregate(type_pipeline)
+                severity_cursor = collection.aggregate(severity_pipeline)
+                
+                type_results = await type_cursor.to_list(length=None)
+                severity_results = await severity_cursor.to_list(length=None)
+                
+                analytics_data["issues_by_type"] = {
+                    item["_id"]: item["count"] for item in type_results
+                }
+                
+                analytics_data["issues_by_severity"] = {
+                    item["_id"]: item["count"] for item in severity_results
+                }
+                
+                # Add average resolution time (placeholder for now)
+                analytics_data["average_resolution_time"] = 0.0
+                
+                logger.info(f"✅ Generated analytics summary for date range {start_date} to {end_date}")
+                return analytics_data
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to generate analytics summary: {str(e)}")
+            raise e
+
     async def health_check(self) -> Dict[str, Any]:
         """
         Perform comprehensive health check.

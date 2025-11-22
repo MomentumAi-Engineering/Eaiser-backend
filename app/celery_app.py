@@ -1,4 +1,4 @@
-# 🚀 Celery Configuration for SnapFix Background Tasks
+# 🚀 Celery Configuration for eaiser Background Tasks
 # Handles async processing for 1 lakh concurrent users
 
 from celery import Celery
@@ -16,7 +16,7 @@ class CeleryConfig:
     """Celery configuration optimized for high throughput"""
     
     # Broker settings (RabbitMQ)
-    broker_url = os.getenv('RABBITMQ_URL', 'amqp://snapfix:snapfix123@localhost:5672//')
+    broker_url = os.getenv('RABBITMQ_URL', 'amqp://eaiser:eaiser123@localhost:5672//')
     result_backend = os.getenv('REDIS_URL', 'redis://localhost:6379/1')
     
     # Task settings for high performance
@@ -82,7 +82,7 @@ class CeleryConfig:
     broker_connection_max_retries = 10
 
 # Initialize Celery app
-celery_app = Celery('snapfix')
+celery_app = Celery('eaiser')
 celery_app.config_from_object(CeleryConfig)
 
 # Import task modules
@@ -91,12 +91,12 @@ celery_app.autodiscover_tasks(['celery_app'])
 @worker_ready.connect
 def worker_ready_handler(sender=None, **kwargs):
     """Called when worker is ready to receive tasks"""
-    logger.info(f"SnapFix Celery worker {sender} is ready for high-load processing!")
+    logger.info(f"eaiser Celery worker {sender} is ready for high-load processing!")
 
 @worker_shutdown.connect
 def worker_shutdown_handler(sender=None, **kwargs):
     """Called when worker is shutting down"""
-    logger.info(f"SnapFix Celery worker {sender} is shutting down gracefully")
+    logger.info(f"eaiser Celery worker {sender} is shutting down gracefully")
 
 # Task definitions
 @celery_app.task(bind=True, max_retries=3)

@@ -8,7 +8,10 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 import asyncio
-from urllib.parse import urlparse
+import time  # Used for measuring query durations and timeouts
+# Import URL parsing utilities correctly
+# NOTE: Using direct imports avoids NameError when referencing urllib.parse
+from urllib.parse import urlparse, parse_qs
 from services.redis_service import get_redis_service
 
 load_dotenv()
@@ -35,11 +38,11 @@ def get_mongodb_config():
         os.getenv('MONGO_URI') or 
         os.getenv('MONGODB_URL') or 
         os.getenv('MONGODB_URI') or
-        'mongodb://localhost:27017/snapfix'  # Local fallback
+        'mongodb://localhost:27017/eaiser'  # Local fallback (trimmed)
     )
     
     # Database name from environment or default
-    db_name = os.getenv('MONGODB_NAME', 'snapfix')
+    db_name = os.getenv('MONGODB_NAME', 'eaiser')
     
     logger.info(f"🔧 MongoDB Configuration:")
     logger.info(f"   URI: {mongo_uri[:50]}{'...' if len(mongo_uri) > 50 else ''}")
@@ -78,14 +81,16 @@ logger.info(f"📊 Database name: {db_name}")
 # Parse database name from URI if not explicitly set
 if not DB_NAME or DB_NAME == 'eaiser':
     try:
-        parsed_uri = urllib.parse.urlparse(MONGO_URI)
+        # Parse the MongoDB URI safely to derive database name
+        # This avoids NameError by using imported helpers directly
+        parsed_uri = urlparse(MONGO_URI)
         if parsed_uri.path and len(parsed_uri.path) > 1:
             # Extract database name from URI path
             path_part = parsed_uri.path.strip('/')
             DB_NAME = path_part
         else:
             # For Atlas URIs, check if database is in query params
-            query_params = urllib.parse.parse_qs(parsed_uri.query)
+            query_params = parse_qs(parsed_uri.query)
             if 'authSource' in query_params:
                 DB_NAME = query_params['authSource'][0]
             else:
@@ -116,28 +121,30 @@ async def init_db():
     try:
         logger.info(f"🔄 Attempting to connect to MongoDB...")
         logger.info(f"🔧 URI Type: {'Atlas Cloud' if 'mongodb+srv' in MONGO_URI else 'Local/Self-hosted'}")
+        env = os.getenv("ENV", "development").lower()
         
         # Production-ready MongoDB client configuration
         client_config = {
-            # Connection timeout settings - optimized for production
-            "serverSelectionTimeoutMS": 15000,  # Increased for cloud connections
-            "connectTimeoutMS": 30000,          # Increased for production
-            "socketTimeoutMS": 45000,           # Increased for production
-            
+            # Connection timeout settings - adjusted by environment
+            # In development, fail fast to avoid long hangs; in production, allow longer timeouts.
+            "serverSelectionTimeoutMS": 5000 if env != "production" else 15000,
+            "connectTimeoutMS": 8000 if env != "production" else 30000,
+            "socketTimeoutMS": 12000 if env != "production" else 45000,
+
             # Connection pooling for high performance
-            "maxPoolSize": 20,         # Reduced for Render resource limits
-            "minPoolSize": 2,          # Minimum connections to maintain
-            "maxIdleTimeMS": 60000,    # Keep connections alive longer
-            "waitQueueTimeoutMS": 15000, # Wait time for connection from pool
-            
+            "maxPoolSize": int(os.getenv("MONGO_POOL_MAXSIZE", "50")),
+            "minPoolSize": int(os.getenv("MONGO_POOL_MINSIZE", "5")),
+            "maxIdleTimeMS": 120000,
+            "waitQueueTimeoutMS": 8000 if env != "production" else 20000,
+
             # Performance optimizations
-            "retryWrites": True,       # Retry failed writes
-            "w": "majority",           # Write concern for consistency
-            "readPreference": "primaryPreferred",  # Read from primary when available
-            
+            "retryWrites": True,
+            "w": "majority",
+            "readPreference": "primaryPreferred",
+
             # Additional performance settings
-            "compressors": "snappy,zlib",  # Enable compression
-            "zlibCompressionLevel": 6,     # Compression level
+            "compressors": "snappy,zlib",
+            "zlibCompressionLevel": 6,
         }
         
         # Add SSL/TLS settings for Atlas connections
@@ -151,7 +158,7 @@ async def init_db():
         client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI, **client_config)
         
         # Test connection with retry logic
-        max_retries = 5  # Increased retries for production
+        max_retries = 3 if env != "production" else 5
         retry_delay = 2
         
         for attempt in range(max_retries):
@@ -160,8 +167,8 @@ async def init_db():
                 
                 # Use a shorter timeout for ping to fail fast
                 await asyncio.wait_for(
-                    client.admin.command('ping'), 
-                    timeout=10.0
+                    client.admin.command('ping'),
+                    timeout=5.0 if env != "production" else 10.0
                 )
                 
                 logger.info(f"✅ MongoDB ping successful on attempt {attempt + 1}")
@@ -194,6 +201,7 @@ async def init_db():
         
         # Create indexes for better performance
         try:
+            # Create minimal indexes required for core queries
             await create_indexes()
             logger.info("📇 Database indexes created/verified successfully")
         except Exception as e:
@@ -222,7 +230,39 @@ async def init_db():
         logger.warning("⚠️ Database operations will fail until connection is restored")
         logger.warning("⚠️ Please fix MongoDB configuration and restart the application")
         
-        return False
+    return False
+
+async def create_indexes() -> None:
+    """Create minimal indexes required for core queries.
+
+    This focuses on indexes actually referenced in code (e.g., hint
+    "timestamp_desc") and common query paths to prevent startup warnings
+    and improve performance.
+    """
+    global db
+    if db is None:
+        raise RuntimeError("Database is not initialized for index creation")
+
+    try:
+        issues = db["issues"]
+        users = db["users"]
+
+        # Index used by aggregation hint in get_issues()
+        await issues.create_index([("timestamp", -1)], name="timestamp_desc", background=True)
+
+        # Common filters and sorts
+        await issues.create_index([("status", 1), ("timestamp", -1)], name="status_timestamp", background=True)
+        await issues.create_index([("zip_code", 1)], name="zip_code", background=True)
+        await issues.create_index([("issue_type", 1)], name="issue_type", background=True)
+        await issues.create_index([("user_email", 1)], name="user_email", background=True)
+        await issues.create_index([("latitude", 1), ("longitude", 1)], name="lat_lon", background=True)
+
+        # Users collection unique email
+        await users.create_index([("email", 1)], name="email_unique", unique=True, background=True)
+
+        logger.info("✅ Core MongoDB indexes created/verified")
+    except Exception as e:
+        logger.warning(f"⚠️ Index creation encountered an issue: {str(e)}")
 
 async def close_db():
     """Close database connection"""
@@ -328,6 +368,7 @@ async def store_issue(
     issue_id: str,
     image_content: bytes,
     report: Dict[str, Any],
+    unified_report: Optional[Dict[str, Any]],
     address: str,
     zip_code: Optional[str],
     latitude: float,
@@ -362,10 +403,10 @@ async def store_issue(
             zip_code = "N/A"
         
         # Validate authority fields
-        authority_email = [auth.get("email", "snapfix@momntumai.com") for auth in responsible_authorities]
+        authority_email = [auth.get("email", "eaiser@momntumai.com") for auth in responsible_authorities]
         authority_name = [auth.get("name", "City Department") for auth in responsible_authorities]
         if not authority_email or not authority_name or None in authority_email or None in authority_name:
-            authority_email = ["snapfix@momntumai.com"]
+            authority_email = ["eaiser@momntumai.com"]
             authority_name = ["City Department"]
             logger.warning(f"No valid authorities provided for issue {issue_id}. Using defaults.")
         elif len(authority_email) != len(authority_name):
@@ -376,14 +417,14 @@ async def store_issue(
             for auth in available_authorities:
                 if not isinstance(auth, dict) or not all(key in auth for key in ["name", "email", "type"]):
                     logger.warning(f"Invalid available_authorities format for issue {issue_id}: {auth}. Setting to default.")
-                    available_authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+                    available_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
                     break
                 if not auth.get("email") or not auth.get("name") or not auth.get("type"):
                     logger.warning(f"Missing required fields in available_authorities for issue {issue_id}: {auth}. Setting to default.")
-                    available_authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+                    available_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
                     break
         else:
-            available_authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+            available_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
             logger.debug(f"No available_authorities provided for issue {issue_id}. Using default.")
         
         # Store the image in GridFS - FIXED: Properly await the upload operation
@@ -411,6 +452,7 @@ async def store_issue(
             "image_id": str(image_id),  # Convert ObjectId to string
             "status": "pending",
             "report": report or {"message": "No report generated"},
+            "unified_report": unified_report or {},
             "category": category,
             "priority": priority,
             "report_id": report.get("template_fields", {}).get("oid", ""),
@@ -519,6 +561,11 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
         # Cache miss - fetch from MongoDB
         logger.info(f"❌ Cache MISS: Fetching from MongoDB (limit: {limit}, skip: {skip})")
         db = await get_db()
+
+        # Read a defensible per-list timeout from environment (ms)
+        # Comment: Keeps list queries from hanging indefinitely under load
+        LIST_TIMEOUT_MS = int(os.getenv("LIST_TIMEOUT_MS", "5000"))
+        LIST_TIMEOUT_S = max(1.0, LIST_TIMEOUT_MS / 1000.0)
         
         # Use projection to only fetch required fields for better performance
         projection = {
@@ -554,11 +601,32 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
             {"$limit": limit},
             {"$project": projection}
         ]
-        
-        # Add index hint for better query performance
-        cursor = db.issues.aggregate(pipeline, hint="timestamp_desc")
-        # Limit cursor to prevent memory issues - use limit parameter
-        issues = await cursor.to_list(length=limit)
+
+        async def _run_aggregate():
+            """Run aggregate with defensive options and return list.
+            Comment: Encapsulates per-query limits and prevents hanging operations.
+            """
+            # Add index hint and per-query timeout for better performance and resilience
+            cursor = db.issues.aggregate(
+                pipeline,
+                hint="timestamp_desc",
+                maxTimeMS=LIST_TIMEOUT_MS,  # Abort server-side if query runs too long
+                allowDiskUse=False,         # Prevent disk use for this lightweight listing
+                batchSize=500               # Stream results in reasonable batches
+            )
+            return await cursor.to_list(length=limit)  # Respect explicit length
+
+        # Execute with cooperative client-side timeout
+        start_ts = time.time()
+        try:
+            issues = await asyncio.wait_for(_run_aggregate(), timeout=LIST_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            elapsed = (time.time() - start_ts) * 1000
+            logger.warning(f"⚠️ MongoDB list timed out after {elapsed:.2f} ms (limit={limit}, skip={skip})")
+            issues = []
+        except Exception as e:
+            logger.error(f"❌ MongoDB list failed (limit={limit}, skip={skip}): {str(e)}", exc_info=True)
+            issues = []
         
         for issue in issues:
             # Minimal processing - only set defaults for missing fields
@@ -573,14 +641,14 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
             issue.setdefault("priority", "Medium")
             issue.setdefault("decline_reason", None)
             issue.setdefault("decline_history", [])
-            issue.setdefault("available_authorities", [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}])
+            issue.setdefault("available_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
             issue.setdefault("timestamp_formatted", datetime.now().strftime("%Y-%m-%d %H:%M"))
             issue.setdefault("timezone_name", "UTC")
             
             # Optimized authority field processing
-            authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
+            authority_email = issue.get("authority_email", ["eaiser@momntumai.com"])
             if not isinstance(authority_email, list):
-                authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
+                authority_email = [str(authority_email)] if authority_email else ["eaiser@momntumai.com"]
             issue["authority_email"] = authority_email
             
             authority_name = issue.get("authority_name", ["City Department"])
@@ -634,16 +702,16 @@ async def get_report(issue_id: str) -> Dict[str, Any]:
         issue["user_email"] = issue.get("user_email", None)
         issue["decline_reason"] = issue.get("decline_reason", None)
         issue["decline_history"] = issue.get("decline_history", [])
-        issue["available_authorities"] = issue.get("available_authorities", [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}])
+        issue["available_authorities"] = issue.get("available_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
         
         # Clean authority_email
-        authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
+        authority_email = issue.get("authority_email", ["eaiser@momntumai.com"])
         if isinstance(authority_email, list):
             authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
             if not authority_email:
-                authority_email = ["snapfix@momntumai.com"]
+                authority_email = ["eaiser@momntumai.com"]
         else:
-            authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
+            authority_email = [str(authority_email)] if authority_email else ["eaiser@momntumai.com"]
         issue["authority_email"] = authority_email
         
         # Clean authority_name

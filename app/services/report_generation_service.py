@@ -58,7 +58,7 @@ class HighPerformanceReportGenerator:
     def __init__(self, mongodb_client: AsyncIOMotorClient, redis_client: redis.Redis):
         self.mongodb = mongodb_client
         self.redis = redis_client
-        self.db = mongodb_client.snapfix
+        self.db = mongodb_client.eaiser
         
         # Performance optimizations
         self.thread_pool = ThreadPoolExecutor(max_workers=10)
@@ -596,3 +596,146 @@ async def create_report_generator(mongodb_client: AsyncIOMotorClient, redis_clie
     generator = HighPerformanceReportGenerator(mongodb_client, redis_client)
     await generator.start_workers()
     return generator
+
+# =============================
+# Unified Issue JSON Builder
+# =============================
+
+@dataclass
+class UnifiedIssueJSON:
+    """
+    Unified JSON structure for UI and Email rendering.
+    This aggregates common fields across routes, email, and UI.
+
+    Note: Keep this minimal and stable to avoid breaking consumers.
+    """
+    # Core identifiers
+    issue_id: str
+    report_id: str
+    # Classification and priority
+    issue_type: str
+    category: str
+    severity: str
+    priority: str
+    confidence_percent: float
+    # Location
+    address: str
+    zip_code: str
+    latitude: float
+    longitude: float
+    map_link: str
+    # Time context
+    timestamp_formatted: str
+    timezone_name: str
+    # Summary and tags
+    ai_tag: str
+    summary_text: str
+    # Email content
+    email_subject: str
+    email_text: str
+
+
+def build_unified_issue_json(
+    *,
+    report: Dict[str, Any],
+    issue_id: str,
+    issue_type: str,
+    category: str,
+    severity: str,
+    priority: str,
+    confidence: float,
+    address: str,
+    zip_code: Optional[str],
+    latitude: float,
+    longitude: float,
+    timestamp_formatted: str,
+    timezone_name: str,
+    department_type: Optional[str] = None,
+    is_user_review: bool = False,
+) -> Dict[str, Any]:
+    """
+    Build a minimal, stable unified JSON for both UI and email.
+
+    Parameters are explicit to avoid hidden dependencies. The builder is pure and
+    returns a standard dict suitable for storage and transport.
+    """
+    try:
+        tf = report.get("template_fields", {})
+        # Derive robust values with fallbacks
+        report_id = tf.get("oid", "")
+        ai_tag = tf.get("ai_tag", "N/A")
+        image_filename = tf.get("image_filename", "N/A")
+        summary_text = (
+            report.get("issue_overview", {}).get("summary_explanation")
+            or report.get("issue_overview", {}).get("summary", "")
+            or "No summary available"
+        )
+        map_link = (
+            f"https://www.google.com/maps?q={latitude},{longitude}"
+            if latitude and longitude
+            else "Coordinates unavailable"
+        )
+
+        # Compose default email subject/text; callers may override via department_type
+        base_subject = (
+            f"{'Updated Report' if is_user_review else 'Infrastructure Issue'} – {issue_type.title()} at {address}"
+        )
+        base_text = (
+            f"Subject: {issue_type.title()} – {address} – {timestamp_formatted} – ID {report_id}\n"
+            f"Issue: {category.title()} – {issue_type.title()}\n"
+            f"Location: {address} (Zip: {zip_code or 'N/A'})\n"
+            f"GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}\n"
+            f"Live Location: {map_link}\n"
+            f"Severity: {severity.title()}\n"
+            f"Priority: {priority.title()}\n"
+            f"Confidence: {confidence}%\n"
+            f"AI Tag: {ai_tag}\n"
+            f"Summary: {summary_text}\n"
+        )
+
+        unified = UnifiedIssueJSON(
+            issue_id=issue_id,
+            report_id=report_id,
+            issue_type=issue_type,
+            category=category,
+            severity=severity,
+            priority=priority,
+            confidence_percent=float(confidence or 0),
+            address=address or "Unknown Address",
+            zip_code=zip_code or "N/A",
+            latitude=float(latitude or 0.0),
+            longitude=float(longitude or 0.0),
+            map_link=map_link,
+            timestamp_formatted=timestamp_formatted,
+            timezone_name=timezone_name or "UTC",
+            ai_tag=ai_tag,
+            summary_text=summary_text,
+            email_subject=base_subject,
+            email_text=base_text,
+        )
+
+        # Return as plain dict for easy storage/transport
+        return asdict(unified)
+    except Exception as e:
+        # Fail-safe: never break issue creation; return a minimal dict
+        logger.warning(f"Unified builder failed: {e}")
+        return {
+            "issue_id": issue_id,
+            "report_id": report.get("template_fields", {}).get("oid", ""),
+            "issue_type": issue_type,
+            "category": category,
+            "severity": severity,
+            "priority": priority,
+            "confidence_percent": float(confidence or 0),
+            "address": address or "Unknown Address",
+            "zip_code": zip_code or "N/A",
+            "latitude": float(latitude or 0.0),
+            "longitude": float(longitude or 0.0),
+            "map_link": f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable",
+            "timestamp_formatted": timestamp_formatted,
+            "timezone_name": timezone_name or "UTC",
+            "ai_tag": report.get("template_fields", {}).get("ai_tag", "N/A"),
+            "summary_text": report.get("issue_overview", {}).get("summary_explanation", "No summary available"),
+            "email_subject": f"{issue_type.title()} at {address}",
+            "email_text": "Summary unavailable",
+        }

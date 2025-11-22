@@ -20,6 +20,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
+from fastapi.encoders import jsonable_encoder
 
 # FastAPI and middleware imports
 from fastapi import FastAPI, Request, Response, HTTPException, Depends
@@ -42,7 +43,7 @@ from services.mongodb_optimized_service import init_optimized_mongodb, close_opt
 from services.redis_cluster_service import init_redis_cluster, close_redis_cluster, get_redis_cluster_service
 
 # Import routers
-from routers import issues_optimized
+from routes.issues_optimized_v2 import router as issues_optimized
 
 # Load environment variables
 load_dotenv()
@@ -75,7 +76,14 @@ class PerformanceMetrics:
         if status_code >= 400:
             self.error_count += 1
         
-        if response_time > 1.0:  # Slow request threshold: 1 second
+        # Configurable slow threshold (seconds); default 2.5s
+        try:
+            slow_ms_env = float(os.getenv("SLOW_REQUEST_MS", "2500"))
+            slow_threshold_seconds = slow_ms_env / 1000.0
+        except Exception:
+            slow_threshold_seconds = 2.5
+
+        if response_time > slow_threshold_seconds:  # Slow request threshold
             self.slow_request_count += 1
         
         # Track per-endpoint stats
@@ -93,7 +101,7 @@ class PerformanceMetrics:
         
         if status_code >= 400:
             stats['errors'] += 1
-        if response_time > 1.0:
+        if response_time > slow_threshold_seconds:
             stats['slow_requests'] += 1
     
     def get_stats(self) -> Dict[str, Any]:
@@ -225,8 +233,16 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
         response.headers["X-Request-ID"] = str(id(request))
         
         # Log slow requests
-        if response_time > 1.0:
-            logger.warning(f"⚠️ Slow request: {endpoint} took {response_time * 1000:.2f}ms")
+        # Configurable logging of slow request warnings
+        try:
+            slow_ms_env = float(os.getenv("SLOW_REQUEST_MS", "2500"))
+            slow_threshold_seconds = slow_ms_env / 1000.0
+        except Exception:
+            slow_threshold_seconds = 2.5
+
+        log_slow = (os.getenv("LOG_SLOW_REQUESTS", "true").lower() == "true")
+        if log_slow and response_time > slow_threshold_seconds:
+            logger.warning(f"⚠️ Slow request: {endpoint} took {response_time * 1000:.2f}ms (threshold {slow_ms_env:.0f} ms)")
         
         # Log errors
         if status_code >= 400:
@@ -258,7 +274,7 @@ async def lifespan(app: FastAPI):
     """
     Manage application startup and shutdown events.
     """
-    logger.info("🚀 Starting SnapFix Optimized Backend for 1 Lakh+ Users...")
+    logger.info("🚀 Starting eaiser Optimized Backend for 1 Lakh+ Users...")
     
     # Startup
     try:
@@ -324,7 +340,7 @@ async def _warmup_connections():
 
 # Create optimized FastAPI application
 app = FastAPI(
-    title="SnapFix - Optimized for 1 Lakh+ Users",
+    title="eaiser - Optimized for 1 Lakh+ Users",
     description="Enterprise-grade civic issue reporting platform optimized for massive scale",
     version="2.0.0",
     docs_url="/docs",
@@ -375,7 +391,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={
             "error": "Validation Error",
             "message": "Invalid request data",
-            "details": exc.errors()
+            "details": jsonable_encoder(exc.errors())
         }
     )
 
@@ -502,7 +518,7 @@ async def readiness_check():
         )
 
 # Include routers
-app.include_router(issues_optimized.router, prefix="/api", tags=["Issues"])
+app.include_router(issues_optimized, prefix="/api", tags=["Issues"])
 
 # Root endpoint
 @app.get("/", tags=["Root"])
@@ -511,7 +527,7 @@ async def root():
     Root endpoint with API information.
     """
     return {
-        "message": "SnapFix Backend - Optimized for 1 Lakh+ Users",
+        "message": "eaiser Backend - Optimized for 1 Lakh+ Users",
         "version": "2.0.0",
         "status": "operational",
         "docs": "/docs",
@@ -529,7 +545,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=10000,
         workers=1,  # Use 1 worker per process, scale with multiple processes
-        loop="uvloop",  # High-performance event loop
+        # loop="uvloop",  # High-performance event loop (disabled on Windows)
         http="httptools",  # High-performance HTTP parser
         access_log=True,
         log_level="info",
