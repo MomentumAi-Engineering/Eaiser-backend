@@ -891,6 +891,7 @@ async def send_authority_email(
 @router.post("/issues", response_model=IssueResponse)
 async def create_issue(
     image: UploadFile = File(...),
+    description: str = Form(''),
     address: str = Form(''),
     zip_code: Optional[str] = Form(None),
     latitude: float = Form(0.0),
@@ -921,7 +922,7 @@ async def create_issue(
         raise HTTPException(status_code=500, detail=f"Failed to read image: {str(e)}")
     
     try:
-        issue_type, severity, confidence, category, priority = await classify_issue(image_content, "")
+        issue_type, severity, confidence, category, priority = await classify_issue(image_content, description or "")
         if not issue_type:
             logger.error("Failed to classify issue type")
             raise ValueError("Failed to classify issue type")
@@ -955,7 +956,7 @@ async def create_issue(
     try:
         report = await generate_report(
             image_content=image_content,
-            description="",
+            description=description or "",
             issue_type=issue_type,
             severity=severity,
             address=final_address,
@@ -1013,6 +1014,7 @@ async def create_issue(
             filtered_resp = [a for a in available_authorities if a.get("type") in depts]
             if filtered_resp:
                 responsible_authorities = filtered_resp
+            mapped_depts = set(depts)
         except Exception:
             pass
 
@@ -1033,34 +1035,96 @@ async def create_issue(
         except Exception:
             pass
 
-        # Advanced authority augmentation based on AI description/labels
+        # Advanced authority augmentation based on AI description/labels with safety gating
         try:
             overview = report.get("issue_overview", {})
             desc_text = str(overview.get("summary_explanation", "")).lower()
             labels_list = overview.get("detected_problems", [])
             labels_text = " ".join([str(x).lower() for x in labels_list])
             combined = f"{desc_text} {labels_text}"
+            severity_val = str(overview.get("severity", "medium")).lower()
+
+            tokens_animal = ["animal", "dog", "cow", "cat", "wildlife", "deer"]
+            tokens_animal_incident = [
+                "injured", "dead", "carcass", "roadkill", "hit", "struck",
+                "on road", "on the road", "aggressive", "attack", "bite"
+            ]
+            tokens_vehicle = ["accident", "collision", "crash", "hit", "dent", "vehicle", "car", "bike", "motorcycle"]
+            tokens_fire = ["fire", "smoke", "flame", "burning", "wildfire", "house fire", "building fire"]
+            tokens_controlled_fire = [
+                "campfire", "bonfire", "bon fire", "bbq", "barbecue", "barbeque", "grill", "fire pit", "controlled burn",
+                "festival", "celebration", "diwali", "diya", "candle", "incense", "lamp", "stove", "kitchen", "smoke machine", "stage"
+            ]
+            tokens_flood = ["flood", "waterlogging", "inundation"]
+            tokens_leak = ["leak", "pipe", "water leak", "burst", "pipeline"]
+            danger_words = ["danger", "hazard", "out of control", "emergency", "injury", "uncontrolled", "explosion"]
+
+            has_animal = any(w in combined for w in tokens_animal)
+            has_animal_incident = any(w in combined for w in tokens_animal_incident)
+            has_vehicle = any(w in combined for w in tokens_vehicle)
+            has_fire = any(w in combined for w in tokens_fire)
+            is_controlled_fire = any(w in combined for w in tokens_controlled_fire)
+            has_flood = any(w in combined for w in tokens_flood)
+            has_leak = any(w in combined for w in tokens_leak)
+            is_danger = any(w in combined for w in danger_words)
 
             departments_to_add = set()
-            if any(w in combined for w in ["animal", "dog", "cow", "cat", "wildlife", "roadkill", "carcass"]):
+
+            # Fire: gate by controlled vs uncontrolled
+            if has_fire:
+                if is_controlled_fire and severity_val in ["low"] and not is_danger:
+                    pass  # benign scene; do not auto-notify
+                else:
+                    departments_to_add.add("fire")
+                    if any(w in combined for w in ["arson", "house", "building", "wildfire", "out of control", "explosion"]):
+                        departments_to_add.add("police")
+
+            # Vehicle incidents
+            if has_vehicle:
+                departments_to_add.update(["police", "transportation"])
+
+            # Animal only when clearly referenced
+            add_animal = (
+                str(issue_type).lower() in [
+                    "dead_animal", "animal_carcass", "animal_accident", "animal_on_road", "stray_animals"
+                ]
+                or (has_animal and has_animal_incident)
+            )
+            if add_animal:
                 departments_to_add.add("animal_control")
-            if any(w in combined for w in ["accident", "collision", "crash", "hit", "dent", "vehicle", "car", "bike"]):
-                departments_to_add.update(["police", "transportation"])  # traffic + policing
-            if any(w in combined for w in ["fire", "smoke", "flame", "burning"]):
-                departments_to_add.add("fire")
-            if any(w in combined for w in ["flood", "waterlogging", "inundation"]):
-                departments_to_add.update(["emergency", "public_works"])  # flood response
-            if any(w in combined for w in ["leak", "pipe", "water leak", "burst"]):
+
+            # Flooding
+            if has_flood:
+                departments_to_add.update(["emergency", "public_works"])
+
+            # Water utility
+            if has_leak:
                 departments_to_add.add("water_utility")
 
             if departments_to_add:
-                # Merge in authorities for these departments from zip entry
                 seen = {a.get("email") for a in responsible_authorities}
                 for dept in departments_to_add:
                     for auth in zentry.get(dept, []):
                         if auth.get("email") not in seen:
                             responsible_authorities.append(auth)
                             seen.add(auth.get("email"))
+
+            # Suppression rules: do not auto-notify benign scenes
+            def filter_out(types):
+                nonlocal responsible_authorities
+                responsible_authorities = [a for a in responsible_authorities if a.get("type") not in types]
+
+            # Fire but controlled and no danger → remove fire/police
+            if has_fire and is_controlled_fire and not is_danger and severity_val in ["low", "medium"]:
+                filter_out({"fire", "police"})
+
+            # Animal department only with explicit animal cues or animal issue type
+            if not add_animal:
+                filter_out({"animal_control"})
+
+            # Final guard: only keep departments from map OR gated augmentation
+            allowed_depts = mapped_depts.union(departments_to_add)
+            responsible_authorities = [a for a in responsible_authorities if a.get("type") in allowed_depts]
         except Exception:
             pass
 
@@ -1103,7 +1167,22 @@ async def create_issue(
         # Build unified report JSON for consistent UI/Email rendering
         confidence_val = 0.0
         try:
-            confidence_val = float(report.get("template_fields", {}).get("confidence", 0) or 0)
+            conf_candidates = [
+                report.get("template_fields", {}).get("confidence"),
+                report.get("unified_report", {}).get("confidence"),
+                report.get("issue_overview", {}).get("confidence"),
+            ]
+            for c in conf_candidates:
+                if c is None:
+                    continue
+                s = str(c).strip()
+                if s.endswith('%'):
+                    s = s[:-1]
+                v = float(s)
+                if v <= 1.0:
+                    v = v * 100.0
+                confidence_val = max(0.0, min(100.0, v))
+                break
         except Exception:
             confidence_val = 0.0
         unified_report = build_unified_issue_json(
@@ -1164,6 +1243,80 @@ async def create_issue(
     except Exception as e:
         logger.error(f"Failed to store issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to store issue: {str(e)}")
+
+    # Safety guard: evaluate dispatch decision and screen out benign/prank
+    try:
+        from app.services.dispatch_guard_service import AuthorityDispatchGuard
+    except ImportError:
+        from services.dispatch_guard_service import AuthorityDispatchGuard
+
+    try:
+        overview = report.get("issue_overview", {})
+        desc_text = str(overview.get("summary_explanation", "")).lower()
+        labels_list = overview.get("detected_problems", [])
+        labels_text = " ".join([str(x).lower() for x in labels_list])
+        combined = f"{desc_text} {labels_text}"
+        severity_val = str(overview.get("severity", severity or "medium")).lower()
+        confidence_val = 0.0
+        try:
+            confidence_val = float(report.get("template_fields", {}).get("confidence", 0) or 0)
+        except Exception:
+            confidence_val = 0.0
+
+        tokens_controlled_fire = [
+            "campfire", "bonfire", "bon fire", "bbq", "barbecue", "barbeque", "grill", "fire pit", "controlled burn",
+            "festival", "celebration", "diwali", "diya", "candle", "incense", "lamp", "stove", "kitchen", "smoke machine", "stage"
+        ]
+        tokens_fire = ["fire", "smoke", "flame", "burning", "wildfire", "house fire", "building fire"]
+        danger_words = ["danger", "hazard", "out of control", "emergency", "injury", "uncontrolled", "explosion"]
+        is_controlled_fire = any(w in combined for w in tokens_controlled_fire)
+        has_fire = any(w in combined for w in tokens_fire)
+        is_danger = any(w in combined for w in danger_words)
+
+        policy_conflict = bool(has_fire and is_controlled_fire and not is_danger and severity_val in ["low", "medium"])  # benign
+        metadata_ok = bool(final_address) and (bool(final_zip_code) or (final_latitude and final_longitude))
+
+        guard = AuthorityDispatchGuard()
+        decision = guard.evaluate(
+            {
+                "severity": severity_val,
+                "priority": str(priority or "medium").lower(),
+                "ai_confidence_percent": confidence_val,
+                "metadata_complete": metadata_ok,
+                "is_duplicate": False,
+                "policy_conflict": policy_conflict,
+            }
+        )
+
+        issue_status = "pending"
+        if policy_conflict or decision.action == "reject":
+            issue_status = "screened_out"
+
+        db = await get_db()
+        db.issues.update_one(
+            {"_id": issue_id},
+            {"$set": {
+                "dispatch_decision": decision.action,
+                "dispatch_reasons": decision.reasons,
+                "risk_score": decision.risk_score,
+                "fraud_score": decision.fraud_score,
+                "status": issue_status,
+            }}
+        )
+
+        try:
+            report.setdefault("unified_report", {}).setdefault("dispatch_decision", {})
+            report["unified_report"]["dispatch_decision"] = {
+                "action": decision.action,
+                "reasons": decision.reasons,
+                "risk_score": decision.risk_score,
+                "fraud_score": decision.fraud_score,
+                "status": issue_status,
+            }
+        except Exception:
+            pass
+    except Exception:
+        pass
     
     try:
         user_authority = [{"name": "User", "email": user_email or "eaiser@momntumai.com", "type": "general"}]
@@ -1228,7 +1381,10 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
         if not issue:
             logger.error(f"Issue {issue_id} not found in database")
             raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-        if issue.get("status") != "pending":
+        if issue.get("status") == "screened_out":
+            logger.warning(f"Issue {issue_id} screened out; blocking submission")
+            raise HTTPException(status_code=400, detail="Issue screened out as benign or potential prank; submission blocked")
+        if issue.get("status") and issue.get("status") != "pending":
             logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
             raise HTTPException(status_code=400, detail="Issue already processed")
     except Exception as e:
@@ -1267,6 +1423,37 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
         raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
     
     report = issue["report"]
+
+    # Enforce guard decision: block low confidence or policy conflicts
+    try:
+        decision_action = issue.get("dispatch_decision")
+        conf_val = 0.0
+        try:
+            conf_candidates = [
+                report.get("template_fields", {}).get("confidence"),
+                report.get("unified_report", {}).get("confidence"),
+                report.get("issue_overview", {}).get("confidence"),
+            ]
+            for c in conf_candidates:
+                if c is None:
+                    continue
+                s = str(c).strip()
+                if s.endswith('%'):
+                    s = s[:-1]
+                v = float(s)
+                if v <= 1.0:
+                    v = v * 100.0
+                conf_val = max(0.0, min(100.0, v))
+                break
+        except Exception:
+            conf_val = 0.0
+        if decision_action == "reject" or conf_val < 70:
+            logger.warning(f"Issue {issue_id} blocked by guard (decision={decision_action}, confidence={conf_val})")
+            raise HTTPException(status_code=400, detail="Submission blocked by safety guard (low confidence or policy conflict)")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     
     # Update report with edited content if provided
     if request.edited_report:

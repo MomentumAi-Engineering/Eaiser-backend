@@ -7,9 +7,8 @@ from dotenv import load_dotenv
 # Load .env from app directory and override any global/system vars
 load_dotenv(dotenv_path=Path(__file__).parent / '.env', override=True)
 
-# Debug print (you can remove after testing)
-print(f"[ENV CHECK] MONGO_URI = {os.getenv('MONGO_URI')}")
-print(f"[ENV CHECK] ENVIRONMENT = {os.getenv('ENVIRONMENT')}")
+print("[ENV CHECK] Environment variables loaded.")
+
 
 # Add current directory to Python path for Render deployment compatibility
 current_dir = Path(__file__).parent.absolute()
@@ -107,7 +106,8 @@ app.add_middleware(
         "https://eaiserai.io",
         "http://localhost:5173",
         "http://localhost:3000",
-        "http://localhost:3001"
+        "http://localhost:3001",
+        "http://localhost:5174"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -310,15 +310,15 @@ app.include_router(reports_router, prefix="/api/reports")
 app.include_router(ai_router, prefix="/api")
 
 # Explicit wrappers to ensure endpoints exist even if router mounting varies
-from fastapi import UploadFile, File, Query
+from fastapi import UploadFile, File
 
 @app.post("/api/ai/analyze-image")
-async def analyze_image_endpoint(image: UploadFile = File(...), fast: bool = Query(False)):
-    return await analyze_image_fn(image=image, fast=fast)
+async def analyze_image_endpoint(image: UploadFile = File(...)):
+    return await analyze_image_fn(image=image)
 
 @app.post("/api/analyze-image")
-async def analyze_image_alias_endpoint(image: UploadFile = File(...), fast: bool = Query(False)):
-    return await analyze_image_alias_fn(image=image, fast=fast)
+async def analyze_image_alias_endpoint(image: UploadFile = File(...)):
+    return await analyze_image_alias_fn(image=image)
 
 @app.get("/api/debug/routes")
 async def debug_routes():

@@ -118,34 +118,44 @@ class RedisService:
                 logger.info("   2. Use Docker: docker run -d -p 6379:6379 redis:alpine")
                 logger.info("   3. Skip Redis (app will work without caching)")
             
-            # Create connection pool configuration
-            pool_config = {
-                'host': self.redis_host,
-                'port': self.redis_port,
-                'password': self.redis_password,
-                'db': self.redis_db,
-                'decode_responses': True,
-                'max_connections': 20,
-                'retry_on_timeout': True,
-                'socket_connect_timeout': 10,  # Increased for production
-                'socket_timeout': 10,          # Increased for production
-                'health_check_interval': 30,   # Health check every 30 seconds
-            }
-            
-            # Add SSL configuration for production Redis (like Redis Cloud, AWS ElastiCache)
-            if self.ssl_required:
-                pool_config.update({
-                    'ssl': True,
-                    'ssl_check_hostname': False,  # Often needed for cloud Redis services
-                    'ssl_cert_reqs': None,        # Disable certificate verification for managed services
-                })
-                logger.info("🔒 SSL enabled for Redis connection")
-            
-            # Create connection pool for better performance
-            self.connection_pool = ConnectionPool(**pool_config)
-            
-            # Create Redis client
-            self.redis_client = redis.Redis(connection_pool=self.connection_pool)
+            # Prefer REDIS_URL to avoid low-level SSL kwarg incompatibilities across client versions
+            redis_url = os.getenv('REDIS_URL')
+            if redis_url:
+                # Use ConnectionPool.from_url to let the client handle ssl/rediss scheme internally
+                pool_kwargs = {
+                    'decode_responses': True,
+                    'max_connections': 20,
+                    'retry_on_timeout': True,
+                    'socket_connect_timeout': 10,
+                    'socket_timeout': 10,
+                    'health_check_interval': 30,
+                }
+                # If using rediss (TLS), relax cert checks for managed services without CA bundles
+                try:
+                    from urllib.parse import urlparse
+                    if urlparse(redis_url).scheme == 'rediss':
+                        pool_kwargs['ssl_cert_reqs'] = None
+                        pool_kwargs['ssl_check_hostname'] = False
+                        logger.info("🔒 TLS (rediss) detected; cert verification disabled for managed Redis")
+                except Exception:
+                    pass
+                self.connection_pool = ConnectionPool.from_url(redis_url, **pool_kwargs)
+                self.redis_client = redis.Redis(connection_pool=self.connection_pool)
+            else:
+                # Fallback: build by host/port without explicit 'ssl' kwarg
+                self.connection_pool = ConnectionPool(
+                    host=self.redis_host,
+                    port=self.redis_port,
+                    password=self.redis_password,
+                    db=self.redis_db,
+                    decode_responses=True,
+                    max_connections=20,
+                    retry_on_timeout=True,
+                    socket_connect_timeout=10,
+                    socket_timeout=10,
+                    health_check_interval=30,
+                )
+                self.redis_client = redis.Redis(connection_pool=self.connection_pool)
             
             # Test connection with timeout
             await asyncio.wait_for(self.redis_client.ping(), timeout=5.0)

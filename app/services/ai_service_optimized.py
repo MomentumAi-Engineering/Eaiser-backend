@@ -616,6 +616,73 @@ Keep the report under 200 words, professional, and specific to the issue type an
             detailed["potential_impact"] = detailed["potential_consequences_if_ignored"]
             report["detailed_analysis"] = detailed
 
+        # Post-adjust confidence for benign/minor scenes to reduce false positives
+        try:
+            overview = report.get("issue_overview", {})
+            ai_eval = report.get("ai_evaluation", {})
+            desc_text = str(overview.get("summary_explanation", "")).lower()
+            eval_text = str(ai_eval.get("image_analysis", "")).lower()
+            combined = f"{desc_text} {eval_text}"
+            severity_val = str(overview.get("severity", "medium")).lower()
+            conf_val = overview.get("confidence")
+            try:
+                conf_val = int(round(float(conf_val))) if conf_val is not None else None
+            except Exception:
+                conf_val = None
+            danger_words = ["hazard","danger","out of control","emergency","injury","uncontrolled","explosion","collapse","severe","major"]
+            controlled_fire = ["campfire","bonfire","bon fire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","festival","celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage"]
+            minor_words = ["minor","small","tiny","cosmetic","scratch","smudge","dust","stain","normal","benign"]
+            has_danger = any(w in combined for w in danger_words)
+            is_controlled = any(w in combined for w in controlled_fire)
+            is_minor = any(w in combined for w in minor_words)
+            issue_detected = bool(ai_eval.get("issue_detected"))
+            if not issue_detected:
+                hazard_tokens = ["hazard","danger","out of control","emergency","injury","uncontrolled","explosion","collapse","severe","major","wildfire","accident","collision","leak","burst"]
+                has_hazard = any(w in combined for w in hazard_tokens)
+                new_conf = 40 if not has_hazard else 80
+                issue_detected = bool(has_hazard)
+            elif is_controlled and not has_danger:
+                new_conf = 45
+            elif is_minor and not has_danger:
+                new_conf = max(75, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 70)))
+            else:
+                new_conf = conf_val if conf_val is not None else ai_eval.get("ai_confidence_percent") or 60
+            new_conf = int(max(0, min(100, new_conf)))
+            allowed_types = {
+                "pothole","road_damage","broken_streetlight","graffiti","garbage","vandalism","open_drain","blocked_drain","flood","fire","illegal_construction","tree_fallen","public_toilet_issue","stray_animals","dead_animal","animal_carcass","animal_injury","animal_accident","wildlife_hit","animal_on_road","animal_crash","noise_pollution","air_pollution","water_leakage","street_vendor_encroachment","signal_malfunction","waterlogging","abandoned_vehicle","vacant_lot_issue","other","unknown"
+            }
+            ttype = (overview.get("type") or "").lower()
+            if ttype and ttype not in allowed_types:
+                new_conf = min(new_conf, 40)
+                ai_eval["issue_detected"] = False
+                ia = ai_eval.get("image_analysis") or ""
+                if "no public issue" not in ia.lower():
+                    ai_eval["image_analysis"] = "I did not find any public issue."
+            # Ensure target issue types have >=75 confidence unless controlled benign
+            try:
+                ttype = (overview.get("type") or "").lower()
+                target_types = [
+                    "pothole", "road damage", "road_damage",
+                    "fire", "wildfire",
+                    "dead animal", "animal carcass", "animal_carcass",
+                    "garbage", "trash", "waste",
+                    "flood", "waterlogging",
+                    "tree fallen", "fallen tree", "tree_fallen",
+                    "public toilet", "public_toilet_issue"
+                ]
+                is_target = any(tt in ttype for tt in target_types)
+                if is_target and not (is_controlled and not has_danger):
+                    new_conf = max(new_conf, 75)
+            except Exception:
+                pass
+            overview["confidence"] = new_conf
+            ai_eval["ai_confidence_percent"] = new_conf
+            ai_eval["issue_detected"] = issue_detected
+            report["issue_overview"] = overview
+            report["ai_evaluation"] = ai_eval
+        except Exception:
+            pass
+
         # Build concise summary per strict template (City, State, ZIP)
         def _extract_city_state(addr: str) -> (str, str):
             """Try to split 'City, State' from address; fallback to Unknowns."""
