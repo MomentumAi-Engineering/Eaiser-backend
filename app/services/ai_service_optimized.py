@@ -659,6 +659,18 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
                 issue_detected = True
             else:
+                # Prefer fallen tree classification if strong cues present
+                tree_tokens = [
+                    "fallen tree","tree fallen","downed tree","tree down","uprooted",
+                    "tree across","tree blocking road","tree blocking the road","tree on road",
+                    "branches","branch","trunk","logs","log","limb","limbs",
+                    "branches across","debris from tree","fallen branches","tree debris"
+                ]
+                if any(w in combined for w in tree_tokens):
+                    overview["type"] = "tree_fallen"
+                    new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
+                    issue_detected = True
+            if 'new_conf' not in locals():
                 new_conf = conf_val if conf_val is not None else ai_eval.get("ai_confidence_percent") or 60
             new_conf = int(max(0, min(100, new_conf)))
             allowed_types = {

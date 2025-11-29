@@ -86,18 +86,31 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
         issue_keywords = {
             "fire": ["fire", "smoke", "flame", "burn", "blaze"],
             "pothole": ["pothole", "road damage", "crack", "hole", "ft wide", "deep", "swerve"],
-            "garbage": ["trash", "litter", "garbage", "debris", "waste"],
+            # Do not include "debris" (often appears in fallen-tree scenes)
+            "garbage": ["trash", "litter", "garbage", "waste"],
             "property_damage": ["damage", "broken", "destruction"],
             "flood": ["flood", "water", "inundation", "leak"],
             "vandalism": ["graffiti", "vandalism", "deface", "tagging"],
             "structural_damage": ["crack", "collapse", "structural", "foundation"],
             "dead_animal": ["dead animal", "carcass", "roadkill"],
+            "tree_fallen": ["fallen tree","tree fallen","downed tree","tree down","branch fallen","uprooted"]
         }
         issue_type = "unknown"
         for issue, keywords in issue_keywords.items():
             if any(keyword in description_lower for keyword in keywords):
                 issue_type = issue
                 break
+        # Stronger detection for fallen tree scenes (prefer over generic "garbage" or "debris")
+        tree_tokens = [
+            "fallen tree", "tree fallen", "downed tree", "tree down", "uprooted",
+            "tree across", "tree blocking", "tree blocking road", "tree blocking the road",
+            "tree on road", "branches", "branch", "trunk", "logs", "log", "limb", "limbs",
+            "branches across", "debris from tree", "fallen branches", "tree debris"
+        ]
+        if any(tok in description_lower for tok in tree_tokens):
+            issue_type = "tree_fallen"
+            confidence = max(confidence, 88.0)
+            logger.info(f"Description indicates fallen tree; overriding issue_type to tree_fallen with confidence {confidence}")
         animal_tokens = ["dead animal", "carcass", "roadkill"]
         if any(t in description_lower for t in animal_tokens):
             issue_type = "dead_animal"
@@ -170,24 +183,36 @@ Ensure the issue_type matches one of the specified options. For descriptions men
                 issue_type = "unknown"
                 confidence = min(confidence, 70.0)
 
-            # Cross-validate with description
+            # Cross-validate with description (prioritize fallen tree first)
             description_lower = description.lower()
             issue_keywords = {
                 "fire": ["fire", "smoke", "flame", "burn", "blaze"],
                 "pothole": ["pothole", "road damage", "crack", "hole", "ft wide", "deep", "swerve"],
-                "garbage": ["trash", "litter", "garbage", "debris", "waste"],
+                # Do not include generic 'debris' (overlaps with fallen tree scenes)
+                "garbage": ["trash", "litter", "garbage", "waste"],
                 "property_damage": ["damage", "broken", "destruction"],
                 "flood": ["flood", "water", "inundation", "leak"],
                 "vandalism": ["graffiti", "vandalism", "deface", "tagging"],
-                "structural_damage": ["crack", "collapse", "structural", "foundation"]
+                "structural_damage": ["crack", "collapse", "structural", "foundation"],
+                "tree_fallen": [
+                    "fallen tree","tree fallen","downed tree","tree down","uprooted",
+                    "tree across","tree blocking road","tree blocking the road","tree on road",
+                    "branches","branch","trunk","logs","log","limb","limbs",
+                    "fallen branches","tree debris","debris from tree"
+                ]
             }
-
-            for issue, keywords in issue_keywords.items():
-                if any(keyword in description_lower for keyword in keywords):
-                    issue_type = issue
-                    confidence = max(confidence, 92.0 if issue == "pothole" else 80.0)
-                    logger.info(f"Description suggests {issue}. Overriding to {issue} with confidence {confidence}.")
-                    break
+            # High-priority fallen tree override
+            if any(tok in description_lower for tok in issue_keywords["tree_fallen"]):
+                issue_type = "tree_fallen"
+                confidence = max(confidence, 88.0)
+                logger.info(f"Description suggests tree_fallen. Overriding to tree_fallen with confidence {confidence}.")
+            else:
+                for issue, keywords in issue_keywords.items():
+                    if any(keyword in description_lower for keyword in keywords):
+                        issue_type = issue
+                        confidence = max(confidence, 92.0 if issue == "pothole" else 80.0)
+                        logger.info(f"Description suggests {issue}. Overriding to {issue} with confidence {confidence}.")
+                        break
             animal_tokens = ["dead animal", "carcass", "roadkill"]
             if any(t in description_lower for t in animal_tokens):
                 issue_type = "dead_animal"
@@ -439,6 +464,28 @@ Keep the report under 200 words, professional, and specific to the issue type an
                         break
                     lines.append(x)
                 issue_overview["summary_explanation"] = "\n".join(lines)
+
+            # Override type to tree_fallen if strong cues found (avoids mislabel as garbage)
+            try:
+                combined_text = (
+                    (issue_overview.get("summary_explanation") or "") + "\n" +
+                    (report.get("detailed_analysis", {}).get("root_causes") or "")
+                ).lower()
+                tree_tokens = [
+                    "fallen tree","tree fallen","downed tree","tree down","uprooted",
+                    "tree across","tree blocking road","tree blocking the road","tree on road",
+                    "branches","branch","trunk","logs","log","limb","limbs",
+                    "branches across","debris from tree","fallen branches","tree debris"
+                ]
+                if any(tok in combined_text for tok in tree_tokens):
+                    issue_overview["type"] = "tree_fallen"
+                    try:
+                        c = float(issue_overview.get("confidence", 70))
+                        issue_overview["confidence"] = max(c, 85)
+                    except Exception:
+                        issue_overview["confidence"] = 85
+            except Exception:
+                pass
 
             # Ensure alias fields reflect final summary
             if "summary" not in issue_overview or issue_overview.get("summary") != issue_overview.get("summary_explanation"):
