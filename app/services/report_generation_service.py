@@ -693,10 +693,13 @@ def build_unified_issue_json(
             f"Summary: {summary_text}\n"
         )
 
+        # Prefer AI-overview type if present (post-adjust may mark benign/None)
+        final_issue_type = (report.get("issue_overview", {}).get("type") or issue_type) or "Unknown"
+
         unified = UnifiedIssueJSON(
             issue_id=issue_id,
             report_id=report_id,
-            issue_type=issue_type,
+            issue_type=final_issue_type,
             category=category,
             severity=severity,
             priority=priority,

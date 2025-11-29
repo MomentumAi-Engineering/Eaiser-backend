@@ -87,7 +87,10 @@ async def analyze_image(image: UploadFile = File(...)):
                 labels.append(l)
 
         base_text = (description or "").lower() + " " + " ".join([str(x).lower() for x in labels])
-        danger_words = ["hazard","danger","out of control","emergency","injury","uncontrolled","explosion","collapse","severe","major","wildfire","accident","collision","leak","burst"]
+        danger_words = [
+            "out of control","emergency","uncontrolled","explosion","collapse",
+            "wildfire","house fire","building fire","spread","spreading","structure","sirens"
+        ]
         controlled_fire = ["campfire","bonfire","bon fire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","festival","celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage"]
         minor_words = ["minor","small","tiny","cosmetic","scratch","smudge","dust","stain","low","no issue","normal","benign"]
         has_danger = any(w in base_text for w in danger_words)
@@ -114,7 +117,7 @@ async def analyze_image(image: UploadFile = File(...)):
         elif has_danger or (issues and not has_controlled):
             confidence_estimate = max(75, min(95, int(60 + clarity_score / 2)))
         elif has_controlled and not has_danger:
-            confidence_estimate = 45
+            confidence_estimate = 30
         elif has_minor and not has_danger:
             confidence_estimate = max(75, min(90, int(55 + clarity_score / 2)))
         # Boost confidence for explicit target issue tokens
@@ -132,9 +135,26 @@ async def analyze_image(image: UploadFile = File(...)):
             confidence_estimate = max(confidence_estimate, max(75, min(95, int(60 + clarity_score / 2))))
         confidence_estimate = int(max(0, min(100, confidence_estimate)))
 
+        # Add explicit AI Analysis statement in description
+        try:
+            first_line = (description.splitlines()[0] if description else "").strip()
+            if not issues and not has_danger:
+                description = f"AI Analysis: No public issue found. Scene: {first_line}" if first_line else "AI Analysis: No public issue found."
+            else:
+                if not description.lower().startswith("ai analysis:"):
+                    description = f"AI Analysis: {first_line}\n{description}" if first_line else f"AI Analysis: {description}"
+        except Exception:
+            pass
+
         t = base_text
         issue_type = "other"
-        if any(w in t for w in ["wildfire","house fire","building fire","uncontrolled fire"]):
+        animal_tokens = ["animal","deer","boar","hog","dog","cow","cat","wildlife","goat","pig"]
+        accident_tokens = ["accident","collision","crash","hit","struck","run over","under car","under vehicle","roadkill"]
+        has_animal = any(w in t for w in animal_tokens)
+        has_accident = any(w in t for w in accident_tokens)
+        if has_animal and has_accident and not any(w in t for w in ["fire","flame","burning","smoke"]):
+            issue_type = "animal_accident"
+        elif any(w in t for w in ["wildfire","house fire","building fire","uncontrolled fire"]):
             issue_type = "fire"
         elif any(w in t for w in ["fire","smoke","flame","burning"]) and not has_controlled:
             issue_type = "fire"

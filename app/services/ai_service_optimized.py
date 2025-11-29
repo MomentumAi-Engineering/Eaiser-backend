@@ -629,12 +629,16 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 conf_val = int(round(float(conf_val))) if conf_val is not None else None
             except Exception:
                 conf_val = None
-            danger_words = ["hazard","danger","out of control","emergency","injury","uncontrolled","explosion","collapse","severe","major"]
+            danger_words = ["out of control","emergency","uncontrolled","explosion","collapse","wildfire","house fire","building fire","spread","spreading","structure","sirens"]
             controlled_fire = ["campfire","bonfire","bon fire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","festival","celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage"]
             minor_words = ["minor","small","tiny","cosmetic","scratch","smudge","dust","stain","normal","benign"]
             has_danger = any(w in combined for w in danger_words)
             is_controlled = any(w in combined for w in controlled_fire)
             is_minor = any(w in combined for w in minor_words)
+            animal_tokens = ["animal","deer","boar","hog","dog","cow","cat","wildlife","goat","pig","carcass","roadkill"]
+            accident_tokens = ["accident","collision","crash","hit","struck","run over","under car","under vehicle"]
+            has_animal = any(w in combined for w in animal_tokens)
+            has_accident = any(w in combined for w in accident_tokens)
             issue_detected = bool(ai_eval.get("issue_detected"))
             if not issue_detected:
                 hazard_tokens = ["hazard","danger","out of control","emergency","injury","uncontrolled","explosion","collapse","severe","major","wildfire","accident","collision","leak","burst"]
@@ -642,9 +646,18 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 new_conf = 40 if not has_hazard else 80
                 issue_detected = bool(has_hazard)
             elif is_controlled and not has_danger:
-                new_conf = 45
+                new_conf = 30
+                issue_detected = False
+                overview["type"] = "None"
+                ia = ai_eval.get("image_analysis") or ""
+                if "no public issue" not in ia.lower():
+                    ai_eval["image_analysis"] = "I did not find any public issue."
             elif is_minor and not has_danger:
                 new_conf = max(75, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 70)))
+            elif has_animal and has_accident and not any(w in combined for w in ["fire","flame","burning","smoke"]):
+                overview["type"] = "animal_accident"
+                new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
+                issue_detected = True
             else:
                 new_conf = conf_val if conf_val is not None else ai_eval.get("ai_confidence_percent") or 60
             new_conf = int(max(0, min(100, new_conf)))

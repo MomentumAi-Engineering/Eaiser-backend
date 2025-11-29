@@ -21,13 +21,32 @@ def load_json_data(file_name: str) -> dict:
         logger.error(f"Failed to decode JSON from {file_path}: {str(e)}")
         return {}
 
+def _canonical_issue(issue_type: str) -> str:
+    """Normalize and canonicalize issue_type to match data map keys."""
+    s = (issue_type or "unknown").strip().lower()
+    s = s.replace("-", "_").replace(" ", "_")
+    alias = {
+        "road_hole": "road_damage",
+        "damaged_road": "road_damage",
+        "cracked_road": "road_damage",
+        "road_broken": "road_damage",
+        "building_fire": "fire",
+        "street_flood": "flood",
+        "uncovered_drain": "open_drain",
+        "clogged_drain": "blocked_drain",
+        "animal_carcass": "dead_animal",
+        "animal_on_road": "roadkill",
+        "water_leak": "water_leakage",
+    }
+    return alias.get(s, s)
+
 def get_authority(address: str, issue_type: str, latitude: float, longitude: float, category: str) -> Dict[str, List[Dict[str, str]]]:
     """
     Determine the relevant authorities for an issue based on issue type, category, and coordinates.
     Returns a dictionary with responsible and available authorities, each as a list of dictionaries with department details (name, email, type, timezone).
     """
     try:
-        issue_type = issue_type.lower() if issue_type else "unknown"
+        issue_type = _canonical_issue(issue_type)
         raw_cat = load_json_data("issue_category_map.json")
         issue_category_map = {str(k).lower(): v for k, v in raw_cat.items()}  # normalize keys
         issue_category = category if category else issue_category_map.get(issue_type, "public")
@@ -85,7 +104,7 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
                 "available_authorities": [{"message": "eaiser services are not available in this area, coming soon in the future"}]
             }
 
-        issue_type = issue_type.lower() if issue_type else "unknown"
+        issue_type = _canonical_issue(issue_type)
         raw_cat = load_json_data("issue_category_map.json")
         issue_category_map = {str(k).lower(): v for k, v in raw_cat.items()}  # normalize keys
         issue_category = category if category else issue_category_map.get(issue_type, "public")

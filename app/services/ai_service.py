@@ -90,15 +90,35 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             "property_damage": ["damage", "broken", "destruction"],
             "flood": ["flood", "water", "inundation", "leak"],
             "vandalism": ["graffiti", "vandalism", "deface", "tagging"],
-            "structural_damage": ["crack", "collapse", "structural", "foundation"]
+            "structural_damage": ["crack", "collapse", "structural", "foundation"],
+            "dead_animal": ["dead animal", "carcass", "roadkill"],
         }
         issue_type = "unknown"
         for issue, keywords in issue_keywords.items():
             if any(keyword in description_lower for keyword in keywords):
                 issue_type = issue
                 break
-        # Cap confidence and determine severity
+        animal_tokens = ["dead animal", "carcass", "roadkill"]
+        if any(t in description_lower for t in animal_tokens):
+            issue_type = "dead_animal"
+        # Description-driven confidence adjustments
+        hazard_tokens = [
+            "wildfire","house fire","building fire","spreading","spread",
+            "out of control","collapse","structural","injury","accident",
+            "collision","burst","leak","flood","sirens"
+        ]
+        controlled_tokens = [
+            "campfire","bonfire","bbq","barbecue","fire pit","controlled",
+            "festival","diwali","diya","candle","incense","smoke machine","stage"
+        ]
+        has_hazard = any(t in description_lower for t in hazard_tokens)
+        has_controlled = any(t in description_lower for t in controlled_tokens)
+
         confidence = 92.0 if issue_type == "pothole" else (85.0 if issue_type != "unknown" else 50.0)
+        if has_controlled and not has_hazard:
+            confidence = min(confidence, 40.0)
+        elif has_hazard:
+            confidence = max(confidence, 88.0)
         high_severity_issues = ["fire", "flood", "structural_damage"]
         high_severity_keywords = ["urgent", "emergency", "critical", "severe"]
         medium_severity_issues = ["pothole", "vandalism"]
@@ -168,6 +188,27 @@ Ensure the issue_type matches one of the specified options. For descriptions men
                     confidence = max(confidence, 92.0 if issue == "pothole" else 80.0)
                     logger.info(f"Description suggests {issue}. Overriding to {issue} with confidence {confidence}.")
                     break
+            animal_tokens = ["dead animal", "carcass", "roadkill"]
+            if any(t in description_lower for t in animal_tokens):
+                issue_type = "dead_animal"
+                confidence = max(confidence, 80.0)
+
+            # Description-driven confidence refinements
+            hazard_tokens = [
+                "wildfire","house fire","building fire","spreading","spread",
+                "out of control","collapse","structural","injury","accident",
+                "collision","burst","leak","flood","sirens"
+            ]
+            controlled_tokens = [
+                "campfire","bonfire","bbq","barbecue","fire pit","controlled",
+                "festival","diwali","diya","candle","incense","smoke machine","stage"
+            ]
+            has_hazard = any(t in description_lower for t in hazard_tokens)
+            has_controlled = any(t in description_lower for t in controlled_tokens)
+            if has_controlled and not has_hazard:
+                confidence = min(confidence, 40.0)
+            elif has_hazard:
+                confidence = max(confidence, 88.0)
 
             # Cap confidence
             confidence = min(confidence, 100.0)
