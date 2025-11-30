@@ -310,7 +310,8 @@ async def process_issue_background(
             issue_type=issue_type,
             severity=severity,
             address=final_address,
-            zip_code=zip_code
+            zip_code=zip_code,
+            description_hash=hashlib.md5((description or "").encode()).hexdigest()[:8]
         )
         
         cached_report = await get_cached_data(report_cache_key)

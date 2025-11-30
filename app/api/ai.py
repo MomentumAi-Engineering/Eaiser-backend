@@ -12,10 +12,14 @@ router = APIRouter()
 async def analyze_image(image: UploadFile = File(...)):
     api_key = os.getenv("GEMINI_API_KEY")
     model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    env = os.getenv("ENV", "development").lower()
     try:
         timeout = int(os.getenv("AI_TIMEOUT", "15"))
     except ValueError:
         timeout = 15
+    # In production, give AI a bit more time before falling back
+    if env == "production":
+        timeout = max(timeout, 20)
     if not api_key:
         raise HTTPException(status_code=500, detail="Gemini API key not configured")
 
@@ -28,12 +32,12 @@ async def analyze_image(image: UploadFile = File(...)):
                 img = Image.open(BytesIO(content))
                 img = img.convert("RGB")
                 w, h = img.size
-                max_dim = 1280
+                max_dim = 1024
                 if max(w, h) > max_dim:
                     scale = max_dim / float(max(w, h))
                     img = img.resize((int(w * scale), int(h * scale)))
                 buf = BytesIO()
-                img.save(buf, format="JPEG", quality=80, optimize=True)
+                img.save(buf, format="JPEG", quality=70, optimize=True)
                 content = buf.getvalue()
             except Exception:
                 pass
@@ -59,8 +63,10 @@ async def analyze_image(image: UploadFile = File(...)):
         text = ""
         attempts = [
             (model_name, timeout),
-            (model_name, max(10, timeout - 5)),
-            (os.getenv("GEMINI_FALLBACK_MODEL", "gemini-1.5-flash"), max(10, timeout - 10)),
+            (os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash"), max(10, timeout - 2)),
+            ("gemini-2.0-flash", max(10, timeout - 4)),
+            ("gemini-1.5-flash-8b", max(10, timeout - 6)),
+            ("gemini-1.0-pro-vision", max(10, timeout - 8)),
         ]
         for mdl, tmo in attempts:
             try:
@@ -71,8 +77,47 @@ async def analyze_image(image: UploadFile = File(...)):
             except Exception:
                 continue
         if not text:
-            description = "Analysis temporarily unavailable. Please try Analyze Again."
-            return JSONResponse(content={"status": "timeout_fallback", "description": description, "issues": [], "labels": ["analysis-timeout"]})
+            # Build local heuristic fallback instead of timeout label
+            try:
+                probe = Image.open(BytesIO(content)).convert("RGB")
+                w, h = probe.size
+                # sample central horizontal band
+                y0 = int(h * 0.45)
+                y1 = int(h * 0.55)
+                band = probe.crop((0, y0, w, y1))
+                # count brown-ish pixels (simple heuristic)
+                brown = 0
+                total = (y1 - y0) * w
+                px = band.load()
+                for x in range(0, w, max(1, w // 512)):
+                    for y in range(0, (y1 - y0), max(1, (y1 - y0) // 64)):
+                        r, g, b = px[x, y]
+                        if r > 90 and g > 60 and b < 90 and (r - b) > 25:
+                            brown += 1
+                brown_ratio = brown / max(1, (w // max(1, w // 512)) * ((y1 - y0) // max(1, (y1 - y0) // 64)))
+            except Exception:
+                brown_ratio = 0.0
+
+            issue_type_fb = "other"
+            confidence_fb = 30
+            labels_fb = []
+            if brown_ratio > 0.25:
+                issue_type_fb = "tree_fallen"
+                confidence_fb = 75
+                labels_fb.append("fallen-tree")
+            else:
+                labels_fb.append("analysis-fallback")
+
+            description = "AI Analysis: Fallback heuristic used."
+            return JSONResponse(content={
+                "status": "timeout_fallback",
+                "description": description,
+                "issues": [],
+                "labels": labels_fb,
+                "confidence": confidence_fb,
+                "issue_type": issue_type_fb,
+                "severity": "medium" if issue_type_fb != "fire" else "high"
+            })
 
         description = text.strip()
         issues = []

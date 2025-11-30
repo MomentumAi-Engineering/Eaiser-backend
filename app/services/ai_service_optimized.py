@@ -89,11 +89,16 @@ CACHE_TTL = {
 }
 
 # Add a safe model getter with fallbacks
+_MODEL = None
 
 def get_gemini_model():
     model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    global _MODEL
+    if _MODEL is not None:
+        return _MODEL
     try:
-        return genai.GenerativeModel(model_name)
+        _MODEL = genai.GenerativeModel(model_name)
+        return _MODEL
     except Exception as e:
         logger.warning(f"{model_name} not available for current API version; attempting fallbacks: {e}")
         for alt in [
@@ -105,7 +110,8 @@ def get_gemini_model():
         ]:
             try:
                 logger.info(f"Trying fallback model: {alt}")
-                return genai.GenerativeModel(alt)
+                _MODEL = genai.GenerativeModel(alt)
+                return _MODEL
             except Exception as e2:
                 logger.warning(f"Fallback model {alt} failed: {e2}")
         raise
@@ -211,7 +217,7 @@ async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: i
     """Generate AI report asynchronously with timeout control"""
     # Use environment variable for production timeout, fallback to 5 seconds for development
     if timeout is None:
-        timeout = int(os.getenv('AI_TIMEOUT', '15'))
+        timeout = int(os.getenv('AI_TIMEOUT', '8'))
     
     def _generate_report():
         try:
@@ -370,21 +376,10 @@ async def generate_report_optimized(
         f"{display_address}. Zip: {zip_code}" if zip_code else display_address
     )
 
-    # Authority data with caching
-    authority_data = await get_authority_data_cached(zip_code, address, issue_type, latitude, longitude, category)
-    responsible_authorities = authority_data.get("responsible_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
-    available_authorities = authority_data.get("available_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
-
-    # Time and IDs
-    timezone_str = await get_timezone_cached(latitude, longitude)
-    timezone = pytz.timezone(timezone_str)
-    now = datetime.now(timezone)
-    local_time = now.strftime("%Y-%m-%d %H:%M")
-    utc_time = now.astimezone(pytz.UTC).strftime("%H:%M")
-    report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
-    report_id = f"eaiser-{now.year}-{report_number}"
-    image_filename = f"IMG1_{now.strftime('%Y%m%d_%H%M')}.jpg"
-    map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
+    # Authority data with caching (fetch in parallel later)
+    authority_data = None
+    responsible_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
+    available_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
 
     # Department mapping and normalization
     issue_department_map = await get_department_mapping_cached()
@@ -490,7 +485,8 @@ Keep the report under 200 words, professional, and specific to the issue type an
 """
 
     try:
-        # Generate AI report with timeout and fallbacks
+        # Generate AI report with timeout and fetch authorities concurrently
+        authority_task = asyncio.create_task(get_authority_data_cached(zip_code, address, issue_type, latitude, longitude, category))
         ai_text = await generate_ai_report_async(prompt, image_content)
         logger.info(f"Gemini optimized report output: {ai_text[:200]}...")
 
@@ -577,6 +573,13 @@ Keep the report under 200 words, professional, and specific to the issue type an
             report["template_fields"]["confidence"] = int(round(float(ov_conf if ov_conf is not None else confidence)))
         except Exception:
             report["template_fields"]["confidence"] = int(round(confidence))
+        try:
+            if authority_data is None:
+                authority_data = await authority_task
+            responsible_authorities = authority_data.get("responsible_authorities", responsible_authorities)
+            available_authorities = authority_data.get("available_authorities", available_authorities)
+        except Exception:
+            pass
         report["responsible_authorities_or_parties"] = responsible_authorities
         report["available_authorities"] = available_authorities
 

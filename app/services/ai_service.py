@@ -33,11 +33,16 @@ else:
         GEMINI_API_KEY = None
 
 # Add a safe model getter with fallbacks
+_MODEL = None
 
 def get_gemini_model():
     model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    global _MODEL
+    if _MODEL is not None:
+        return _MODEL
     try:
-        return genai.GenerativeModel(model_name)
+        _MODEL = genai.GenerativeModel(model_name)
+        return _MODEL
     except Exception as e:
         logger.warning(f"{model_name} not available for current API version; attempting fallbacks: {e}")
         for alt in [
@@ -49,7 +54,8 @@ def get_gemini_model():
         ]:
             try:
                 logger.info(f"Trying fallback model: {alt}")
-                return genai.GenerativeModel(alt)
+                _MODEL = genai.GenerativeModel(alt)
+                return _MODEL
             except Exception as e2:
                 logger.warning(f"Fallback model {alt} failed: {e2}")
         raise
@@ -170,7 +176,11 @@ Return JSON with:
 Ensure the issue_type matches one of the specified options. For descriptions mentioning size (e.g., "2 ft wide") or safety risks (e.g., "cause cars to swerve"), prioritize "pothole" with high confidence. Provide only valid JSON without explanation.
 """
             # Run Gemini API call in a separate thread
-            response = await asyncio.to_thread(model.generate_content, [prompt, image, f"Description: {description}"])
+            timeout = int(os.getenv('AI_TIMEOUT', '8'))
+            response = await asyncio.wait_for(
+                asyncio.to_thread(model.generate_content, [prompt, image, f"Description: {description}"]),
+                timeout=timeout
+            )
             logger.info(f"Gemini classification raw output (attempt {attempt + 1}): {response.text}")
             # Extract and validate JSON
             json_match = re.search(r'\{[\s\S]*\}', response.text)
@@ -413,7 +423,11 @@ Return this structure:
 Keep the report under 200 words, professional, and specific to the issue type and description.
 """
             # Run Gemini API call
-            response = await asyncio.to_thread(model.generate_content, [prompt, Image.open(io.BytesIO(image_content))])
+            timeout = int(os.getenv('AI_TIMEOUT', '8'))
+            response = await asyncio.wait_for(
+                asyncio.to_thread(model.generate_content, [prompt, Image.open(io.BytesIO(image_content))]),
+                timeout=timeout
+            )
             logger.info(f"Gemini report output (attempt {attempt + 1}): {response.text}")
 
             # Extract and validate JSON
