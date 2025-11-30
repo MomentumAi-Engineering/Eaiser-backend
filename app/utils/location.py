@@ -81,6 +81,40 @@ def get_authority(address: str, issue_type: str, latitude: float, longitude: flo
             "responsible_authorities": default_authorities,
             "available_authorities": default_available
         })
+
+        # Enhance fallback using department mapping when zip is not provided
+        try:
+            dept_map = load_json_data("issue_department_map.json")
+            departments = dept_map.get(issue_type, dept_map.get(_canonical_issue(issue_type), [])) or []
+            if isinstance(departments, str):
+                departments = [departments]
+            dept_defaults = {
+                "public_works": "City Public Works",
+                "sanitation": "Sanitation Department",
+                "fire": "Fire Department",
+                "police": "Police Department",
+                "animal_control": "Animal Control",
+                "environment": "Environmental Department",
+                "water_utility": "Water Utility",
+                "code_enforcement": "Code Enforcement",
+                "transportation": "Transportation Department",
+                "building_inspection": "Building Inspection",
+                "property_management": "Property Management",
+                "emergency": "Emergency Services",
+                "general": "City Department"
+            }
+            # Build department-based authorities (generic emails/timezone)
+            dept_authorities = [
+                {"name": dept_defaults.get(d, d.replace("_", " ").title()), "email": "eaiser@momntumai.com", "type": d, "timezone": timezone}
+                for d in departments if isinstance(d, str)
+            ]
+            if dept_authorities:
+                # Prepend first department as responsible lead
+                result["responsible_authorities"] = dept_authorities[:1] + result["responsible_authorities"]
+                # Extend available authorities with all departments
+                result["available_authorities"] = dept_authorities + result["available_authorities"]
+        except Exception:
+            pass
         logger.info(f"Authorities for issue type {issue_type} at {address} (timezone: {timezone}): {[auth['name'] for auth in result['responsible_authorities']]}")
         return result
     except Exception as e:

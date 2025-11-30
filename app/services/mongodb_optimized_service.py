@@ -95,6 +95,9 @@ class OptimizedMongoDBService:
         self.error_count = 0
         self.total_query_time = 0
         
+        # Connection lock
+        self._connect_lock = asyncio.Lock()
+        
         # Collection names
         self.collections = {
             'issues': 'issues',
@@ -141,56 +144,76 @@ class OptimizedMongoDBService:
         Returns:
             bool: True if connection successful, False otherwise
         """
-        try:
-            # Primary client for writes (with safe options)
-            self.primary_client = AsyncIOMotorClient(
-                self.mongo_uri,
-                serverSelectionTimeoutMS=5000,
-                connectTimeoutMS=10000,
-                socketTimeoutMS=20000,
-                maxPoolSize=200,
-                minPoolSize=20,
-                maxIdleTimeMS=30000,
-                waitQueueTimeoutMS=5000,
-                retryWrites=True,
-                compressors=['zlib'],
-            )
-            
-            # Secondary client for reads (prefer secondary)
-            self.read_client = AsyncIOMotorClient(
-                self.mongo_uri,
-                serverSelectionTimeoutMS=3000,
-                connectTimeoutMS=8000,
-                socketTimeoutMS=15000,
-                maxPoolSize=300,
-                minPoolSize=30,
-                maxIdleTimeMS=45000,
-                waitQueueTimeoutMS=3000,
-                compressors=['zlib'],
-                read_preference=ReadPreference.SECONDARY_PREFERRED,
-            )
-            
-            # Test connections
-            await self.primary_client.admin.command('ping')
-            await self.read_client.admin.command('ping')
-            
-            # Initialize databases
-            self.db = self.primary_client[self.db_name]
-            self.read_db = self.read_client[self.db_name]
-            
-            # Create indexes for optimal performance
-            await self._create_indexes()
-            
-            logger.info(f"✅ MongoDB optimized connections established")
-            logger.info(f"📊 Database: {self.db_name}")
-            logger.info(f"🔧 Write pool: maxPoolSize=200, Read pool: maxPoolSize=300")
-            logger.info(f"⚡ Read/Write splitting enabled for 1 lakh+ users")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to connect to MongoDB: {str(e)}")
-            return False
+        async with self._connect_lock:
+            # Check if already connected
+            if self.db is not None:
+                return True
+
+            try:
+                # Close existing clients if any (cleanup)
+                if self.primary_client:
+                    self.primary_client.close()
+                if self.read_client:
+                    self.read_client.close()
+
+                # Primary client for writes (with safe options)
+                self.primary_client = AsyncIOMotorClient(
+                    self.mongo_uri,
+                    serverSelectionTimeoutMS=5000,
+                    connectTimeoutMS=10000,
+                    socketTimeoutMS=20000,
+                    maxPoolSize=200,
+                    minPoolSize=20,
+                    maxIdleTimeMS=30000,
+                    waitQueueTimeoutMS=5000,
+                    retryWrites=True,
+                    compressors=['zlib'],
+                )
+                
+                # Secondary client for reads (prefer secondary)
+                self.read_client = AsyncIOMotorClient(
+                    self.mongo_uri,
+                    serverSelectionTimeoutMS=3000,
+                    connectTimeoutMS=8000,
+                    socketTimeoutMS=15000,
+                    maxPoolSize=300,
+                    minPoolSize=30,
+                    maxIdleTimeMS=45000,
+                    waitQueueTimeoutMS=3000,
+                    compressors=['zlib'],
+                    read_preference=ReadPreference.SECONDARY_PREFERRED,
+                )
+                
+                # Test connections
+                await self.primary_client.admin.command('ping')
+                await self.read_client.admin.command('ping')
+                
+                # Initialize databases
+                self.db = self.primary_client[self.db_name]
+                self.read_db = self.read_client[self.db_name]
+                
+                # Create indexes for optimal performance
+                await self._create_indexes()
+                
+                logger.info(f"✅ MongoDB optimized connections established")
+                logger.info(f"📊 Database: {self.db_name}")
+                logger.info(f"🔧 Write pool: maxPoolSize=200, Read pool: maxPoolSize=300")
+                logger.info(f"⚡ Read/Write splitting enabled for 1 lakh+ users")
+                
+                return True
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to connect to MongoDB: {str(e)}")
+                # Ensure we don't leave half-open clients
+                if self.primary_client:
+                    self.primary_client.close()
+                    self.primary_client = None
+                if self.read_client:
+                    self.read_client.close()
+                    self.read_client = None
+                self.db = None
+                self.read_db = None
+                return False
     
     async def disconnect(self):
         """Close MongoDB connections gracefully."""
@@ -263,16 +286,16 @@ class OptimizedMongoDBService:
             AsyncIOMotorCollection: Collection instance
         """
         db = self.read_db if read_only else self.db
+        
         if db is None:
-            # Attempt to reconnect once if clients are not initialized
+            # Attempt to reconnect safely
             logger.warning("MongoDB DB handle is None; attempting reconnect...")
-            try:
-                await self.connect()
-            except Exception as e:
-                logger.error(f"Reconnect failed: {e}")
-            db = self.read_db if read_only else self.db
+            if await self.connect():
+                db = self.read_db if read_only else self.db
+            
             if db is None:
                 raise ConnectionFailure("MongoDB database not initialized")
+                
         return db[self.collections.get(collection_name, collection_name)]
     
     async def find_with_cache(self, collection_name: str, filter_dict: Dict, 

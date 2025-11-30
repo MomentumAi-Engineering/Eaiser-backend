@@ -294,6 +294,41 @@ async def send_authority_email(
     embedded_images.append(("issue_image", issue_image_base64, "image/jpeg"))
     
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
+
+    # --- CLEAN + AUTO SHORT DESCRIPTION (2–3 sentences) ---
+    import re
+
+    # Raw description from AI
+    full_desc = report.get('issue_overview', {}).get('summary_explanation', 'N/A')
+
+    # Remove unwanted prefixes from AI model output
+    clean_desc = re.sub(
+        r"(AI Analysis:|\*\*Issue Description:\*\*|\*\*Concise Issue Description:\*\*|\*\*Description:\*\*)",
+        "",
+        full_desc,
+        flags=re.IGNORECASE
+    ).strip()
+
+    # Remove all markdown bold markers **text**
+    clean_desc = re.sub(r"\*\*", "", clean_desc).strip()
+
+    # Remove multiple spaces
+    clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+    # Replace double periods
+    clean_desc = clean_desc.replace("..", ".")
+
+    # Split into sentences
+    sentences = clean_desc.split('.')
+
+    # Keep only first 2–3 sentences
+    short_description = '. '.join([s.strip() for s in sentences if s.strip()][:3])
+
+    # Ensure full stop at end
+    if not short_description.endswith('.'):
+        short_description += '.'
+
+
     
     feedback_value = report.get('detailed_analysis', {}).get('feedback')
     feedback_str = str(feedback_value) if feedback_value is not None else 'None'
@@ -333,434 +368,224 @@ async def send_authority_email(
 <!DOCTYPE html>
 <html>
 <head>
-    <style>
-        @keyframes fadeIn {{ 0% {{ opacity: 0; }} 100% {{ opacity: 1; }} }}
-        @keyframes gradientBG {{ 0% {{ background-position: 0% 50%; }} 50% {{ background-position: 100% 50%; }} 100% {{ background-position: 0% 50%; }} }}
-        @keyframes slideIn {{ 0% {{ transform: translateY(20px); opacity: 0; }} 100% {{ transform: translateY(0); opacity: 1; }} }}
-        @keyframes pulse {{ 0% {{ transform: scale(1); }} 50% {{ transform: scale(1.05); }} 100% {{ transform: scale(1); }} }}
-        
-        body {{ 
-            font-family: 'Segoe UI', Arial, sans-serif; 
-            animation: fadeIn 1s ease-in; 
-            background: linear-gradient(-45deg, #f8f9fa, #e9ecef, #dee2e6, #f8f9fa); 
-            background-size: 400% 400%; 
-            animation: gradientBG 15s ease infinite; 
-            margin: 0; 
-            padding: 20px; 
-            color: #333; 
-        }}
-        
-        .container {{ 
-            max-width: 700px; 
-            margin: 0 auto; 
-            background: white; 
-            border-radius: 12px; 
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); 
-            overflow: hidden; 
-            animation: slideIn 0.8s ease-out;
-        }}
-        
-        .content {{ 
-            padding: 30px; 
-        }}
-        
-        .banner {{ 
-            background: linear-gradient(90deg, #1a365d, #2a4365, #2c5282); 
-            color: white; 
-            padding: 20px; 
-            text-align: center; 
-            font-weight: bold; 
-            font-size: 18px;
-            position: relative;
-            overflow: hidden;
-        }}
-        
-        .banner::before {{
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(45deg, rgba(255,255,255,0.1) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.1) 75%, transparent 75%, transparent);
-            background-size: 30px 30px;
-            animation: slide 20s linear infinite;
-        }}
-        
-        @keyframes slide {{
-            0% {{ background-position: 0 0; }}
-            100% {{ background-position: 30px 30px; }}
-        }}
-        
-        .header {{ 
-            text-align: center; 
-            padding: 20px 0; 
-            position: relative;
-        }}
-        
-        .logo {{ 
-            height: 60px; 
-            animation: pulse 2s infinite; 
-        }}
-        
-        .section {{ 
-            margin-bottom: 25px; 
-            border-bottom: 1px solid #eee; 
-            padding-bottom: 20px; 
-            animation: slideIn 0.8s ease-out;
-            animation-fill-mode: both;
-        }}
-        
-        .section:nth-child(1) {{ animation-delay: 0.1s; }}
-        .section:nth-child(2) {{ animation-delay: 0.2s; }}
-        .section:nth-child(3) {{ animation-delay: 0.3s; }}
-        .section:nth-child(4) {{ animation-delay: 0.4s; }}
-        .section:nth-child(5) {{ animation-delay: 0.5s; }}
-        .section:nth-child(6) {{ animation-delay: 0.6s; }}
-        
-        .section-title {{ 
-            color: #1a365d; 
-            font-weight: 600; 
-            margin-bottom: 15px; 
-            display: flex; 
-            align-items: center;
-            font-size: 18px;
-        }}
-        
-        .priority-box {{ 
-            display: inline-block; 
-            padding: 5px 12px; 
-            border-radius: 20px; 
-            font-weight: bold; 
-            margin-left: 10px; 
-            font-size: 14px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        
-        .high-priority {{ 
-            background-color: #e53e3e; 
-            color: white; 
-        }}
-        
-        .medium-priority {{ 
-            background-color: #dd6b20; 
-            color: white; 
-        }}
-        
-        .low-priority {{ 
-            background-color: #38a169; 
-            color: white; 
-        }}
-        
-        .emoji {{ 
-            font-size: 22px; 
-            margin-right: 10px; 
-            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
-        }}
-        
-        .footer {{ 
-            text-align: center; 
-            font-size: 12px; 
-            color: #777; 
-            padding: 20px; 
-            background: #f7fafc; 
-        }}
-        
-        .ai-tag {{ 
-            background: #ebf8ff; 
-            padding: 10px 15px; 
-            border-radius: 8px; 
-            display: inline-block; 
-            margin: 10px 0; 
-            font-style: italic; 
-            border-left: 4px solid #3182ce;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        }}
-        
-        .confidence-meter {{ 
-            height: 12px; 
-            background: #e2e8f0; 
-            border-radius: 6px; 
-            margin-top: 8px; 
-            overflow: hidden; 
-            box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
-        }}
-        
-        .confidence-level {{ 
-            height: 100%; 
-            background: linear-gradient(90deg, #3182ce, #63b3ed); 
-            width: {confidence}%; 
-            border-radius: 6px;
-            box-shadow: 0 0 8px rgba(49, 130, 206, 0.5);
-        }}
-        
-        .issue-image {{ 
-            max-width: 100%; 
-            height: auto; 
-            border-radius: 8px; 
-            margin-top: 15px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            transition: transform 0.3s ease;
-        }}
-        
-        .issue-image:hover {{
-            transform: scale(1.02);
-        }}
-        
-        .actions-container {{
-            background: linear-gradient(to right, #f7fafc, #edf2f7);
-            border-radius: 10px;
-            padding: 20px;
-            margin-top: 15px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            border-left: 4px solid #3182ce;
-        }}
-        
-        .action-item {{
-            display: flex;
-            align-items: flex-start;
-            margin-bottom: 15px;
-            padding: 12px 15px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }}
-        
-        .action-item:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }}
-        
-        .action-item:last-child {{
-            margin-bottom: 0;
-        }}
-        
-        .action-icon {{
-            background: #3182ce;
-            color: white;
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 15px;
-            flex-shrink: 0;
-            font-weight: bold;
-            box-shadow: 0 2px 4px rgba(49, 130, 206, 0.3);
-        }}
-        
-        .action-text {{
-            font-size: 15px;
-            line-height: 1.5;
-        }}
-        
-        .action-urgency {{
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: bold;
-            margin-left: 8px;
-            color: white;
-        }}
-        
-        .urgency-immediate {{
-            background-color: #e53e3e;
-        }}
-        
-        .urgency-high {{
-            background-color: #dd6b20;
-        }}
-        
-        .urgency-medium {{
-            background-color: #3182ce;
-        }}
-        
-        .urgency-low {{
-            background-color: #38a169;
-        }}
-        
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }}
-        
-        tr {{
-            border-bottom: 1px solid #eee;
-        }}
-        
-        td {{
-            padding: 12px 0;
-        }}
-        
-        td:first-child {{
-            font-weight: 600;
-            color: #4a5568;
-        }}
-        
-        td:last-child {{
-            text-align: right;
-        }}
-        
-        .cta-box {{
-            background: linear-gradient(135deg, #ebf8ff, #bee3f8);
-            padding: 20px;
-            border-radius: 10px;
-            margin-top: 25px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            border-left: 4px solid #3182ce;
-        }}
-        
-        .cta-title {{
-            font-weight: bold;
-            margin-bottom: 10px;
-            color: #2c5282;
-            font-size: 16px;
-        }}
-        
-        .btn {{
-            display: inline-block;
-            background: #3182ce;
-            color: white;
-            padding: 8px 16px;
-            border-radius: 6px;
-            text-decoration: none;
-            margin-top: 10px;
-            font-weight: 500;
-            transition: background 0.2s ease;
-        }}
-        
-        .btn:hover {{
-            background: #2c5282;
-        }}
-        
-        .btn-secondary {{
-            background: #718096;
-        }}
-        
-        .btn-secondary:hover {{
-            background: #4a5568;
-        }}
-    </style>
+<meta charset="UTF-8">
+
+<style>
+
+    /* ---------------------------------------------------------
+       UNIVERSAL ANIMATIONS
+    --------------------------------------------------------- */
+
+    @keyframes fadeIn {{
+        from {{ opacity: 0; }}
+        to   {{ opacity: 1; }}
+    }}
+
+    @keyframes slideIn {{
+        0%   {{ transform: translateY(25px); opacity: 0; }}
+        100% {{ transform: translateY(0); opacity: 1; }}
+    }}
+
+    @keyframes shimmerMove {{
+        0%   {{ background-position: 0% 0%; }}
+        100% {{ background-position: 200% 0%; }}
+    }}
+
+    @keyframes glowPulse {{
+        0%   {{ box-shadow: 0 0 4px rgba(255,204,51,0.3); }}
+        50%  {{ box-shadow: 0 0 16px rgba(255,204,51,1); }}
+        100% {{ box-shadow: 0 0 4px rgba(255,204,51,0.3); }}
+    }}
+
+    @keyframes fillBar {{
+        from {{ width: 0%; }}
+        to   {{ width: {confidence}%; }}
+    }}
+
+    /* ---------------------------------------------------------
+       PAGE BASE
+    --------------------------------------------------------- */
+
+    body {{
+        background: #0b0b0f;
+        font-family: Segoe UI, Arial, sans-serif;
+        padding: 25px;
+        color: #f6f6f6;
+        animation: fadeIn 0.8s ease-out;
+    }}
+
+    .container {{
+        max-width: 720px;
+        margin: auto;
+        background: #121217;
+        border-radius: 12px;
+        padding: 30px;
+        border: 1px solid #1f1f26;
+        animation: slideIn 0.9s ease-out;
+    }}
+
+    /* ---------------------------------------------------------
+       SECTION TITLE
+    --------------------------------------------------------- */
+
+    .section-title {{
+        font-size: 20px;
+        font-weight: 700;
+        color: #f6c521;
+        margin-bottom: 12px;
+        text-shadow: 0 0 8px rgba(246,197,33,0.4);
+    }}
+
+    .label {{ font-weight: 600; color:#cfcfcf; }}
+    .value {{ color:#fefefe; }}
+
+    /* ---------------------------------------------------------
+       CONFIDENCE BAR (Email Safe)
+    --------------------------------------------------------- */
+
+    .conf-container {{
+        width: 100%;
+        height: 14px;
+        background: #1c1c23;
+        border: 1px solid #292933;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-top: 6px;
+        position: relative;
+    }}
+
+    .conf-fill {{
+        height: 100%;
+        width: 0%;
+        border-radius: 10px;
+        background: linear-gradient(90deg, #ffcc33, #ffdf72, #ffcc33);
+        animation:
+            fillBar 2s ease-out forwards,
+            shimmerMove 2s linear infinite;
+        background-size: 200% 100%;
+        position: relative;
+    }}
+
+    .conf-fill::after {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 10px;
+        animation: glowPulse 2s infinite ease-in-out;
+    }}
+
+    /* SCANLINES */
+    .scanlines {{
+        width: 100%;
+        height: 5px;
+        border-radius: 4px;
+        margin-top: 4px;
+        background: linear-gradient(90deg, transparent, rgba(246,197,33,0.18), transparent);
+        background-size: 200% 100%;
+        animation: shimmerMove 3s linear infinite;
+    }}
+
+    /* ---------------------------------------------------------
+       IMAGE
+    --------------------------------------------------------- */
+
+    .issue-image {{
+        width: 100%;
+        margin-top: 10px;
+        border-radius: 8px;
+        border: 1px solid #2d2d33;
+    }}
+
+    hr {{
+        border: none;
+        border-bottom: 1px solid #23232a;
+        margin: 25px 0;
+    }}
+
+</style>
+
 </head>
 <body>
-    <div class="container">
-        <div class="banner">
-            🚨 {'Updated Report for Review' if is_user_review else 'New Infrastructure Issue Detected'} 🚨
-        </div>
-        <div class="content">
-            <div class="header">
-                {'<img src="cid:momentumai_logo" alt="MomentumAI Logo" class="logo">' if logo_base64 else '<h2 style="color: #1a365d;">MomentumAI</h2>'}
-                <h2 style="color: #1a365d; margin-top: 10px;">eaiser AI Report</h2>
-            </div>
-            
-            <div class="section">
-                <div class="section-title">
-                    <span class="emoji">👋</span> {'Hello User' if is_user_review else 'Hello Team'}
-                </div>
-                <p>{'Please review the updated report for a' if is_user_review else 'Our AI has detected a'} <strong>{issue_type.title()}</strong> issue{' that requires your attention' if not is_user_review else ''}.</p>
-                {'<p><strong>Decline Reason:</strong> ' + decline_reason + '</p>' if decline_reason and is_user_review else ''}
-            </div>
-            
-            <div class="section">
-                <div class="section-title">
-                    <span class="emoji">📜</span> Executive Summary
-                </div>
-                <p>{report.get('unified_report', {}).get('summary_text', report.get('issue_overview', {}).get('summary_explanation', 'No summary available'))}</p>
-            </div>
-            
-            <div class="section">
-                <div class="section-title">
-                    <span class="emoji">📍</span> Location Details
-                </div>
-                <p><strong>Address:</strong> {final_address}</p>
-                <p><strong>Zip Code:</strong> {zip_code}</p>
-                <p><strong>Coordinates:</strong> {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}</p>
-                <p><strong>Map Link:</strong> <a href="{map_link}" target="_blank" style="color: #3182ce; text-decoration: none;">{map_link if map_link.startswith('http') else 'No coordinates provided'}</a></p>
-            </div>
-            
-            <div class="section">
-                <div class="section-title">
-                    <span class="emoji">📋</span> Report Summary
-                </div>
-                <table>
-                    <tr>
-                        <td>Report ID</td>
-                        <td>{report.get('template_fields', {}).get('oid', 'N/A')}</td>
-                    </tr>
-                    <tr>
-                        <td>Issue Type</td>
-                        <td>{category}</td>
-                    </tr>
-                    <tr>
-                        <td>Time Reported</td>
-                        <td>{timestamp_formatted} {timezone_name}</td>
-                    </tr>
-                    <tr>
-                        <td>Priority</td>
-                        <td>
-                            <span class="priority-box {'high-priority' if report.get('template_fields', {}).get('priority', 'Medium') == 'High' else 'medium-priority' if report.get('template_fields', {}).get('priority', 'Medium') == 'Medium' else 'low-priority'}">
-                                {report.get('template_fields', {}).get('priority', 'Medium')} Priority
-                            </span>
-                        </td>
-                    </tr>
-                </table>
-            </div>
-            
-            <div class="section">
-                <div class="section-title">
-                    <span class="emoji">🔍</span> AI Analysis
-                </div>
-                <div class="ai-tag">
-                    "{report.get('template_fields', {}).get('ai_tag', 'N/A')}"
-                </div>
-                <p><strong>Confidence Level:</strong> {confidence}%</p>
-                <div class="confidence-meter">
-                    <div class="confidence-level"></div>
-                </div>
-                <p><strong>Potential Impact:</strong> {report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')}</p>
-                <p><strong>Urgency Reason:</strong> {report.get('detailed_analysis', {}).get('public_safety_risk', 'Unknown').title()} risk to public safety</p>
-                <p><strong>Location Context:</strong> {final_address}</p>
-                {'<p><strong>Feedback:</strong> ' + feedback_str + '</p>' if is_user_review else ''}
-            </div>
-            
-            {"""
-            <div class="section">
-                <div class="section-title">
-                    <span class="emoji">🛠️</span> Recommended Actions
-                </div>
-                <div class="actions-container">
-                    """ + recommended_actions_html + """
-                </div>
-            </div>
-            """ if not is_user_review else ''}
-            
-            <div class="section">
-                <div class="section-title">
-                    <span class="emoji">📸</span> Photo Evidence
-                </div>
-                <img src="cid:issue_image" alt="Issue Image" class="issue-image">
-                <p><small>File: {report.get('template_fields', {}).get('image_filename', 'N/A')}</small></p>
-            </div>
-            
-            <div class="cta-box">
-                <div class="cta-title">📩 {'Action Required' if is_user_review else 'Need to respond?'}</div>
-                <p>{'Please review the updated report and either accept it or provide further feedback by declining with a reason.' if is_user_review else 'Please take appropriate action and contact us if needed.'} Reply to this email or forward to <a href="mailto:eaiser@momntumai.com" style="color: #3182ce;">eaiser@momntumai.com</a> with your comments.</p>
-                <a href="{map_link}" class="btn btn-secondary">View on Map</a>
-            </div>
-        </div>
-        
-        <div class="footer">
-            <p>This report was submitted via eaiser AI by MomntumAI</p>
-            <p>© {report.get('template_fields', {}).get('timestamp', datetime.utcnow().strftime('%Y-%m-%d')).split('-')[0]} MomntumAI | All Rights Reserved</p>
-            <p style="font-size: 10px; color: #aaa;">This is an automated message. Please do not reply directly to this email.</p>
-        </div>
+
+<div class="container">
+
+    <!-- HEADER -->
+    <h1 style="color:#f6c521; margin:0 0 5px 0;">EAiSER CIVIC – Incident Report</h1>
+    <p style="color:#8f8f8f; margin-top:0;">Automated Issue Analysis & Routing System</p>
+    <hr>
+
+    <!-- 1. SUMMARY -->
+    <div>
+        <div class="section-title">1. Incident Summary</div>
+
+        <p><span class="label">Issue:</span> <span class="value">{issue_type}</span></p>
+
+        <p><span class="label">Description:</span><br>
+            <span class="value">{short_description}</span>
+        </p>
+
+        <p><span class="label">Location:</span> <span class="value">{final_address}</span>
+            — <a href="{map_link}" style="color:#f6c521;">View Map</a></p>
+
+        <p><span class="label">Priority:</span>
+            {report.get('template_fields', {}).get('priority')}</p>
+
+        <p><span class="label">Reported:</span> {timestamp_formatted} {timezone_name}</p>
     </div>
+
+    <hr>
+
+    <!-- 2. IMAGE -->
+    <div>
+        <div class="section-title">2. Image Evidence</div>
+        <img src="cid:issue_image" class="issue-image">
+    </div>
+
+    <hr>
+
+    <!-- 3. AUTHORITY -->
+    <div>
+        <div class="section-title">3. Recommended Authority</div>
+        <p><span class="label">Route To:</span>
+            {", ".join([auth["name"] for auth in authorities])}
+        </p>
+    </div>
+
+    <hr>
+
+    <!-- 4. SYSTEM METADATA -->
+    <div>
+        <div class="section-title">4. System Metadata</div>
+
+        <p><span class="label">Report ID:</span>
+            {report.get('template_fields', {}).get('oid', 'N/A')}</p>
+
+        <p><span class="label">AI Confidence:</span> {confidence}%</p>
+
+        <div class="conf-container">
+            <div class="conf-fill"></div>
+        </div>
+
+        <div class="scanlines"></div>
+
+        <p style="margin-top:15px;">
+            <span class="label">Coordinates:</span> {latitude}, {longitude}
+        </p>
+    </div>
+
+    <hr>
+
+    <!-- FOOTER -->
+    <p style="font-size:12px; color:#888;">
+        This report was generated automatically by EAiSER AI.<br>
+        © 2025 MomntumAi LLC — All Rights Reserved.
+    </p>
+
+</div>
+
 </body>
 </html>
+
 """
     city_val = final_address.split(',')[0] if final_address else "Unknown"
     state_val = "Unknown"
@@ -779,49 +604,162 @@ async def send_authority_email(
     html_content = f"""
 <!DOCTYPE html>
 <html>
-<body style=\"font-family:Segoe UI,Arial,sans-serif;color:#1a202c;line-height:1.5\">
-  <h2 style=\"margin:0 0 10px\">EAiSER INFRASTRUCTURE ALERT</h2>
-  <hr style=\"border:none;border-top:1px solid #e2e8f0\"/>
-  <h3 style=\"margin:15px 0 8px\">SUMMARY</h3>
-  <p>Our AI detected a {issue_type} in {city_val}, {state_val} (ZIP {zip_code}).<br/>
-  The image shows {report.get('issue_overview', {}).get('summary_explanation', 'N/A')}.<br/>
-  Based on the location and context, this incident has been classified as {severity_checkboxes} due to {', '.join([a for a in report.get('issue_overview', {}).get('detected_problems', [])]) or 'contextual risks'}.</p>
-  <p>Report ID: {report_oid}</p>
-  <hr style=\"border:none;border-top:1px solid #e2e8f0\"/>
-  <h3 style=\"margin:15px 0 8px\">LOCATION DETAILS</h3>
-  <table style=\"width:100%;border-collapse:collapse\">
-    <tr><td>Address</td><td>{final_address}</td></tr>
-    <tr><td>City</td><td>{city_val}</td></tr>
-    <tr><td>State</td><td>{state_val}</td></tr>
-    <tr><td>Zip Code</td><td>{zip_code}</td></tr>
-    <tr><td>Coordinates</td><td>{latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}</td></tr>
-    <tr><td>Map Link</td><td><a href=\"{map_link}\">View on Google Maps</a></td></tr>
-  </table>
-  <hr style=\"border:none;border-top:1px solid #e2e8f0\"/>
-  <h3 style=\"margin:15px 0 8px\">AI REPORT SUMMARY</h3>
-  <table style=\"width:100%;border-collapse:collapse\">
-    <tr><td>Issue Type</td><td>{issue_type}</td></tr>
-    <tr><td>AI Confidence</td><td>{confidence_percent}%</td></tr>
-    <tr><td>Priority</td><td>{severity_checkboxes}</td></tr>
-    <tr><td>Time Reported</td><td>{timestamp_formatted} {timezone_name}</td></tr>
-    <tr><td>Report ID</td><td>{report_oid}</td></tr>
-    <tr><td>Impact Summary</td><td>{impact_desc}</td></tr>
-    <tr><td>Location Context</td><td>{location_ctx}</td></tr>
-  </table>
-  <hr style=\"border:none;border-top:1px solid #e2e8f0\"/>
-  <h3 style=\"margin:15px 0 8px\">PHOTO EVIDENCE</h3>
-  <p>File: {image_name}</p>
-  <img src=\"cid:issue_image\" alt=\"Issue\" style=\"max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:6px\"/>
-  <hr style=\"border:none;border-top:1px solid #e2e8f0\"/>
-  <h3 style=\"margin:15px 0 8px\">CONTACT & FOLLOW-UP</h3>
-  <p>Please review and address this issue as soon as feasible.<br/>
-  For questions or to confirm completion, contact support@momntumai.com.<br/>
-  <a href=\"{map_link}\">View Report on Map</a></p>
-  <hr style=\"border:none;border-top:1px solid #e2e8f0\"/>
-  <p style=\"font-size:12px;color:#718096\">Automated report generated via EAiSER AI by MomntumAI<br/>
-  © 2025 MomntumAI | All Rights Reserved</p>
+<head>
+<meta charset="UTF-8" />
+<title>EAiSER CIVIC – Incident Report</title>
+
+<style>
+  .container {{
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 20px;
+    background: #0b0b0f;
+    color: #f6f6f6;
+    font-family: Segoe UI, Arial, sans-serif;
+  }}
+  .card {{
+    background: #121217;
+    border: 1px solid #1f1f26;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 25px;
+  }}
+  h1, h2 {{
+    margin: 0 0 10px;
+    color: #f6c521;
+  }}
+  a {{
+    color: #f6c521;
+    text-decoration: none;
+  }}
+  .label {{
+    color: #dcdcdc;
+    font-weight: 600;
+  }}
+  hr {{
+    border: 0;
+    border-bottom: 1px solid #222;
+    margin: 20px 0;
+  }}
+
+  /* Confidence bar */
+  .conf-bar-container {{
+    background: #1b1b23;
+    border: 1px solid #2a2a33;
+    height: 14px;
+    width: 100%;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-top: 8px;
+  }}
+  .conf-bar-fill {{
+    height: 100%;
+    background: linear-gradient(90deg, #f6c521, #ffdf6a);
+    animation: loadConf 1.8s ease-out forwards;
+    width: 0%;
+  }}
+  @keyframes loadConf {{
+    0% {{ width: 0%; }}
+    100% {{ width: {confidence}%; }}
+  }}
+</style>
+
+</head>
+
+<body style="margin:0;padding:0;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0b0b0f;width:100%;margin:0;padding:0;">
+<tr>
+<td align="center" style="background:#0b0b0f;padding:20px;">
+
+<div class="container">
+
+  <h1>EAiSER CIVIC – Incident Report</h1>
+  <p style="color:#888;font-size:14px;margin-top:-6px;">
+    Automated Issue Analysis & Routing System
+  </p>
+  <hr />
+
+  <!-- INCIDENT SUMMARY -->
+  <div class="card">
+    <h2>1. Incident Summary</h2>
+
+    <p><span class="label">Issue:</span> {issue_type}</p>
+
+    <p><span class="label">Description:</span>
+       {short_description}
+    <span style="color:#777;font-size:12px;">(Auto-summary)</span>
+    </p>
+
+    <p><span class="label">Location:</span> {final_address}
+      <a href="{map_link}" target="_blank"> — View Map</a>
+    </p>
+
+    <p><span class="label">Priority:</span>
+      {report.get('issue_overview', {}).get('severity_label', 'N/A')}
+    </p>
+
+    <p><span class="label">Reported:</span> {timestamp_formatted}</p>
+
+    <p><span class="label">Submitted By:</span> {report.get('user_email','N/A')}</p>
+  </div>
+
+  <!-- IMAGE -->
+  <div class="card">
+    <h2>2. Image Evidence</h2>
+    <p style="color:#ccc;">Attached below:</p>
+    <img src="cid:issue_image"
+         style="max-width:100%;border-radius:6px;border:1px solid #2a2a33;" />
+  </div>
+
+  <!-- AUTHORITY -->
+  <div class="card">
+    <h2>3. Recommended Authority</h2>
+    <p><span class="label">Route To:</span>
+      {", ".join([auth["name"] for auth in authorities])}
+    </p>
+  </div>
+
+  <!-- SYSTEM METADATA -->
+  <div class="card">
+    <h2>4. System Metadata</h2>
+
+    <p><span class="label">Report ID:</span>
+      {report.get('template_fields', {}).get('oid', 'N/A')}
+    </p>
+
+    <p><span class="label">AI Confidence:</span> {confidence}%</p>
+
+    <div class="conf-bar-container">
+      <div class="conf-bar-fill"></div>
+    </div>
+
+    <br />
+
+    <p><span class="label">Coordinates:</span>
+       {latitude}, {longitude}
+    </p>
+  </div>
+
+  <hr />
+
+  <!-- FOOTER -->
+  <p style="font-size:12px;color:#888;line-height:1.6;">
+    This report was submitted through <strong style="color:#f6c521;">EAiSER CIVIC</strong>, powered by MomntumAi LLC.<br>
+    EAiSER analyzes images, classifies incidents, assigns priority and routes issues to relevant authorities.
+  </p>
+
+  <p style="font-size:11px;color:#555;">© 2025 MomntumAi LLC — All Rights Reserved.</p>
+
+</div>
+
+</td>
+</tr>
+</table>
+
 </body>
 </html>
+
 """
     errors = []
     successful_emails = []

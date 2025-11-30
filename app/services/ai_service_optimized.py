@@ -408,6 +408,21 @@ async def generate_report_optimized(
     prompt = f"""
 You are an AI assistant for eaiser AI, generating infrastructure issue reports.
 Analyze the input below and return a structured JSON report (no markdown, no explanation).
+
+Valid Issue Types:
+- Pothole, Road Damage, Broken Streetlight, Graffiti, Garbage, Vandalism
+- Open Drain, Blocked Drain, Flood, Fire, Illegal Construction, Tree Fallen
+- Public Toilet Issue, Stray Animals, Dead Animal, Animal Carcass, Animal Injury
+- Animal Accident, Wildlife Hit, Animal On Road, Animal Crash
+- Noise Pollution, Air Pollution, Water Leakage, Street Vendor Encroachment
+- Signal Malfunction, Waterlogging, Abandoned Vehicle, Vacant Lot Issue, Other
+
+CRITICAL INSTRUCTION ON FIRES:
+- Distinguish between "Dangerous Fire" (Wildfire, Building Fire, Out of Control) and "Controlled Fire" (Campfire, Bonfire, BBQ, Fire Pit, Religious Ceremony).
+- If the image shows a SAFE, CONTROLLED fire (e.g., inside a fire pit, people sitting around, BBQ grill, small religious fire), classify the Issue Type as "None" or "Other" and set issue_detected to false.
+- ONLY classify as "Fire" if it poses a threat to public safety (e.g., spreading, unattended in dry grass, structure burning).
+- IGNORE "Campfire", "Bonfire", "Fire Pit" unless they are clearly out of control.
+
 Input:
 - Issue Type: {issue_type.title()}
 - Severity: {severity}
@@ -438,7 +453,7 @@ Return ONLY JSON with actual values filled in (do NOT use template variables lik
   "ai_evaluation": {{
     "image_analysis": "Describe what is happening in the image and which visual cues support your conclusion.",
     "issue_detected": true|false,
-    "detected_issue_type": "Pothole|Tree|Graffiti|Fire|Road Damage|Animal|Other|None",
+    "detected_issue_type": "One of the Valid Issue Types listed above",
     "ai_confidence_percent": 0,
     "rationale": "Brief justification referencing image clarity and visual evidence. Use integer for ai_confidence_percent only (no %). If issue_detected is false, set ai_confidence_percent between 0 and 10; if true, set between 10 and 100 based on clarity and understanding."
   }},
@@ -467,7 +482,8 @@ Return ONLY JSON with actual values filled in (do NOT use template variables lik
     "device_type": "Mobile (Generic)",
     "map_link": "{map_link}",
     "zip_code": "{zip_code if zip_code else 'N/A'}",
-    "address": "{address if address else 'Not specified'}"
+    "address": "{address if address else 'Not specified'}",
+    "confidence": {confidence:.1f}
   }}
 }}
 Keep the report under 200 words, professional, and specific to the issue type and description.
@@ -528,6 +544,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
             tf.setdefault("map_link", map_link)
             tf.setdefault("zip_code", zip_code or "N/A")
             tf.setdefault("address", display_address)
+            tf.setdefault("confidence", int(round(confidence)))
             rep["template_fields"] = tf
             return rep
 
@@ -555,6 +572,11 @@ Keep the report under 200 words, professional, and specific to the issue type an
         report["template_fields"]["map_link"] = map_link
         report["template_fields"]["zip_code"] = zip_code if zip_code else "N/A"
         report["template_fields"]["address"] = display_address
+        try:
+            ov_conf = report.get("issue_overview", {}).get("confidence")
+            report["template_fields"]["confidence"] = int(round(float(ov_conf if ov_conf is not None else confidence)))
+        except Exception:
+            report["template_fields"]["confidence"] = int(round(confidence))
         report["responsible_authorities_or_parties"] = responsible_authorities
         report["available_authorities"] = available_authorities
 
@@ -630,7 +652,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
             except Exception:
                 conf_val = None
             danger_words = ["out of control","emergency","uncontrolled","explosion","collapse","wildfire","house fire","building fire","spread","spreading","structure","sirens"]
-            controlled_fire = ["campfire","bonfire","bon fire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","festival","celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage"]
+            controlled_fire = ["campfire","bonfire","bon fire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","festival","celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage","fireplace","hearth","wood stove","fire ring","camp fire","marshmallow","roasting","gathering","chairs around"]
             minor_words = ["minor","small","tiny","cosmetic","scratch","smudge","dust","stain","normal","benign"]
             has_danger = any(w in combined for w in danger_words)
             is_controlled = any(w in combined for w in controlled_fire)
@@ -674,7 +696,12 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 new_conf = conf_val if conf_val is not None else ai_eval.get("ai_confidence_percent") or 60
             new_conf = int(max(0, min(100, new_conf)))
             allowed_types = {
-                "pothole","road_damage","broken_streetlight","graffiti","garbage","vandalism","open_drain","blocked_drain","flood","fire","illegal_construction","tree_fallen","public_toilet_issue","stray_animals","dead_animal","animal_carcass","animal_injury","animal_accident","wildlife_hit","animal_on_road","animal_crash","noise_pollution","air_pollution","water_leakage","street_vendor_encroachment","signal_malfunction","waterlogging","abandoned_vehicle","vacant_lot_issue","other","unknown"
+                "pothole", "road_damage", "broken_streetlight", "graffiti", "garbage", "vandalism",
+                "open_drain", "blocked_drain", "flood", "fire", "illegal_construction", "tree_fallen",
+                "public_toilet_issue", "stray_animals", "dead_animal", "animal_carcass", "animal_injury",
+                "animal_accident", "wildlife_hit", "animal_on_road", "animal_crash", "noise_pollution",
+                "air_pollution", "water_leakage", "street_vendor_encroachment", "signal_malfunction",
+                "waterlogging", "abandoned_vehicle", "vacant_lot_issue", "other", "unknown"
             }
             ttype = (overview.get("type") or "").lower()
             if ttype and ttype not in allowed_types:
@@ -683,6 +710,9 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 ia = ai_eval.get("image_analysis") or ""
                 if "no public issue" not in ia.lower():
                     ai_eval["image_analysis"] = "I did not find any public issue."
+            # Clamp confidence for non-specific types
+            if ttype in ("other", "unknown", "none"):
+                new_conf = min(new_conf, 50)
             # Ensure target issue types have >=75 confidence unless controlled benign
             try:
                 ttype = (overview.get("type") or "").lower()
@@ -698,8 +728,20 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 is_target = any(tt in ttype for tt in target_types)
                 if is_target and not (is_controlled and not has_danger):
                     new_conf = max(new_conf, 75)
+                elif is_target and is_controlled and not has_danger:
+                    # Explicitly downgrade controlled fires even if they are target types
+                    new_conf = min(new_conf, 30)
+                    ai_eval["issue_detected"] = False
+                    overview["type"] = "None"
+                    if "no public issue" not in (ai_eval.get("image_analysis") or "").lower():
+                         ai_eval["image_analysis"] = f"Detected controlled fire ({overview.get('type')}); not a public safety issue."
             except Exception:
                 pass
+            
+            # Force "other" issues to have low confidence (< 20%)
+            if (overview.get("type") or "").lower() == "other":
+                new_conf = min(new_conf, 15)
+                
             overview["confidence"] = new_conf
             ai_eval["ai_confidence_percent"] = new_conf
             ai_eval["issue_detected"] = issue_detected
@@ -707,6 +749,31 @@ Keep the report under 200 words, professional, and specific to the issue type an
             report["ai_evaluation"] = ai_eval
         except Exception:
             pass
+
+        # RE-FETCH AUTHORITIES IF ISSUE TYPE CHANGED
+        # This fixes the issue where authority assignment is wrong because it used the initial (potentially wrong) classification.
+        final_issue_type = (report.get("issue_overview", {}).get("type") or issue_type).lower().replace(" ", "_")
+        initial_issue_type = issue_type.lower().replace(" ", "_")
+        
+        if final_issue_type != initial_issue_type and final_issue_type in allowed_types:
+            logger.info(f"Issue type changed from {initial_issue_type} to {final_issue_type}. Re-fetching authorities.")
+            try:
+                # Re-fetch authority data with the NEW issue type
+                new_authority_data = await get_authority_data_cached(
+                    zip_code, address, final_issue_type, latitude, longitude, category
+                )
+                
+                # Update variables
+                responsible_authorities = new_authority_data.get("responsible_authorities", responsible_authorities)
+                available_authorities = new_authority_data.get("available_authorities", available_authorities)
+                
+                # Update Report JSON
+                report["responsible_authorities_or_parties"] = responsible_authorities
+                report["available_authorities"] = available_authorities
+                
+                # Also try to update department in template fields if possible, though it's less critical
+            except Exception as e:
+                logger.warning(f"Failed to re-fetch authorities for new type {final_issue_type}: {e}")
 
         # Build concise summary per strict template (City, State, ZIP)
         def _extract_city_state(addr: str) -> (str, str):
@@ -826,6 +893,12 @@ Automated report generated via EAiSER AI by MomntumAI
         except Exception:
             _base_conf = 50
         _ai_confidence_percent = max(10, min(100, _base_conf)) if _issue_detected else max(0, min(10, _base_conf))
+        # Clamp confidence for Other/Unknown/None
+        try:
+            if str(_detected_type).strip().lower() in ("other", "unknown", "none"):
+                _ai_confidence_percent = min(_ai_confidence_percent, 50)
+        except Exception:
+            pass
         _image_analysis = (
             f"{_detected_type if _issue_detected else 'No obvious issue detected'}; "
             f"severity {severity.lower()}, confidence {_ai_confidence_percent}% based on available visual indicators and metadata."
@@ -880,7 +953,8 @@ Automated report generated via EAiSER AI by MomntumAI
                 "device_type": "Mobile (Generic)",
                 "map_link": map_link,
                 "zip_code": zip_code if zip_code else "N/A",
-                "address": display_address
+                "address": display_address,
+                "confidence": _ai_confidence_percent
             }
         }
         if decline_reason:

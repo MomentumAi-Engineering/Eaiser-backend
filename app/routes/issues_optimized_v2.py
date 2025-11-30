@@ -234,6 +234,7 @@ async def process_issue_background(
     latitude: float,
     longitude: float,
     user_email: Optional[str],
+    description: str,
     category: str,
     severity: str,
     issue_type: str
@@ -247,7 +248,11 @@ async def process_issue_background(
 
         # AI Classification (can be cached based on image hash)
         image_hash = hashlib.md5(image_content).hexdigest()
-        cache_key = generate_cache_key("ai_classification", image_hash=image_hash)
+        cache_key = generate_cache_key(
+            "ai_classification",
+            image_hash=image_hash,
+            description_hash=hashlib.md5((description or "").encode()).hexdigest()[:8]
+        )
         
         cached_classification = await get_cached_data(cache_key)
         if cached_classification:
@@ -259,7 +264,7 @@ async def process_issue_background(
             logger.info(f"Using cached AI classification for issue {issue_id}")
         else:
             ai_start = time.time()
-            issue_type, severity, confidence, category, priority = await classify_issue(image_content, "")
+            issue_type, severity, confidence, category, priority = await classify_issue(image_content, description or "")
             ai_time = time.time() - ai_start
             performance_metrics.record_ai_processing(ai_time)
             
@@ -315,7 +320,7 @@ async def process_issue_background(
         else:
             report = await generate_report(
                 image_content=image_content,
-                description="",
+                description=description or "",
                 issue_type=issue_type,
                 severity=severity,
                 address=final_address,
@@ -356,6 +361,41 @@ async def process_issue_background(
                     "responsible_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}],
                     "available_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
                 }
+
+        # === UPDATE LOCAL VARIABLES FROM FINAL REPORT ===
+        # This ensures top-level DB fields match the AI's final analysis (e.g. if "Unknown" became "Pothole")
+        try:
+            overview = report.get("issue_overview", {})
+            template_fields = report.get("template_fields", {})
+            
+            # Update issue_type if present and valid
+            final_type = overview.get("type") or overview.get("issue_type")
+            if final_type and final_type.lower() != "none":
+                issue_type = final_type.lower().replace(" ", "_")
+            
+            # Update severity
+            final_severity = overview.get("severity")
+            if final_severity:
+                severity = final_severity
+                
+            # Update confidence
+            final_conf = overview.get("confidence")
+            if final_conf is not None:
+                confidence = float(final_conf)
+                
+            # Update category
+            final_category = overview.get("category")
+            if final_category:
+                category = final_category.lower()
+                
+            # Update priority
+            final_priority = template_fields.get("priority") or overview.get("priority")
+            if final_priority:
+                priority = final_priority
+                
+            logger.info(f"Finalized issue details for {issue_id}: Type={issue_type}, Severity={severity}, Conf={confidence}%")
+        except Exception as e:
+            logger.warning(f"Failed to update local variables from report for {issue_id}: {e}")
 
         # === Dispatch Guard Evaluation (before sending emails) ===
         try:
@@ -514,6 +554,7 @@ async def create_issue_optimized(
     latitude: float = Form(0.0),
     longitude: float = Form(0.0),
     user_email: Optional[str] = Form(None),
+    description: str = Form(''),
     category: str = Form('public'),
     severity: str = Form('medium'),
     issue_type: str = Form('other'),
@@ -553,6 +594,7 @@ async def create_issue_optimized(
             latitude=latitude,
             longitude=longitude,
             user_email=user_email,
+            description=description,
             category=category,
             severity=severity,
             issue_type=issue_type
@@ -835,6 +877,7 @@ async def create_bulk_issues(
                     latitude=issue_data.get("latitude", 0.0),
                     longitude=issue_data.get("longitude", 0.0),
                     user_email=issue_data.get("user_email"),
+                    description=issue_data.get("description", ""),
                     category=issue_data.get("category", "public"),
                     severity=issue_data.get("severity", "medium"),
                     issue_type=issue_data.get("issue_type", "other")

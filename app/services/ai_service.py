@@ -96,6 +96,7 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             "tree_fallen": ["fallen tree","tree fallen","downed tree","tree down","branch fallen","uprooted"]
         }
         issue_type = "unknown"
+        confidence = 50.0
         for issue, keywords in issue_keywords.items():
             if any(keyword in description_lower for keyword in keywords):
                 issue_type = issue
@@ -132,6 +133,9 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             confidence = min(confidence, 40.0)
         elif has_hazard:
             confidence = max(confidence, 88.0)
+        # Clamp for non-specific types
+        if issue_type in ("unknown", "other"):
+            confidence = min(confidence, 50.0)
         high_severity_issues = ["fire", "flood", "structural_damage"]
         high_severity_keywords = ["urgent", "emergency", "critical", "severe"]
         medium_severity_issues = ["pothole", "vandalism"]
@@ -234,6 +238,9 @@ Ensure the issue_type matches one of the specified options. For descriptions men
                 confidence = min(confidence, 40.0)
             elif has_hazard:
                 confidence = max(confidence, 88.0)
+            # Clamp for non-specific types
+            if issue_type in ("unknown", "other"):
+                confidence = min(confidence, 50.0)
 
             # Cap confidence
             confidence = min(confidence, 100.0)
@@ -388,20 +395,21 @@ Return this structure:
   "responsible_authorities_or_parties": {json.dumps(responsible_authorities)},
   "available_authorities": {json.dumps(available_authorities)},
   "additional_notes": "Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Track report: https://momentum-ai.org/track/{report_id}. Zip Code: {zip_code if zip_code else 'N/A'}.",
-  "template_fields": {{
-    "oid": "{report_id}",
-    "timestamp": "{local_time}",
-    "utc_time": "{utc_time}",
-    "priority": "{priority}",
-    "tracking_link": "https://momentum-ai.org/track/{report_id}",
-    "image_filename": "{image_filename}",
-    "ai_tag": "{issue_type.title()}",
-    "app_version": "1.5.3",
-    "device_type": "Mobile (Generic)",
-    "map_link": "{map_link}",
-    "zip_code": "{zip_code if zip_code else 'N/A'}"
-  }}
-}}
+          "template_fields": {{
+            "oid": "{report_id}",
+            "timestamp": "{local_time}",
+            "utc_time": "{utc_time}",
+            "priority": "{priority}",
+            "tracking_link": "https://momentum-ai.org/track/{report_id}",
+            "image_filename": "{image_filename}",
+            "ai_tag": "{issue_type.title()}",
+            "app_version": "1.5.3",
+            "device_type": "Mobile (Generic)",
+            "map_link": "{map_link}",
+            "zip_code": "{zip_code if zip_code else 'N/A'}",
+            "confidence": {confidence}
+          }}
+        }}
 Keep the report under 200 words, professional, and specific to the issue type and description.
 """
             # Run Gemini API call
@@ -519,7 +527,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
         await asyncio.to_thread(get_authority_by_zip_code, zip_code, issue_type, category) if zip_code
         else await asyncio.to_thread(get_authority, address, issue_type, latitude, longitude, category)
     )
-    responsible_authorities = authority_data.get("responsible_authorities", [{"name": department, "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}])
+    responsible_authorities = authority_data.get("responsible_authorities", [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}])
     available_authorities = authority_data.get("available_authorities", [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}])
 
     if available_authorities and "message" in available_authorities[0]:
@@ -582,7 +590,8 @@ Keep the report under 200 words, professional, and specific to the issue type an
             "app_version": "1.5.3",
             "device_type": "Mobile (Generic)",
             "map_link": map_link,
-            "zip_code": zip_code if zip_code else "N/A"
+            "zip_code": zip_code if zip_code else "N/A",
+            "confidence": confidence
         }
     }
     if decline_reason:
