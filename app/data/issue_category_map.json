@@ -28,7 +28,6 @@
   "waterlogging": "public",
   "abandoned_vehicle": "public",
   "vacant_lot_issue": "public",
-  "property_damage": "business",
   "structural_damage": "public_and_business",
   "other": "public",
   "unknown": "public"
