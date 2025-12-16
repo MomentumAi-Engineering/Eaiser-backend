@@ -745,7 +745,7 @@ async def update_issue_status(issue_id: str, status: str) -> bool:
     """
     try:
         db = await get_db()
-        valid_statuses = ["pending", "accepted", "rejected", "completed"]
+        valid_statuses = ["pending", "accepted", "rejected", "completed", "needs_review"]
         if status not in valid_statuses:
             raise ValueError(f"Invalid status. Must be one of {valid_statuses}")
         

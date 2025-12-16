@@ -1,15 +1,4 @@
-"""
-AuthorityDispatchGuard Service
----------------------------------
-Hinglish + English Explanation:
-- Yeh service prank/false reports ko filter karti hai.
-- Risk & Fraud signals se decide hota hai: auto-dispatch, hold, ya reject.
 
-Design:
-- OOP classes: RiskScorer, FraudScorer, AuthorityDispatchGuard
-- Dataclass DispatchDecision for structured output.
-- Modular, reusable, clean architecture.
-"""
 
 from dataclasses import dataclass
 from typing import List, Dict, Any
@@ -100,36 +89,54 @@ class AuthorityDispatchGuard:
         # Simple signals
         confidence = float(payload.get("ai_confidence_percent") or 0)
         severity = (payload.get("severity") or "medium").lower()
+        issue_type = str(payload.get("issue_type") or "").lower()
         metadata_ok = bool(payload.get("metadata_complete"))
         duplicates = bool(payload.get("is_duplicate"))
         policy_conflict = bool(payload.get("policy_conflict"))
         reporter_trust = float(payload.get("reporter_trust_score") or 50)
 
         # Decision logic
-        if fraud >= self.fraud_reject_threshold and confidence < 60:
-            action = "reject"
-            reasons.append("Low AI confidence with high fraud likelihood.")
+        # 1. Reject Case: EXTREMELY high fraud signals only
+        # Raised threshold to 85 to prevent screening out legitimate but low-quality/duplicate tests
+        if fraud >= 85 and confidence < 30:
+             action = "reject"
+             reasons.append("Critical fraud risk detected with low confidence.")
+             if duplicates:
+                 reasons.append("Duplicate report detected.")
+             steps.append("Auto-screen out; do not notify.")
+        
+        # 2. Benign/Controlled Fire/Normal Image Case -> Route to Review Team
+        # Now captures duplicates and low confidence reports instead of rejecting them
+        # Changed confidence threshold from 60 to 70 as per user request
+        # Also catches Unknown/Other/None issue types for manual review
+        elif policy_conflict or confidence < 70 or severity == "low" or duplicates or issue_type in ["unknown", "other", "none", "general", "bonfire", "controlled_fire", "festival", "ceremony"]:
+            action = "route_to_review_team"
+            if policy_conflict:
+                reasons.append("Policy context suggests controlled/allowed activity.")
+            if confidence < 70:
+                reasons.append(f"Confidence below threshold ({confidence}%).")
+            if severity == "low":
+                reasons.append("Low severity issue.")
             if duplicates:
-                reasons.append("Duplicate report detected.")
-            if not metadata_ok:
-                reasons.append("Missing essential metadata.")
-            steps.append("Do not send to authority; notify reporter politely.")
+                reasons.append("Potential duplicate report.")
+            if issue_type in ["unknown", "other", "none", "general", "bonfire", "controlled_fire", "festival", "ceremony"]:
+                reasons.append(f"Issue type '{issue_type}' routed for manual review.")
+            steps.append("Route to internal review team for manual verification.")
+            
+        # 3. Auto Dispatch Case
         elif (
             confidence >= self.auto_dispatch_threshold
             and severity in ("high", "urgent")
             and metadata_ok
             and not duplicates
-            and not policy_conflict
         ):
             action = "auto_dispatch"
             reasons.append("High confidence, severe issue, complete metadata, and no duplicates.")
             steps.append("Dispatch to authority; include concise summary and map link.")
+            
+        # 4. Default Fallback -> Hold for Review (General)
         else:
             action = "hold_for_review"
-            if confidence < self.auto_dispatch_threshold:
-                reasons.append(f"Confidence below threshold ({confidence}%).")
-            if policy_conflict:
-                reasons.append("Policy context suggests controlled/allowed activity.")
             if duplicates:
                 reasons.append("Potential duplicate in same area/time window.")
             if reporter_trust < 40:

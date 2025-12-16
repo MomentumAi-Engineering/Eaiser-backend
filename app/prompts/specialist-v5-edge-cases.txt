@@ -1,0 +1,115 @@
+# Specialist Edge Cases — V5
+# Handles rare conditions, fake images, ambiguity, noise, and low-confidence scenarios
+
+============================================================
+AMBIGUOUS / UNCLEAR IMAGES
+============================================================
+If the image is:
+- Too dark
+- Too blurry
+- Low resolution
+- Overexposed
+- Contains no visible civic issue
+
+Then:
+- Set "issue_overview.type": "other"
+- Set "ai_evaluation.issue_detected": false
+- Set confidence: 0–35
+- Provide a short explanation: 
+  "The image lacks enough clarity or detail to identify a civic issue."
+
+============================================================
+FAKE / EDITED IMAGE SAFETY LAYER
+============================================================
+If the image appears AI-generated OR digitally edited:
+- DO NOT classify it as a civic issue.
+- Use:
+    "issue_overview.type": "other"
+    "ai_evaluation.issue_detected": false
+    "additional_notes": "The image appears digitally altered or AI-generated."
+- Confidence MUST NOT exceed 40.
+
+Check for patterns like:
+- Unrealistic textures  
+- Perfect symmetry  
+- Impossible shadows  
+- AI artifacts  
+- Unrealistic fire, water, smoke  
+
+============================================================
+NIGHT-TIME IMAGE LOGIC
+============================================================
+If it's nighttime or very low light:
+- Increase uncertainty (reduce confidence by 15–25)
+- Do NOT assume any issue unless clearly visible
+- Streetlight glow ≠ fire
+- Shadows ≠ structural damage
+
+============================================================
+MULTIPLE ISSUES VISIBLE
+============================================================
+If more than 1 issue appears:
+- Choose ONLY the primary, most impactful issue.
+- Add secondary issues ONLY inside "ai_evaluation.rationale".
+
+Example:
+Primary fallen tree, secondary potholes = type is still "tree_fallen".
+
+============================================================
+ANIMAL CASES
+============================================================
+- Dead animal → "dead_animal"
+- Animal lying but breathing → NOT dead (low confidence)
+- Stray dog/cow not blocking road → NOT an issue
+- Animal ON road + risk of accident → "animal_accident"
+
+============================================================
+WATER / FLOOD RULES
+============================================================
+- Water covering > 40% of road → "flood"
+- Small puddles after rain → NOT an issue
+- Water leakage from pipe → "water_leakage"
+- Water near house NOT always flooding → check context
+
+============================================================
+BROKEN OBJECTS
+============================================================
+- Broken signboard, broken bench → NOT civic issues unless hazardous
+- Broken streetlight = issue
+- Graffiti = low severity issue
+
+============================================================
+SEVERE CASE BOOST
+============================================================
+If you detect:
+- Fire spreading  
+- Fallen tree fully blocking road  
+- Flood covering road  
+- Car accident  
+- Exposed electrical wires  
+
+→ Boost severity to HIGH  
+→ Boost confidence to at least 85+
+
+============================================================
+WHEN DESCRIPTION CONTRADICTS IMAGE
+============================================================
+If the user’s description does NOT match the image:
+Follow this priority order:
+
+1. IMAGE first  
+2. SAFETY rules second  
+3. Description last  
+
+Example:
+User says "fire", but image shows a candle → NOT fire issue.
+
+============================================================
+MAXIMUM SAFETY CHECK
+============================================================
+Before JSON output:
+- Validate: Does the classification violate rules?  
+If yes → override to safest possible label.
+
+Example:
+If unclear but looks like maybe fire → classify as "other", NOT fire.

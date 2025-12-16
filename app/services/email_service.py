@@ -222,7 +222,7 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
     """
     try:
         env = os.getenv("ENV", "development").lower()
-        dry_run = os.getenv("EMAIL_DRY_RUN", "true").lower() == "true"
+        dry_run = os.getenv("EMAIL_DRY_RUN", "false").lower() == "true"
         formatted_content = report.get("formatted_report", "")
         issue_type = report.get("issue_overview", {}).get("type", "Issue")
         report_id = report.get("template_fields", {}).get("oid", "N/A")
@@ -262,3 +262,36 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
     except Exception as e:
         logger.error(f"❌ send_formatted_ai_alert failed: {str(e)}", exc_info=True)
         return {"status": "error", "error": str(e)}
+
+# --------------------------------------------------------------------
+# ✅ Notify User Status Change
+# --------------------------------------------------------------------
+async def notify_user_status_change(user_email: str, issue_id: str, status: str, notes: Optional[str] = None) -> bool:
+    """
+    Notify the user that their report status has changed (Approved/Rejected).
+    """
+    try:
+        subject = f"Update on your Report #{issue_id}"
+        
+        status_color = "green" if status == "approved" else "red"
+        status_display = "APPROVED" if status == "approved" else "DECLINED"
+        
+        html_content = f"""
+        <h2>Report Status Update</h2>
+        <p>Your report (ID: <strong>{issue_id}</strong>) has been updated.</p>
+        <p>New Status: <strong style="color: {status_color}">{status_display}</strong></p>
+        """
+        
+        if notes:
+            html_content += f"<p><strong>Admin Notes:</strong> {notes}</p>"
+            
+        html_content += "<p>Thank you for using EAiSER Ai.</p>"
+        
+        text_content = f"Your report {issue_id} has been {status_display}.\n"
+        if notes:
+            text_content += f"Notes: {notes}\n"
+            
+        return await send_email(user_email, subject, html_content, text_content)
+    except Exception as e:
+        logger.error(f"Failed to notify user {user_email}: {e}")
+        return False

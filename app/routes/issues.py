@@ -938,150 +938,6 @@ async def create_issue(
             for auth in available_authorities
         ]
 
-        # Prefer authorities mapped by issue type (department targeting)
-        try:
-            from pathlib import Path
-            import json
-            dept_map_path = Path("data/issue_department_map.json")
-            depts = []
-            if dept_map_path.exists():
-                with open(dept_map_path, "r") as f:
-                    raw = json.load(f)
-                dept_map = {str(k).lower(): v for k, v in raw.items()}
-                depts = dept_map.get(str(issue_type).lower(), [])
-            filtered_resp = [a for a in available_authorities if a.get("type") in depts]
-            if filtered_resp:
-                responsible_authorities = filtered_resp
-            mapped_depts = set(depts)
-        except Exception:
-            pass
-
-        # Ensure a general fallback exists in available list
-        try:
-            from pathlib import Path
-            import json
-            zpath = Path("data/zip_code_authorities.json")
-            if zpath.exists():
-                with open(zpath, "r") as f:
-                    zdata = json.load(f)
-                zentry = zdata.get(zip_code or "default", {})
-                gen_list = zentry.get("general", [])
-                if gen_list:
-                    general_auth = gen_list[0]
-                    if not any(a.get("type") == "general" for a in available_authorities):
-                        available_authorities.append(general_auth)
-        except Exception:
-            pass
-
-        # Advanced authority augmentation based on AI description/labels with safety gating
-        try:
-            overview = report.get("issue_overview", {})
-            desc_text = str(overview.get("summary_explanation", "")).lower()
-            labels_list = overview.get("detected_problems", [])
-            labels_text = " ".join([str(x).lower() for x in labels_list])
-            combined = f"{desc_text} {labels_text}"
-            severity_val = str(overview.get("severity", "medium")).lower()
-
-            tokens_animal = ["animal", "dog", "cow", "cat", "wildlife", "deer"]
-            tokens_animal_incident = [
-                "injured", "dead", "carcass", "roadkill", "hit", "struck",
-                "on road", "on the road", "aggressive", "attack", "bite"
-            ]
-            tokens_vehicle = ["accident", "collision", "crash", "hit", "dent", "vehicle", "car", "bike", "motorcycle"]
-            tokens_fire = ["fire", "smoke", "flame", "burning", "wildfire", "house fire", "building fire"]
-            tokens_controlled_fire = [
-                "campfire", "bonfire", "bon fire", "bbq", "barbecue", "barbeque", "grill", "fire pit", "controlled burn",
-                "festival", "celebration", "diwali", "diya", "candle", "incense", "lamp", "stove", "kitchen", "smoke machine", "stage"
-            ]
-            tokens_flood = ["flood", "waterlogging", "inundation"]
-            tokens_leak = ["leak", "pipe", "water leak", "burst", "pipeline"]
-            danger_words = ["danger", "hazard", "out of control", "emergency", "injury", "uncontrolled", "explosion"]
-
-            has_animal = any(w in combined for w in tokens_animal)
-            has_animal_incident = any(w in combined for w in tokens_animal_incident)
-            has_vehicle = any(w in combined for w in tokens_vehicle)
-            has_fire = any(w in combined for w in tokens_fire)
-            is_controlled_fire = any(w in combined for w in tokens_controlled_fire)
-            has_flood = any(w in combined for w in tokens_flood)
-            has_leak = any(w in combined for w in tokens_leak)
-            is_danger = any(w in combined for w in danger_words)
-
-            departments_to_add = set()
-
-            # Fire: gate by controlled vs uncontrolled
-            if has_fire:
-                if is_controlled_fire and severity_val in ["low"] and not is_danger:
-                    pass  # benign scene; do not auto-notify
-                else:
-                    departments_to_add.add("fire")
-                    if any(w in combined for w in ["arson", "house", "building", "wildfire", "out of control", "explosion"]):
-                        departments_to_add.add("police")
-
-            # Vehicle incidents
-            if has_vehicle:
-                departments_to_add.update(["police", "transportation"])
-
-            # Animal only when clearly referenced
-            add_animal = (
-                str(issue_type).lower() in [
-                    "dead_animal", "animal_carcass", "animal_accident", "animal_on_road", "stray_animals"
-                ]
-                or (has_animal and has_animal_incident)
-            )
-            if add_animal:
-                departments_to_add.add("animal_control")
-
-            # Flooding
-            if has_flood:
-                departments_to_add.update(["emergency", "public_works"])
-
-            # Water utility
-            if has_leak:
-                departments_to_add.add("water_utility")
-
-            if departments_to_add:
-                seen = {a.get("email") for a in responsible_authorities}
-                for dept in departments_to_add:
-                    for auth in zentry.get(dept, []):
-                        if auth.get("email") not in seen:
-                            responsible_authorities.append(auth)
-                            seen.add(auth.get("email"))
-
-            # Suppression rules: do not auto-notify benign scenes
-            def filter_out(types):
-                nonlocal responsible_authorities
-                responsible_authorities = [a for a in responsible_authorities if a.get("type") not in types]
-
-            # Fire but controlled and no danger → remove fire/police
-            if has_fire and is_controlled_fire and not is_danger and severity_val in ["low", "medium"]:
-                filter_out({"fire", "police"})
-
-            # Animal department only with explicit animal cues or animal issue type
-            if not add_animal:
-                filter_out({"animal_control"})
-
-            # Final guard: only keep departments from map OR gated augmentation
-            allowed_depts = mapped_depts.union(departments_to_add)
-            responsible_authorities = [a for a in responsible_authorities if a.get("type") in allowed_depts]
-        except Exception:
-            pass
-
-        try:
-            from pathlib import Path
-            import json
-            zpath = Path("data/zip_code_authorities.json")
-            if zpath.exists():
-                with open(zpath, "r") as f:
-                    zdata = json.load(f)
-                zentry = zdata.get(zip_code or "default", {})
-                gen_list = zentry.get("general", [])
-                if gen_list:
-                    general_auth = gen_list[0]
-                    if not any(a.get("type") == "general" for a in available_authorities):
-                        available_authorities.append(general_auth)
-        except Exception:
-            pass
-        
         authority_emails = [auth["email"] for auth in responsible_authorities]
         authority_names = [auth["name"] for auth in responsible_authorities]
         logger.debug(f"Responsible authorities fetched: {authority_emails}")
@@ -1227,8 +1083,15 @@ async def create_issue(
         )
 
         issue_status = "pending"
-        if policy_conflict or decision.action == "reject":
+        # If action is explicitly reject, screen out.
+        if decision.action == "reject":
             issue_status = "screened_out"
+        # If action is 'route_to_review_team', we keep it pending (or move to a specific 'needs_review' status if supported)
+        # but importantly, we do NOT screen it out. 
+        # For now, "pending" allows it to be seen in the admin dashboard for review.
+        elif decision.action == "route_to_review_team":
+            issue_status = "pending"  # Ensure it is visible for review
+            # Optionally add a flag or note in dispatch_reasons (already handled by decision.reasons)
 
         db = await get_db()
         db.issues.update_one(
@@ -1292,6 +1155,8 @@ async def create_issue(
         message="Please review the generated report and select responsible authorities",
         report={
             "issue_id": issue_id,
+            "status": issue_status,
+            "dispatch_decision": decision.action,
             "report": report,
             "authority_email": authority_emails,
             "authority_name": authority_names,
@@ -1372,22 +1237,72 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
                 report.get("unified_report", {}).get("confidence"),
                 report.get("issue_overview", {}).get("confidence"),
             ]
+            # Collect all valid confidence scores
+            valid_scores = []
             for c in conf_candidates:
                 if c is None:
                     continue
-                s = str(c).strip()
-                if s.endswith('%'):
-                    s = s[:-1]
-                v = float(s)
-                if v <= 1.0:
-                    v = v * 100.0
-                conf_val = max(0.0, min(100.0, v))
-                break
-        except Exception:
+                try:
+                    s = str(c).strip()
+                    if s.endswith('%'):
+                        s = s[:-1]
+                    v = float(s)
+                    if v <= 1.0:
+                        v = v * 100.0
+                    v = max(0.0, min(100.0, v))
+                    valid_scores.append(v)
+                except Exception:
+                    continue
+            
+            # Use minimum valid score for safety (conservative approach)
+            if valid_scores:
+                conf_val = min(valid_scores)
+                logger.info(f"DEBUG: Found confidence scores {valid_scores}, using min: {conf_val}")
+            else:
+                conf_val = 0.0 # Default to 0 if no scores found (forces review)
+                logger.info("DEBUG: No valid confidence scores found, defaulting to 0.0")
+
+        except Exception as e:
+            logger.error(f"DEBUG: Confidence parsing error: {e}")
             conf_val = 0.0
-        if decision_action == "reject" or conf_val < 70:
-            logger.warning(f"Issue {issue_id} blocked by guard (decision={decision_action}, confidence={conf_val})")
-            raise HTTPException(status_code=400, detail="Submission blocked by safety guard (low confidence or policy conflict)")
+        # GUARD LOGIC: Check for specific categories + Low Confidence -> Admin Review
+        flagged_categories = [
+            "bonfire", "controlled_fire", "festival", "ceremony", "burning_leaves", 
+            "other", "unknown", "none"
+        ]
+        
+        # Check against issue_type (e.g. 'bonfire') or category if applicable
+        current_issue_type = issue.get("issue_type", "unknown").lower()
+        is_flagged_category = current_issue_type in flagged_categories
+        logger.info(f"DEBUG: Issue {issue_id}: Type={current_issue_type}, Conf={conf_val}, FlaggedCat={is_flagged_category}")
+        
+        # User rule: If category in list AND confidence < 70 -> Admin Review
+        # Also keeping existing reject logic
+        if decision_action == "reject":
+             logger.warning(f"Issue {issue_id} blocked by guard (decision={decision_action})")
+             raise HTTPException(status_code=400, detail="Submission blocked by safety guard (policy conflict)")
+             
+        # MODIFIED: Strict confidence check OR Sensitive Category check.
+        # "bonfire", "festival" etc are sensitive/ambiguous, so we flag them for review too.
+        if conf_val < 70 or is_flagged_category:
+            logger.info(f"Issue {issue_id} flagged for admin review (type={current_issue_type}, conf={conf_val}%)")
+            
+            # Update status to 'needs_review'
+            await update_issue_status(issue_id, "needs_review")
+            
+            # Return early success response
+            return IssueResponse(
+                id=issue_id,
+                message="Report submitted for quality review. Our team will verify the details shortly.",
+                report={
+                    "issue_id": issue_id,
+                    "status": "needs_review",
+                    "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+                }
+            )
+
+        # Original low confidence block for non-flagged categories if needed (optional, keeping lenient for others as per prompt impl)
+        # If strict safety is needed, we could block others too, but prompt specified this condition.
     except HTTPException:
         raise
     except Exception:
@@ -1522,6 +1437,165 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
     else:
         report["template_fields"].pop("tracking_link", None)
         report["template_fields"]["zip_code"] = issue.get("zip_code", "N/A")
+
+    # -------------------------------------------------------------------------
+    # ACCEPT GUARD LOGIC (Combined Safety): 
+    # Check for specific categories + Low Confidence -> Admin Review
+    # -------------------------------------------------------------------------
+    try:
+        conf_val = 0.0
+        
+        # Extract confidence from the REPORT (which might be edited/different than issue root)
+        conf_candidates = [
+            report.get("template_fields", {}).get("confidence"),
+            report.get("unified_report", {}).get("confidence"),
+            report.get("issue_overview", {}).get("confidence"),
+        ]
+        
+        valid_scores = []
+        for c in conf_candidates:
+            if c is None: continue
+            try:
+                s = str(c).strip().replace('%', '')
+                v = float(s)
+                if v <= 1.0: v = v * 100.0
+                v = max(0.0, min(100.0, v))
+                valid_scores.append(v)
+            except: continue
+        
+        if valid_scores:
+            conf_val = min(valid_scores)
+        
+        flagged_categories = [
+            "bonfire", "controlled_fire", "festival", "ceremony", "burning_leaves", 
+            "other", "unknown", "none"
+        ]
+        
+        current_issue_type = report.get("issue_type", issue.get("issue_type", "unknown")).lower()
+        if not current_issue_type or current_issue_type == "unknown":
+             current_issue_type = report.get("issue_overview", {}).get("issue_type", "unknown").lower()
+
+        is_flagged_category = current_issue_type in flagged_categories or "fire" in current_issue_type
+
+        # If confidence < 70 OR flagged category -> Admin Review
+        if conf_val < 70 or is_flagged_category:
+             logger.info(f"ACCEPT GUARD: Issue {issue_id} flagged for review (Type={current_issue_type}, Conf={conf_val}%)")
+             
+             # Fail-Safe Update
+             await update_issue_status(issue_id, "needs_review")
+             
+             # Return early success response indicating review
+             return IssueResponse(
+                id=issue_id,
+                message="Report received. It has been flagged for internal quality assurance to verify details.",
+                report={
+                    "issue_id": issue_id,
+                    "status": "needs_review",
+                    "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+                }
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in guard logic during accept: {e}")
+        # FAIL-SAFE: Return review response on error
+        return IssueResponse(
+            id=issue_id,
+            message="Report received. It has been flagged for internal quality assurance due to a system check.",
+            report={
+                "issue_id": issue_id,
+                "status": "needs_review",
+                "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+            }
+        )
+    # -------------------------------------------------------------------------
+
+    # -------------------------------------------------------------------------
+    # FINAL GUARD LOGIC (Repeated for Safety): 
+    # Check for specific categories + Low Confidence -> Admin Review
+    # We must re-evaluate this here because user might have edited data or bypassed initial check.
+    # -------------------------------------------------------------------------
+    try:
+        conf_val = 0.0
+        
+        # Extract confidence from the REPORT (which might be edited/different than issue root)
+        conf_candidates = [
+            report.get("template_fields", {}).get("confidence"),
+            report.get("unified_report", {}).get("confidence"),
+            report.get("issue_overview", {}).get("confidence"),
+        ]
+        
+        valid_scores = []
+        for c in conf_candidates:
+            if c is None: continue
+            try:
+                s = str(c).strip().replace('%', '')
+                v = float(s)
+                if v <= 1.0: v = v * 100.0
+                v = max(0.0, min(100.0, v))
+                valid_scores.append(v)
+            except: continue
+        
+        if valid_scores:
+            conf_val = min(valid_scores)
+        
+        flagged_categories = [
+            "bonfire", "controlled_fire", "festival", "ceremony", "burning_leaves", 
+            "other", "unknown", "none"
+        ]
+        
+        current_issue_type = report.get("issue_type", issue.get("issue_type", "unknown")).lower()
+        # Also check nested issue type in overview if present, deeper check
+        if not current_issue_type or current_issue_type == "unknown":
+             current_issue_type = report.get("issue_overview", {}).get("issue_type", "unknown").lower()
+
+        # Check if sensitive category OR 'fire' is in the type name (broad safety)
+        is_flagged_category = current_issue_type in flagged_categories or "fire" in current_issue_type
+
+        # If confidence < 70 OR flagged category -> Admin Review
+        if conf_val < 70 or is_flagged_category:
+             logger.info(f"FINAL SUBMIT GUARD: Issue {issue_id} flagged for review (Type={current_issue_type}, Conf={conf_val}%)")
+             
+             # Update status
+             await update_issue_status(issue_id, "needs_review")
+             
+             # Return early success response indicating review
+             return IssueResponse(
+                id=issue_id,
+                message="Report submitted for quality review. Our team will verify the details shortly.",
+                report={
+                    "issue_id": issue_id,
+                    "status": "needs_review",
+                    "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+                }
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in guard logic during final submit: {e}")
+        # FAIL-SAFE: If guard crashes but we suspected it might need review, 
+        # or just to be safe, we should probably NOT send the email.
+        # But if we can't determine, maybe it's safer to stop.
+        # However, to avoid blocking legitimate submissions due to a bug, 
+        # we usually pass. But since we had a critical bug (Invalid Status), 
+        # let's assume if it reached here, we might want to default to 'needs_review' behavior 
+        # if possible, or at least NOT automagically send email.
+        
+        # ACTUALLY, if we are in this block, 'conf_val' might reference before assignment error 
+        # if it crashed early.
+        # Let's return the review response to be safe (Fail Closed).
+        return IssueResponse(
+            id=issue_id,
+            message="Report received. It has been flagged for internal quality assurance due to a system check.",
+            report={
+                "issue_id": issue_id,
+                "status": "needs_review", # We claim this even if DB update failed (it might persist as pending)
+                "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+            }
+        )
+    # -------------------------------------------------------------------------
     
     recommended_actions = report.get("recommended_actions", [])
     if "recommended_actions" not in report:

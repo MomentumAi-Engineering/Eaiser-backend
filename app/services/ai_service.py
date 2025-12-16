@@ -166,14 +166,27 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             valid_issue_types = "|".join(issue_category_map.keys()) or "pothole|fire|garbage|flood|vandalism|structural_damage|property_damage"
 
             prompt = f"""
-You are an expert AI trained to classify infrastructure-related issues based on an image and text description.
+You are an expert AI trained to classify infrastructure-related issues.
 Analyze the image and description: "{description}".
-Return JSON with:
+
+STEP 1: REALITY CHECK (CRITICAL)
+- Is this a REAL, PHOTO-REALISTIC photo taken by a camera?
+- Look for: Cartoon shaders, cel-shading, perfect smooth textures, AI artifacts, video game HUDs, or drawings.
+- If the image is AI-GENERATED, A VIDEO GAME, A CARTOON, or FAKE:
+  - Set "is_real": false
+  - Set "confidence": 0
+  - Set "issue_type": "unknown"
+
+STEP 2: CLASSIFICATION (Only if Real)
+- Identify the issue type provided below.
+
+Return JSON:
 {{
   "issue_type": "{valid_issue_types}",
-  "confidence": number (0 to 100)
+  "confidence": number (0 to 100),
+  "is_real": boolean
 }}
-Ensure the issue_type matches one of the specified options. For descriptions mentioning size (e.g., "2 ft wide") or safety risks (e.g., "cause cars to swerve"), prioritize "pothole" with high confidence. Provide only valid JSON without explanation.
+Provide only valid JSON.
 """
             # Run Gemini API call in a separate thread
             timeout = int(os.getenv('AI_TIMEOUT', '8'))
@@ -188,8 +201,19 @@ Ensure the issue_type matches one of the specified options. For descriptions men
                 raise ValueError("No valid JSON found in response")
             json_text = json_match.group(0)
             parsed = json.loads(json_text)
+            
+            # Parse Reality Check
+            is_real = parsed.get("is_real", True)
+            if isinstance(is_real, str):
+                is_real = is_real.lower() == "true"
+            
             issue_type = parsed.get("issue_type", "unknown").lower()
             confidence = float(parsed.get("confidence", 70.0))
+
+            if not is_real:
+                logger.warning("AI detected FAKE/GENERATED image. Forcing confidence to 0.")
+                confidence = 0.0
+                issue_type = "unknown"
 
             # Validate issue_type
             if issue_type not in issue_category_map:
@@ -224,13 +248,16 @@ Ensure the issue_type matches one of the specified options. For descriptions men
                 for issue, keywords in issue_keywords.items():
                     if any(keyword in description_lower for keyword in keywords):
                         issue_type = issue
-                        confidence = max(confidence, 92.0 if issue == "pothole" else 80.0)
-                        logger.info(f"Description suggests {issue}. Overriding to {issue} with confidence {confidence}.")
+                        # Only override if confidence is not extremely low (fake detection)
+                        if confidence > 10:
+                            confidence = max(confidence, 92.0 if issue == "pothole" else 80.0)
+                            logger.info(f"Description suggests {issue}. Overriding to {issue} with confidence {confidence}.")
                         break
             animal_tokens = ["dead animal", "carcass", "roadkill"]
             if any(t in description_lower for t in animal_tokens):
                 issue_type = "dead_animal"
-                confidence = max(confidence, 80.0)
+                if confidence > 10:
+                    confidence = max(confidence, 80.0)
 
             # Description-driven confidence refinements
             hazard_tokens = [
@@ -246,14 +273,18 @@ Ensure the issue_type matches one of the specified options. For descriptions men
             has_controlled = any(t in description_lower for t in controlled_tokens)
             if has_controlled and not has_hazard:
                 confidence = min(confidence, 40.0)
-            elif has_hazard:
+            elif has_hazard and confidence > 10:
                 confidence = max(confidence, 88.0)
             # Clamp for non-specific types
             if issue_type in ("unknown", "other"):
                 confidence = min(confidence, 50.0)
-
-            # Cap confidence
-            confidence = min(confidence, 100.0)
+            
+            # Explicitly keep confidence low if it came back very low (likely fake)
+            if confidence <= 10:
+                logger.info(f"Confidence is low ({confidence}), skipping heuristic overrides.")
+            else:
+                # Cap confidence
+                confidence = min(confidence, 100.0)
 
             # Determine severity
             high_severity_issues = ["fire", "flood", "structural_damage"]

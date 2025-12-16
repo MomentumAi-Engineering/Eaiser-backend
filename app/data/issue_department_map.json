@@ -1,129 +1,140 @@
 {
   "pothole": ["public_works"],
-  "road hole": ["public_works"],
-  "damaged road": ["public_works"],
-
   "road_damage": ["public_works"],
-  "cracked road": ["public_works"],
-  "road broken": ["public_works"],
+  "road_sinking": ["public_works"],
+  "bridge_damage": ["public_works"],
+  "footpath_damage": ["public_works"],
 
   "broken_streetlight": ["public_works"],
-  "no streetlight": ["public_works"],
-  "dark street": ["public_works"],
+  "no_streetlight": ["public_works"],
+  "dark_street": ["public_works"],
 
   "graffiti": ["public_works"],
-  "wall writing": ["public_works"],
+  "wall_writing": ["public_works"],
 
   "garbage": ["sanitation"],
   "trash": ["sanitation"],
   "waste": ["sanitation"],
-  "overflowing bin": ["sanitation"],
+  "overflowing_bin": ["sanitation"],
+  "sewage_overflow": ["sanitation"],
+  "dirty_water": ["sanitation"],
 
   "vandalism": ["police"],
-  "property defacement": ["police"],
+  "property_defacement": ["police"],
 
   "open_drain": ["public_works"],
-  "uncovered drain": ["public_works"],
-
   "blocked_drain": ["public_works"],
-  "clogged drain": ["public_works"],
+  "uncovered_drain": ["public_works"],
+  "clogged_drain": ["public_works"],
 
   "flood": ["emergency", "public_works"],
-  "street flood": ["emergency", "public_works"],
+  "street_flood": ["emergency", "public_works"],
+  "waterlogging": ["public_works"],
 
-  "fire": ["fire", "police"],
-  "building fire": ["fire", "police"],
+  "fire": ["fire","police"],
+  "building_fire": ["fire","police"],
+  "gas_leak": ["emergency", "fire","police"],
+  "arson_suspected": ["fire", "police"],
 
   "illegal_construction": ["building_inspection"],
-  "unauthorized construction": ["building_inspection"],
+  "unauthorized_construction": ["building_inspection"],
+  "unsafe_building": ["building_inspection"],
+  "structural_damage": ["building_inspection"],
+  "wall_crack": ["building_inspection"],
+  "construction_debris": ["building_inspection"],
 
   "tree_fallen": ["public_works"],
-  "Fallen Tree": ["public_works"],
-  "tree on road": ["public_works"],
+  "tree_on_road": ["public_works"],
 
   "public_toilet_issue": ["sanitation"],
-  "broken toilet": ["sanitation"],
+  "broken_toilet": ["sanitation"],
 
   "stray_animals": ["animal_control"],
-  "loose dog": ["animal_control"],
-  "street dog": ["animal_control"],
+  "loose_dog": ["animal_control"],
+  "street_dog": ["animal_control"],
 
   "dead_animal": ["animal_control"],
   "animal_carcass": ["animal_control"],
 
-  "animal_accident": ["animal_control", "police"],
-  "wildlife hit": ["animal_control", "police"],
-
+  "animal_injury": ["animal_control"],
   "animal_on_road": ["animal_control"],
-  "roadkill": ["animal_control"],
 
+  "animal_accident": ["animal_control", "police"],
+  "wildlife_hit": ["animal_control", "police"],
   "animal_crash": ["animal_control", "police", "public_works"],
 
   "noise_pollution": ["environment"],
-  "loud noise": ["environment"],
+  "loud_noise": ["environment"],
 
   "air_pollution": ["environment"],
-  "smoke complaint": ["environment"],
+  "smoke_complaint": ["environment"],
+  "water_pollution": ["environment"],
+  "chemical_dumping": ["environment"],
 
   "water_leakage": ["water_utility"],
-  "pipe leak": ["water_utility"],
+  "pipe_leak": ["water_utility"],
+  "no_water_supply": ["water_utility"],
+  "low_water_pressure": ["water_utility"],
 
   "street_vendor_encroachment": ["code_enforcement"],
-  "unauthorized vendor": ["code_enforcement"],
+  "unauthorized_vendor": ["code_enforcement"],
+  "illegal_hoarding": ["code_enforcement"],
 
   "signal_malfunction": ["transportation"],
-  "traffic signal issue": ["transportation"],
-
-  "waterlogging": ["public_works"],
-  "road water": ["public_works"],
+  "traffic_signal_issue": ["transportation"],
 
   "abandoned_vehicle": ["public_works"],
-  "car left on road": ["public_works"],
+  "car_left_on_road": ["public_works"],
 
   "vacant_lot_issue": ["public_works"],
-  "overgrown grass": ["public_works"],
+  "overgrown_grass": ["public_works"],
 
   "property_damage": ["property_management"],
-  "window broken": ["property_management"],
-
-  "structural_damage": ["building_inspection"],
-  "wall crack": ["building_inspection"],
-
+  "window_broken": ["property_management"],
   "furniture_damage": ["property_management"],
-  "broken chair": ["property_management"],
+  "broken_chair": ["property_management"],
 
   "home_repair": ["property_management"],
-  "house fixing": ["property_management"],
+  "house_fixing": ["property_management"],
 
   "plumbing_issue": ["property_management"],
-  "leaking tap": ["property_management"],
+  "leaking_tap": ["property_management"],
 
   "electrical_issue": ["property_management"],
-  "no electricity": ["property_management"],
+  "no_electricity": ["property_management"],
+  "electrocution_risk": ["emergency"],
 
   "ac_not_working": ["property_management"],
-  "ac problem": ["property_management"],
+  "ac_problem": ["property_management"],
 
   "cctv_issue": ["property_management"],
-  "camera not working": ["property_management"],
+  "camera_not_working": ["property_management"],
 
   "internet_issue": ["property_management"],
-  "wifi not working": ["property_management"],
+  "wifi_not_working": ["property_management"],
 
   "water_purifier_issue": ["property_management"],
-  "filter issue": ["property_management"],
+  "filter_issue": ["property_management"],
 
   "paint_damage": ["property_management"],
-  "wall paint peeled": ["property_management"],
+  "wall_paint_peeled": ["property_management"],
 
   "ceiling_leakage": ["property_management"],
-  "ceiling drip": ["property_management"],
+  "ceiling_drip": ["property_management"],
 
   "door_lock_issue": ["property_management"],
-  "door not locking": ["property_management"],
+  "door_not_locking": ["property_management"],
 
   "appliance_malfunction": ["property_management"],
-  "fridge not working": ["property_management"],
+  "fridge_not_working": ["property_management"],
+
+  "building_collapse": ["emergency", "public_works"],
+
+  "bonfire": ["general"],
+  "controlled_fire": ["general"],
+  "festival": ["general"],
+  "ceremony": ["general"],
+  "burning_leaves": ["general"],
 
   "other": ["general"],
   "unknown": ["general"]

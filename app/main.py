@@ -68,6 +68,11 @@ except ImportError:
     from app.api.ai import analyze_image as analyze_image_fn, analyze_image_alias as analyze_image_alias_fn
 
 try:
+    from routes.admin_review import router as admin_review_router
+except ImportError:
+    from app.routes.admin_review import router as admin_review_router
+
+try:
     from services.mongodb_service import init_db, close_db
 except ImportError:
     from app.services.mongodb_service import init_db, close_db
@@ -76,6 +81,11 @@ try:
     from services.redis_service import init_redis, close_redis
 except ImportError:
     from app.services.redis_service import init_redis, close_redis
+
+try:
+    from services.mongodb_optimized_service import init_optimized_mongodb, close_optimized_mongodb
+except ImportError:
+    from app.services.mongodb_optimized_service import init_optimized_mongodb, close_optimized_mongodb
 
 # Setup optimized logging with structured format
 logging.basicConfig(
@@ -308,6 +318,7 @@ async def get_report_page(request: Request):
 app.include_router(issues_router, prefix="/api")
 app.include_router(reports_router, prefix="/api/reports")
 app.include_router(ai_router, prefix="/api")
+app.include_router(admin_review_router, prefix="/api")  # Mounted at /api/admin/review
 
 # Explicit wrappers to ensure endpoints exist even if router mounting varies
 from fastapi import UploadFile, File
@@ -341,15 +352,23 @@ async def startup_event():
     await init_db()
     try:
         await init_redis()
-        logger.info("✅ Eaiser AI backend started successfully with Redis caching")
+        logger.info("✅ Redis caching initialized")
     except Exception as e:
         logger.warning(f"⚠️ Redis initialization failed: {str(e)}")
+    
+    # Initialize Optimized MongoDB Service
+    try:
+        await init_optimized_mongodb()
+        logger.info("✅ Optimized MongoDB Service initialized")
+    except Exception as e:
+        logger.error(f"❌ Optimized MongoDB Service initialization failed: {str(e)}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("🔄 Shutting down Eaiser AI backend...")
     await close_db()
     await close_redis()
+    await close_optimized_mongodb()
     logger.info("✅ Shutdown completed successfully")
 
 if __name__ == "__main__":

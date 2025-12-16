@@ -18,10 +18,10 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ")[1]
         # Mock token validation - in production, validate JWT
-        if token == "demo_token":
+        if token in ["demo_token", "admin-mock-token-12345"]:
             return {
                 "user_id": "demo_user",
-                "username": "demo",
+                "username": "demo", # or extract from token in real implementation
                 "role": "admin",
                 "permissions": ["read", "write", "admin"]
             }

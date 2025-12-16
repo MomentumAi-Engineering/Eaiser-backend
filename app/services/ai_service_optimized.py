@@ -400,23 +400,39 @@ async def generate_report_optimized(
     decline_prompt = f"- Decline Reason: {decline_reason}\n" if decline_reason else ""
     zip_code_prompt = f"- Zip Code: {zip_code}\n" if zip_code else ""
 
+    # Load valid issue types dynamically for the prompt
+    issue_category_map = await load_json_data("issue_category_map.json")
+    valid_issue_types_list = list(issue_category_map.keys())
+    # Format for prompt (comma separated, Title Case)
+    valid_issue_types_str = ", ".join([t.replace("_", " ").title() for t in valid_issue_types_list])
+
     prompt = f"""
 You are an AI assistant for eaiser AI, generating infrastructure issue reports.
 Analyze the input below and return a structured JSON report (no markdown, no explanation).
 
 Valid Issue Types:
-- Pothole, Road Damage, Broken Streetlight, Graffiti, Garbage, Vandalism
-- Open Drain, Blocked Drain, Flood, Fire, Illegal Construction, Tree Fallen
-- Public Toilet Issue, Stray Animals, Dead Animal, Animal Carcass, Animal Injury
-- Animal Accident, Wildlife Hit, Animal On Road, Animal Crash
-- Noise Pollution, Air Pollution, Water Leakage, Street Vendor Encroachment
-- Signal Malfunction, Waterlogging, Abandoned Vehicle, Vacant Lot Issue, Other
+{valid_issue_types_str}
 
-CRITICAL INSTRUCTION ON FIRES:
-- Distinguish between "Dangerous Fire" (Wildfire, Building Fire, Out of Control) and "Controlled Fire" (Campfire, Bonfire, BBQ, Fire Pit, Religious Ceremony).
-- If the image shows a SAFE, CONTROLLED fire (e.g., inside a fire pit, people sitting around, BBQ grill, small religious fire), classify the Issue Type as "None" or "Other" and set issue_detected to false.
-- ONLY classify as "Fire" if it poses a threat to public safety (e.g., spreading, unattended in dry grass, structure burning).
-- IGNORE "Campfire", "Bonfire", "Fire Pit" unless they are clearly out of control.
+CRITICAL INSTRUCTION ON REALISM & SAFETY:
+1. FAKE/IRRELEVANT IMAGES:
+   - If the image is a CARTOON, ANIMATION, DRAWING, VIDEO GAME SCREENSHOT, or OBVIOUSLY FAKE/GENERATED:
+     - Set "issue_detected" to false.
+     - Set "detected_issue_type" to "None".
+     - Set "ai_confidence_percent" to 5.
+     - In "image_analysis", explicitly state: "Image appears to be a cartoon, animation, or simulation, not a real-world infrastructure issue."
+   - If the image is unrelated to infrastructure (e.g., a selfie, food, indoor furniture):
+     - Set "issue_detected" to false.
+
+2. FIRES - STRICT CLASSIFICATION:
+   - Distinguish between "Dangerous Fire" (Wildfire, Building Fire, Out of Control) and "Controlled Fire" (Campfire, Bonfire, BBQ, Fire Pit, Religious Ceremony, Burning Leaves, Festival).
+   - If the image shows a SAFE, CONTROLLED fire (e.g., inside a fire pit, people sitting around, BBQ grill, small religious fire, bonfire, burning wood pile, large crowd watching fire, festival celebration):
+     - Classify the Issue Type as "Other" (do NOT use "Fire" or "Wildfire").
+     - Set "issue_detected" to false.
+     - Set "ai_confidence_percent" to 40 (Must be < 50%).
+     - In "image_analysis", explicitly state: "Detected controlled fire/bonfire; not a public safety threat."
+     - In "summary_explanation", use words like "bonfire", "controlled fire", "festival", or "ceremony".
+   - ONLY classify as "Fire" if it poses a threat to public safety (e.g., house on fire, forest burning uncontrolled).
+   - IMPORTANT: If you see people standing calmly near the fire, it is likely a BONFIRE/FESTIVAL. Classify as "Other" (40% confidence).
 
 Input:
 - Issue Type: {issue_type.title()}
@@ -448,7 +464,7 @@ Return ONLY JSON with actual values filled in (do NOT use template variables lik
   "ai_evaluation": {{
     "image_analysis": "Describe what is happening in the image and which visual cues support your conclusion.",
     "issue_detected": true|false,
-    "detected_issue_type": "One of the Valid Issue Types listed above",
+    "detected_issue_type": "One of the Valid Issue Types listed above or 'None'",
     "ai_confidence_percent": 0,
     "rationale": "Brief justification referencing image clarity and visual evidence. Use integer for ai_confidence_percent only (no %). If issue_detected is false, set ai_confidence_percent between 0 and 10; if true, set between 10 and 100 based on clarity and understanding."
   }},
@@ -654,29 +670,54 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 conf_val = int(round(float(conf_val))) if conf_val is not None else None
             except Exception:
                 conf_val = None
-            danger_words = ["out of control","emergency","uncontrolled","explosion","collapse","wildfire","house fire","building fire","spread","spreading","structure","sirens"]
-            controlled_fire = ["campfire","bonfire","bon fire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","festival","celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage","fireplace","hearth","wood stove","fire ring","camp fire","marshmallow","roasting","gathering","chairs around"]
+            danger_words = ["out of control","emergency","uncontrolled","explosion","collapse","wildfire","house fire","building fire","structure fire","spreading wildly","sirens"]
+            controlled_fire = [
+                "campfire","bonfire","bon fire","bornfire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","festival",
+                "celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage","fireplace","hearth",
+                "wood stove","fire ring","camp fire","marshmallow","roasting","gathering","chairs around","burning wood","logs burning",
+                "small fire","contained fire","cooking","recreational","holika","dahan","lohri","ceremony","ritual","crowd","people watching",
+                "people standing","spectators","religious","tradition","custom"
+            ]
             minor_words = ["minor","small","tiny","cosmetic","scratch","smudge","dust","stain","normal","benign"]
+            fake_words = ["cartoon", "animation", "drawing", "illustration", "game screenshot", "video game", "simulated", "generated", "fake", "render", "clipart", "sketch", "painting"]
+
             has_danger = any(w in combined for w in danger_words)
             is_controlled = any(w in combined for w in controlled_fire)
             is_minor = any(w in combined for w in minor_words)
+            is_fake = any(w in combined for w in fake_words)
+            
             animal_tokens = ["animal","deer","boar","hog","dog","cow","cat","wildlife","goat","pig","carcass","roadkill"]
             accident_tokens = ["accident","collision","crash","hit","struck","run over","under car","under vehicle"]
+            people_tokens = ["people", "crowd", "spectators", "gathering", "watching", "standing", "men", "women", "children", "group"]
+            
             has_animal = any(w in combined for w in animal_tokens)
             has_accident = any(w in combined for w in accident_tokens)
+            has_people = any(w in combined for w in people_tokens)
             issue_detected = bool(ai_eval.get("issue_detected"))
-            if not issue_detected:
+            
+            # Special check for Fire + People -> likely controlled
+            if (overview.get("type") or "").lower() == "fire" and has_people and not any(w in combined for w in ["house", "building", "structure", "vehicle", "car"]):
+                 is_controlled = True
+
+            if is_fake:
+                new_conf = 5
+                issue_detected = False
+                overview["type"] = "None"
+                ai_eval["detected_issue_type"] = "None"
+                ai_eval["image_analysis"] = "Detected as fake/cartoon/animated image."
+                ai_eval["rationale"] = "Image classified as non-realistic or simulated."
+            elif not issue_detected:
                 hazard_tokens = ["hazard","danger","out of control","emergency","injury","uncontrolled","explosion","collapse","severe","major","wildfire","accident","collision","leak","burst"]
                 has_hazard = any(w in combined for w in hazard_tokens)
                 new_conf = 40 if not has_hazard else 80
                 issue_detected = bool(has_hazard)
             elif is_controlled and not has_danger:
-                new_conf = 30
+                new_conf = 40  # Explicitly set to 40% for bonfires/controlled fires
                 issue_detected = False
-                overview["type"] = "None"
+                overview["type"] = "Other"
                 ia = ai_eval.get("image_analysis") or ""
                 if "no public issue" not in ia.lower():
-                    ai_eval["image_analysis"] = "I did not find any public issue."
+                    ai_eval["image_analysis"] = "Detected controlled fire/bonfire; not a public safety threat."
             elif is_minor and not has_danger:
                 new_conf = max(75, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 70)))
             elif has_animal and has_accident and not any(w in combined for w in ["fire","flame","burning","smoke"]):
@@ -698,14 +739,8 @@ Keep the report under 200 words, professional, and specific to the issue type an
             if 'new_conf' not in locals():
                 new_conf = conf_val if conf_val is not None else ai_eval.get("ai_confidence_percent") or 60
             new_conf = int(max(0, min(100, new_conf)))
-            allowed_types = {
-                "pothole", "road_damage", "broken_streetlight", "graffiti", "garbage", "vandalism",
-                "open_drain", "blocked_drain", "flood", "fire", "illegal_construction", "tree_fallen",
-                "public_toilet_issue", "stray_animals", "dead_animal", "animal_carcass", "animal_injury",
-                "animal_accident", "wildlife_hit", "animal_on_road", "animal_crash", "noise_pollution",
-                "air_pollution", "water_leakage", "street_vendor_encroachment", "signal_malfunction",
-                "waterlogging", "abandoned_vehicle", "vacant_lot_issue", "other", "unknown"
-            }
+            # Use dynamically loaded valid types + standard fallbacks
+            allowed_types = set(valid_issue_types_list) | {"unknown", "other"}
             ttype = (overview.get("type") or "").lower()
             if ttype and ttype not in allowed_types:
                 new_conf = min(new_conf, 40)
@@ -733,9 +768,9 @@ Keep the report under 200 words, professional, and specific to the issue type an
                     new_conf = max(new_conf, 75)
                 elif is_target and is_controlled and not has_danger:
                     # Explicitly downgrade controlled fires even if they are target types
-                    new_conf = min(new_conf, 30)
+                    new_conf = min(new_conf, 40)
                     ai_eval["issue_detected"] = False
-                    overview["type"] = "None"
+                    overview["type"] = "Other"
                     if "no public issue" not in (ai_eval.get("image_analysis") or "").lower():
                          ai_eval["image_analysis"] = f"Detected controlled fire ({overview.get('type')}); not a public safety issue."
             except Exception:
@@ -744,6 +779,14 @@ Keep the report under 200 words, professional, and specific to the issue type an
             # Force "other" issues to have low confidence (< 20%)
             if (overview.get("type") or "").lower() == "other":
                 new_conf = min(new_conf, 15)
+            
+            # Additional safety: If user explicitly mentions bonfire/controlled in issue type/description, force low confidence
+            # This handles cases where AI misses it but user context provided it, or simple keyword match
+            user_input_text = (description + " " + issue_type).lower()
+            if any(w in user_input_text for w in controlled_fire) and not any(w in user_input_text for w in danger_words):
+                 new_conf = min(new_conf, 40)
+                 ai_eval["issue_detected"] = False
+                 overview["type"] = "Other"
                 
             overview["confidence"] = new_conf
             ai_eval["ai_confidence_percent"] = new_conf

@@ -408,7 +408,30 @@ async def process_issue_background(
             is_duplicate = bool(cached_classification)
 
             # Policy conflict placeholder: e.g., controlled bonfire in permitted area
+            # Automatically detect if this is a controlled fire based on AI report content
             policy_conflict = False
+            try:
+                # Check summary and analysis for controlled fire keywords
+                overview = report.get("issue_overview", {})
+                ai_eval = report.get("ai_evaluation", {})
+                combined_text = (str(overview.get("summary_explanation", "")) + " " + str(ai_eval.get("image_analysis", ""))).lower()
+                
+                controlled_fire_keywords = [
+                    "controlled fire", "bonfire", "campfire", "bbq", "barbecue", "fire pit", 
+                    "religious ceremony", "festival", "diwali", "candle", "stove", "hearth",
+                    "chiminea", "grill", "cooking", "recreational fire", "fire ring", "holika", 
+                    "dahan", "lohri", "ceremony", "ritual", "crowd", "people watching", 
+                    "people standing", "spectators", "religious", "tradition", "custom"
+                ]
+                
+                if any(keyword in combined_text for keyword in controlled_fire_keywords):
+                    # Only flag as policy conflict if NO clear danger words are present
+                    danger_words = ["out of control", "emergency", "wildfire", "house fire", "building fire", "structure fire", "explosion"]
+                    if not any(danger in combined_text for danger in danger_words):
+                        policy_conflict = True
+                        logger.info(f"Policy conflict detected for issue {issue_id}: Controlled fire keywords found.")
+            except Exception as e:
+                logger.warning(f"Failed to check policy conflict for issue {issue_id}: {e}")
 
             # Reporter trust default (enhance later from user profile)
             reporter_trust_score = 50.0
@@ -417,6 +440,7 @@ async def process_issue_background(
             rate_limit_breached = False
 
             guard_payload = {
+                "issue_type": issue_type,
                 "severity": severity,
                 "priority": priority,
                 "public_safety_risk": (report or {}).get("detailed_analysis", {}).get("public_safety_risk", ""),
@@ -431,7 +455,11 @@ async def process_issue_background(
 
             guard = AuthorityDispatchGuard()
             decision = guard.evaluate(guard_payload)
-
+            
+            # Hinglish: Agar benign/controlled fire hai to 'route_to_review_team' hoga.
+            # Hum isse reject nahi karenge, bas auto-email skip karenge.
+            # Status 'pending' rahega taaki admin dashboard me dikhe.
+            
             # Attach decision to report for downstream UI/ops
             try:
                 if report is not None:
@@ -452,7 +480,9 @@ async def process_issue_background(
         try:
             # Use the AI-generated formatted_report if present
             # Non-blocking: create background task so DB store is not delayed
-            if report and (not decision or decision.action == "auto_dispatch"):
+            
+            # Only send email if action is specifically 'auto_dispatch'
+            if report and (decision and decision.action == "auto_dispatch"):
                 try:
                     # fire-and-forget background send (safe)
                     asyncio.create_task(send_formatted_ai_alert(report, background=True))
@@ -460,7 +490,7 @@ async def process_issue_background(
                 except Exception as e:
                     logger.warning(f"Failed to create email dispatch task for issue {issue_id}: {e}")
             else:
-                # Hold or reject: do not email authority
+                # Hold, Reject, or Route to Review Team: do not email authority automatically
                 if decision:
                     logger.info(f"Email dispatch skipped for issue {issue_id} due to guard action: {decision.action}")
         except Exception as e:

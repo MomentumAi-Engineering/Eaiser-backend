@@ -1,9 +1,21 @@
-# Backend repo ignores
-app/.env
+# Python
 __pycache__/
 *.pyc
-*.log
+*.pyo
+*.pyd
+
+# Node
+node_modules/
+npm-debug.log*
+.package-lock.json
+
+# Environment / secrets
 .env
 .env.*
+
+# Certificates
+certs/
+
+# OS
 .DS_Store
 Thumbs.db

@@ -1,0 +1,114 @@
+# Specialist Exemplars — V3
+# High-quality few-shot training examples for stable JSON output
+
+------------------------------------------------------------
+EXAMPLE 1 — TREE FALLEN
+------------------------------------------------------------
+IMAGE: A large tree blocking a road  
+DESCRIPTION: "Tree has fallen on the road"
+
+EXPECTED JSON:
+{
+  "issue_overview": {
+    "type": "tree_fallen",
+    "severity": "High",
+    "summary_explanation": "A large tree is completely blocking the roadway, preventing vehicle movement.",
+    "confidence": 95
+  },
+  "ai_evaluation": {
+    "issue_detected": true,
+    "detected_issue_type": "tree_fallen",
+    "ai_confidence_percent": 95,
+    "image_analysis": "A full tree trunk is lying across the entire width of a paved road.",
+    "rationale": "Obstruction visible, size large, complete blockage."
+  },
+  "recommended_actions": [
+    "Send a clearing crew",
+    "Temporarily close the road",
+    "Inspect surrounding trees for further risks"
+  ],
+  "responsible_authorities": [],
+  "available_authorities": [],
+  "additional_notes": ""
+}
+
+------------------------------------------------------------
+EXAMPLE 2 — CONTROLLED FIRE (NOT AN ISSUE)
+------------------------------------------------------------
+IMAGE: A family cooking BBQ on grill  
+DESCRIPTION: "BBQ in the park"
+
+EXPECTED JSON:
+{
+  "issue_overview": {
+    "type": "other",
+    "severity": "low",
+    "summary_explanation": "This appears to be a controlled BBQ fire.",
+    "confidence": 97
+  },
+  "ai_evaluation": {
+    "issue_detected": false,
+    "detected_issue_type": "None",
+    "ai_confidence_percent": 97,
+    "image_analysis": "A safe and controlled cooking setup with no visible danger.",
+    "rationale": "Fire is controlled, not a civic hazard."
+  },
+  "recommended_actions": [],
+  "responsible_authorities": [],
+  "available_authorities": [],
+  "additional_notes": ""
+}
+
+------------------------------------------------------------
+EXAMPLE 3 — POTHOLE
+------------------------------------------------------------
+IMAGE: A pothole on road  
+DESCRIPTION: "Road has a pothole"
+
+EXPECTED JSON:
+{
+  "issue_overview": {
+    "type": "pothole",
+    "severity": "Medium",
+    "summary_explanation": "A noticeable pothole is visible on the road surface.",
+    "confidence": 92
+  },
+  "ai_evaluation": {
+    "issue_detected": true,
+    "detected_issue_type": "pothole",
+    "ai_confidence_percent": 92,
+    "image_analysis": "A depression/hole appears on the roadway.",
+    "rationale": "Clear visible pothole pattern."
+  },
+  "recommended_actions": ["Repair pothole"],
+  "responsible_authorities": [],
+  "available_authorities": [],
+  "additional_notes": ""
+}
+
+------------------------------------------------------------
+EXAMPLE 4 — UNKNOWN / UNCLEAR CASE
+------------------------------------------------------------
+IMAGE: Something blurry or unclear  
+DESCRIPTION: "Not sure what this is"
+
+EXPECTED JSON:
+{
+  "issue_overview": {
+    "type": "other",
+    "severity": "low",
+    "summary_explanation": "The issue is unclear or not visible.",
+    "confidence": 40
+  },
+  "ai_evaluation": {
+    "issue_detected": false,
+    "detected_issue_type": "None",
+    "ai_confidence_percent": 40,
+    "image_analysis": "The image is unclear and lacks identifiable civic issues.",
+    "rationale": "Insufficient evidence."
+  },
+  "recommended_actions": [],
+  "responsible_authorities": [],
+  "available_authorities": [],
+  "additional_notes": ""
+}
