@@ -349,7 +349,11 @@ async def debug_routes():
 @app.on_event("startup")
 async def startup_event():
     logger.info("🚀 Starting Eaiser AI backend server...")
-    await init_db()
+    try:
+        await init_db()
+    except Exception as e:
+        logger.error(f"💥 Standard MongoDB Service initialization failed: {str(e)}")
+
     try:
         await init_redis()
         logger.info("✅ Redis caching initialized")
