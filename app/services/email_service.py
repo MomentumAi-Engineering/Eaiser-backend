@@ -295,3 +295,244 @@ async def notify_user_status_change(user_email: str, issue_id: str, status: str,
     except Exception as e:
         logger.error(f"Failed to notify user {user_email}: {e}")
         return False
+
+
+# --------------------------------------------------------------------
+# ✅ Admin Welcome Email (Animated & Professional)
+# --------------------------------------------------------------------
+
+ADMIN_DASHBOARD_URL = os.getenv(
+    "ADMIN_DASHBOARD_URL",
+    "http://localhost:5173/admin"  # local fallback
+)
+
+async def send_admin_welcome_email(
+    admin_email: str,
+    admin_name: str,
+    role: str,
+    temporary_password: str,
+    created_by: str
+) -> bool:
+    """
+    Sends a professional, animated welcome email to newly created admins.
+    """
+    try:
+        # ----------------------------
+        # Role Permissions Mapping
+        # ----------------------------
+        role_permissions = {
+            "super_admin": "Full system access — manage admins, assign issues, approve or decline reports.",
+            "admin": "Manage team members, assign issues, approve or decline reports.",
+            "team_member": "Handle assigned issues and review reports.",
+            "viewer": "Read-only access to dashboards and reports."
+        }
+
+        permissions_text = role_permissions.get(
+            role,
+            "Standard administrative access."
+        )
+
+        subject = f"Welcome to EAiSER — {role.replace('_', ' ').title()} Access Granted"
+
+        # ----------------------------
+        # HTML EMAIL (ANIMATED + PRO)
+        # ----------------------------
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Welcome to EAiSER</title>
+<style>
+  body {{
+    background-color: #020617; /* Dark slate background */
+    margin: 0;
+    padding: 0;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }}
+  .container {{
+    max-width: 620px;
+    margin: 40px auto;
+    background: #ffffff;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 25px 70px rgba(0,0,0,0.45);
+    animation: slideUp 0.9s ease-out;
+  }}
+  @keyframes slideUp {{
+    from {{ opacity: 0; transform: translateY(25px); }}
+    to {{ opacity: 1; transform: translateY(0); }}
+  }}
+  .header {{
+    background: linear-gradient(135deg, #4f46e5, #9333ea);
+    padding: 35px;
+    text-align: center;
+    color: #ffffff;
+  }}
+  .header h1 {{
+    margin: 0;
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }}
+  .header p {{
+    margin: 10px 0 0;
+    font-size: 16px;
+    opacity: 0.9;
+  }}
+  .content {{
+    padding: 35px;
+    color: #334155;
+    font-size: 15px;
+    line-height: 1.7;
+  }}
+  .card {{
+    background: #f8fafc;
+    border-radius: 10px;
+    padding: 22px;
+    margin: 25px 0;
+    border-left: 4px solid #6366f1;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  }}
+  .card h3 {{
+    margin-top: 0;
+    color: #1e293b;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }}
+  .card code {{
+    background: #e5e7eb;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: 'Consolas', monospace;
+    font-size: 15px;
+    font-weight: 600;
+    color: #334155;
+    display: inline-block;
+    margin-top: 6px;
+    letter-spacing: 1px;
+  }}
+  .cta {{
+    text-align: center;
+    margin: 35px 0;
+  }}
+  .cta a {{
+    background: linear-gradient(135deg, #4f46e5, #9333ea);
+    color: white;
+    padding: 16px 48px;
+    border-radius: 50px;
+    text-decoration: none;
+    font-size: 16px;
+    font-weight: 600;
+    display: inline-block;
+    box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3);
+    transition: all 0.25s ease;
+  }}
+  .cta a:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 15px 30px rgba(79, 70, 229, 0.5);
+  }}
+  .footer {{
+    text-align: center;
+    font-size: 12px;
+    color: #64748b;
+    background: #f1f5f9;
+    padding: 20px;
+    border-top: 1px solid #e2e8f0;
+  }}
+</style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>EAiSER Access</h1>
+      <p>AI-Driven Civic Intelligence Platform</p>
+    </div>
+
+    <div class="content">
+      <p>Hello <strong>{admin_name}</strong>,</p>
+
+      <p>
+        You have been officially onboarded by <strong>{created_by}</strong> as a
+        <strong>{role.replace('_', ' ').title()}</strong>.
+      </p>
+
+      <div class="card">
+        <h3>🔐 Login Credentials</h3>
+        <p><strong>Email:</strong> {admin_email}</p>
+        <p><strong>Temporary Password:</strong><br/>
+          <code>{temporary_password}</code>
+        </p>
+        <p style="color:#ef4444;font-size:13px; font-weight:500;">
+          ⚠️ For security, please change your password immediately after logging in.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>🛡️ Your Permissions</h3>
+        <p>{permissions_text}</p>
+      </div>
+
+      <div class="cta">
+        <a href="{ADMIN_DASHBOARD_URL}">
+          Launch Admin Dashboard
+        </a>
+      </div>
+      
+      <p style="text-align:center; color:#64748b; margin-top:30px;">
+        Welcome to the team. Let's make a difference.
+      </p>
+    </div>
+
+    <div class="footer">
+      © {created_by} · EAiSER Platform<br/>
+      Secure · Scalable · Intelligent
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+        # ----------------------------
+        # TEXT EMAIL (Fallback)
+        # ----------------------------
+        text_content = f"""
+Welcome to EAiSER
+
+Hi {admin_name},
+
+You have been onboarded by {created_by} as a {role.replace('_', ' ').title()}.
+
+Your Login Credentials:
+-----------------------
+Email: {admin_email}
+Temporary Password: {temporary_password}
+
+(Please change your password after first login)
+
+Your Permissions:
+-----------------
+{permissions_text}
+
+Access Admin Dashboard:
+{ADMIN_DASHBOARD_URL}
+
+— EAiSER Platform
+"""
+
+        # ----------------------------
+        # SEND EMAIL
+        # ----------------------------
+        return await send_email(
+            to_email=admin_email,
+            subject=subject,
+            html_content=html_content,
+            text_content=text_content
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Failed to send admin welcome email to {admin_email}: {e}")
+        return False
