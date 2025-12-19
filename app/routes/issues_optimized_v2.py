@@ -456,9 +456,12 @@ async def process_issue_background(
             guard = AuthorityDispatchGuard()
             decision = guard.evaluate(guard_payload)
             
-            # Hinglish: Agar benign/controlled fire hai to 'route_to_review_team' hoga.
-            # Hum isse reject nahi karenge, bas auto-email skip karenge.
-            # Status 'pending' rahega taaki admin dashboard me dikhe.
+            # Determine initial status based on guard decision
+            final_status = "pending"
+            if decision.action == "route_to_review_team":
+                final_status = "needs_review"
+            elif decision.action == "reject":
+                final_status = "rejected"
             
             # Attach decision to report for downstream UI/ops
             try:
@@ -475,6 +478,7 @@ async def process_issue_background(
         except Exception as e:
             logger.warning(f"Dispatch guard evaluation failed for issue {issue_id}: {e}")
             decision = None
+            final_status = "pending"
 
         # === NEW: Dispatch EAiSER formatted alert emails in background ===
         try:
@@ -545,7 +549,7 @@ async def process_issue_background(
                 "severity": severity,
                 "category": category,
                 "priority": priority,
-                "status": "pending",
+                "status": final_status,
                 "report": report,
                 "unified_report": unified_report,
                 "user_email": user_email,

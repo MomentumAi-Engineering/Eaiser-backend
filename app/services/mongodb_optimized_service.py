@@ -72,12 +72,15 @@ class OptimizedMongoDBService:
     def __init__(self):
         # Connection configuration
         self.mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-        self.db_name = os.getenv("MONGODB_NAME", "eaiser")
+        self.db_name = os.getenv("MONGODB_NAME", "eaiser_db_user")
         
-        # Parse database name from URI if provided
-        parsed_uri = urlparse(self.mongo_uri)
-        if parsed_uri.path and parsed_uri.path.strip("/"):
-            self.db_name = parsed_uri.path.strip("/")
+        # IMPORTANT: Always use MONGODB_NAME env variable, don't extract from URI
+        # This ensures consistency across all services
+        logger.info(f"🔧 MongoDB Configuration:")
+        logger.info(f"   URI: {self.mongo_uri[:50]}...")
+        logger.info(f"   Database: {self.db_name}")
+        logger.info(f"   Environment: {'Production (Atlas)' if 'mongodb+srv' in self.mongo_uri else 'Local'}")
+        
         
         # Connection instances
         self.primary_client: Optional[AsyncIOMotorClient] = None

@@ -46,6 +46,8 @@ async def analyze_image(image: UploadFile = File(...)):
         model = genai.GenerativeModel(model_name)
         prompt = (
             "Analyze the uploaded image. Identify visible issues and risks. "
+            "REALITY CHECK: If the image is a CARTOON, VIDEO GAME, AI GENERATED, or FAKE, start description with 'Fake/Cartoon Image.' "
+            "If the image shows a CONTROLLED FIRE (bonfire, candle, festival, stove), explicitly label it as 'Controlled Fire' - NOT a hazard. "
             "Return a concise issue description and list of detected issues as bullets. "
             "Also include short scene labels describing what is happening."
         )
@@ -64,9 +66,9 @@ async def analyze_image(image: UploadFile = File(...)):
         attempts = [
             (model_name, timeout),
             (os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash"), max(10, timeout - 2)),
+            ("gemini-1.5-pro", max(10, timeout - 3)), 
             ("gemini-2.0-flash", max(10, timeout - 4)),
             ("gemini-1.5-flash-8b", max(10, timeout - 6)),
-            ("gemini-1.0-pro-vision", max(10, timeout - 8)),
         ]
         for mdl, tmo in attempts:
             try:
@@ -136,8 +138,11 @@ async def analyze_image(image: UploadFile = File(...)):
             "out of control","emergency","uncontrolled","explosion","collapse",
             "wildfire","house fire","building fire","spread","spreading","structure","sirens"
         ]
-        controlled_fire = ["campfire","bonfire","bon fire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","festival","celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage"]
+        controlled_fire = ["campfire","bonfire","bon fire","bbq","barbecue","barbeque","grill","fire pit","controlled burn","controlled fire","festival","celebration","diwali","diya","candle","incense","lamp","stove","kitchen","smoke machine","stage"]
         minor_words = ["minor","small","tiny","cosmetic","scratch","smudge","dust","stain","low","no issue","normal","benign"]
+        
+        is_fake = "fake" in base_text or "cartoon" in base_text or "video game" in base_text or "ai generated" in base_text
+        
         has_danger = any(w in base_text for w in danger_words)
         has_controlled = any(w in base_text for w in controlled_fire)
         has_minor = any(w in base_text for w in minor_words)
@@ -157,7 +162,9 @@ async def analyze_image(image: UploadFile = File(...)):
         except Exception:
             clarity_score = 50
         confidence_estimate = 20
-        if not issues and not has_danger:
+        if is_fake:
+            confidence_estimate = 0
+        elif not issues and not has_danger:
             confidence_estimate = 10
         elif has_danger or (issues and not has_controlled):
             confidence_estimate = max(75, min(95, int(60 + clarity_score / 2)))

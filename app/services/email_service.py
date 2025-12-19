@@ -32,7 +32,7 @@ async def send_email(
     Sends an email via SendGrid API with inline images and attachments.
     Automatically retries once on transient failures.
     """
-    email_user = os.getenv("EMAIL_USER", "no-reply@momntumai.com")
+    email_user = os.getenv("EMAIL_USER", "no-reply@eaiser.ai")
     sendgrid_api_key = os.getenv("SENDGRID_API_KEY")
     env = os.getenv("ENV", "development").lower()
     # Default dry_run to False so emails send by default unless explicitly disabled

@@ -1086,12 +1086,16 @@ async def create_issue(
         # If action is explicitly reject, screen out.
         if decision.action == "reject":
             issue_status = "screened_out"
+            logger.warning(f"⚠️ Issue {issue_id} SCREENED OUT by dispatch guard")
         # If action is 'route_to_review_team', we keep it pending (or move to a specific 'needs_review' status if supported)
         # but importantly, we do NOT screen it out. 
         # For now, "pending" allows it to be seen in the admin dashboard for review.
         elif decision.action == "route_to_review_team":
-            issue_status = "pending"  # Ensure it is visible for review
+            issue_status = "needs_review"  # Ensure it is visible for review IMMEDIATELY
+            logger.info(f"✅ Issue {issue_id} set to NEEDS_REVIEW (confidence={confidence_val}%, type={issue_type})")
             # Optionally add a flag or note in dispatch_reasons (already handled by decision.reasons)
+        else:
+            logger.info(f"📝 Issue {issue_id} set to PENDING (action={decision.action})")
 
         db = await get_db()
         db.issues.update_one(
@@ -1104,6 +1108,8 @@ async def create_issue(
                 "status": issue_status,
             }}
         )
+        
+        logger.info(f"🔄 Issue {issue_id} saved with status={issue_status}")
 
         try:
             report.setdefault("unified_report", {}).setdefault("dispatch_decision", {})
@@ -1185,9 +1191,9 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
             logger.error(f"Issue {issue_id} not found in database")
             raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
         if issue.get("status") == "screened_out":
-            logger.warning(f"Issue {issue_id} screened out; blocking submission")
-            raise HTTPException(status_code=400, detail="Issue screened out as benign or potential prank; submission blocked")
-        if issue.get("status") and issue.get("status") != "pending":
+            logger.warning(f"Issue {issue_id} was screened out but user is submitting; routing to Admin Review.")
+            # Do NOT block. Allow to proceed so it can be flagged as needs_review below.
+        elif issue.get("status") and issue.get("status") not in ["pending", "needs_review"]:
             logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
             raise HTTPException(status_code=400, detail="Issue already processed")
     except Exception as e:
@@ -1227,9 +1233,26 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
     
     report = issue["report"]
 
+    # 1. Apply Edits to Report Object (InMemory) - BEFORE Guard Logic
+    if request.edited_report:
+        logger.debug(f"Updating report with edited content for issue {issue_id}")
+        # Merge edited report data into existing report
+        for key, value in request.edited_report.items():
+            if key in report and isinstance(report[key], dict) and isinstance(value, dict):
+                report[key].update(value)
+            else:
+                report[key] = value
+
     # Enforce guard decision: block low confidence or policy conflicts
+    # FAIL SAFE LOGIC
+    needs_review = False
     try:
         decision_action = issue.get("dispatch_decision")
+        if decision_action == "reject":
+             logger.info(f"Issue {issue_id} auto-rejected/screened-out. Routing to Admin Review.")
+             needs_review = True
+        
+        # Calculate confidence regardless to populate fields
         conf_val = 0.0
         try:
             conf_candidates = [
@@ -1240,57 +1263,68 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
             # Collect all valid confidence scores
             valid_scores = []
             for c in conf_candidates:
-                if c is None:
-                    continue
+                if c is None: continue
                 try:
                     s = str(c).strip()
-                    if s.endswith('%'):
-                        s = s[:-1]
+                    if s.endswith('%'): s = s[:-1]
                     v = float(s)
-                    if v <= 1.0:
-                        v = v * 100.0
+                    if v <= 1.0: v = v * 100.0
                     v = max(0.0, min(100.0, v))
                     valid_scores.append(v)
-                except Exception:
-                    continue
+                except Exception: continue
             
-            # Use minimum valid score for safety (conservative approach)
             if valid_scores:
                 conf_val = min(valid_scores)
-                logger.info(f"DEBUG: Found confidence scores {valid_scores}, using min: {conf_val}")
             else:
-                conf_val = 0.0 # Default to 0 if no scores found (forces review)
-                logger.info("DEBUG: No valid confidence scores found, defaulting to 0.0")
+                conf_val = 0.0
 
         except Exception as e:
             logger.error(f"DEBUG: Confidence parsing error: {e}")
             conf_val = 0.0
-        # GUARD LOGIC: Check for specific categories + Low Confidence -> Admin Review
+
         flagged_categories = [
             "bonfire", "controlled_fire", "festival", "ceremony", "burning_leaves", 
             "other", "unknown", "none"
         ]
         
-        # Check against issue_type (e.g. 'bonfire') or category if applicable
-        current_issue_type = issue.get("issue_type", "unknown").lower()
-        is_flagged_category = current_issue_type in flagged_categories
-        logger.info(f"DEBUG: Issue {issue_id}: Type={current_issue_type}, Conf={conf_val}, FlaggedCat={is_flagged_category}")
+        current_issue_type = report.get("issue_type") or issue.get("issue_type", "unknown")
+        current_issue_type = str(current_issue_type).lower()
         
-        # User rule: If category in list AND confidence < 70 -> Admin Review
-        # Also keeping existing reject logic
-        if decision_action == "reject":
-             logger.warning(f"Issue {issue_id} blocked by guard (decision={decision_action})")
-             raise HTTPException(status_code=400, detail="Submission blocked by safety guard (policy conflict)")
-             
-        # MODIFIED: Strict confidence check OR Sensitive Category check.
-        # "bonfire", "festival" etc are sensitive/ambiguous, so we flag them for review too.
+        is_flagged_category = current_issue_type in flagged_categories or "fire" in current_issue_type
+        
+        # User rule: If category in list OR confidence < 70 -> Admin Review
         if conf_val < 70 or is_flagged_category:
-            logger.info(f"Issue {issue_id} flagged for admin review (type={current_issue_type}, conf={conf_val}%)")
+            logger.info(f"🚨 Issue {issue_id} flagged for admin review (type={current_issue_type}, conf={conf_val}%)")
+            logger.info(f"   Reason: {'Low confidence' if conf_val < 70 else ''} {'Flagged category' if is_flagged_category else ''}")
+            needs_review = True
+        else:
+            logger.info(f"✅ Issue {issue_id} passed review (type={current_issue_type}, conf={conf_val}%)")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Guard logic exception for {issue_id}: {e}", exc_info=True)
+        # Fail Closed -> Review
+        needs_review = True
+
+    if needs_review:
+        # Save state and return
+        try:
+             # Ensure recommended actions if missing
+            recommended_actions = report.get("recommended_actions", [])
             
-            # Update status to 'needs_review'
-            await update_issue_status(issue_id, "needs_review")
-            
-            # Return early success response
+            await db.issues.update_one(
+                {"_id": issue_id},
+                {
+                    "$set": {
+                        "report": report,
+                        "status": "needs_review",
+                        "recommended_actions": recommended_actions,
+                        "authority_email": [auth["email"] for auth in request.selected_authorities],
+                        "authority_name": [auth["name"] for auth in request.selected_authorities],
+                    }
+                }
+            )
             return IssueResponse(
                 id=issue_id,
                 message="Report submitted for quality review. Our team will verify the details shortly.",
@@ -1298,25 +1332,12 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
                     "issue_id": issue_id,
                     "status": "needs_review",
                     "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+                    "report": report
                 }
             )
-
-        # Original low confidence block for non-flagged categories if needed (optional, keeping lenient for others as per prompt impl)
-        # If strict safety is needed, we could block others too, but prompt specified this condition.
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    
-    # Update report with edited content if provided
-    if request.edited_report:
-        logger.debug(f"Updating report with edited content for issue {issue_id}")
-        # Merge edited report data into existing report
-        for key, value in request.edited_report.items():
-            if key in report and isinstance(report[key], dict) and isinstance(value, dict):
-                report[key].update(value)
-            else:
-                report[key] = value
+        except Exception as e:
+             logger.error(f"Failed to update issue status to needs_review: {e}")
+             raise HTTPException(status_code=500, detail="Internal error updating issue status")
     
     report["responsible_authorities_or_parties"] = selected_authorities
     report["template_fields"]["zip_code"] = issue.get("zip_code", "N/A")
@@ -1407,7 +1428,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         if not issue:
             logger.error(f"Issue {issue_id} not found in database")
             raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-        if issue.get("status") != "pending":
+        if issue.get("status") and issue.get("status") not in ["pending", "needs_review"]:
             logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
             raise HTTPException(status_code=400, detail="Issue already processed")
     except Exception as e:

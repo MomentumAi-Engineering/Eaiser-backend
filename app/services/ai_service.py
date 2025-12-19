@@ -166,19 +166,26 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             valid_issue_types = "|".join(issue_category_map.keys()) or "pothole|fire|garbage|flood|vandalism|structural_damage|property_damage"
 
             prompt = f"""
-You are an expert AI trained to classify infrastructure-related issues.
+You are an expert AI trained to classify infrastructure-related issues for a civic reporting app.
 Analyze the image and description: "{description}".
 
 STEP 1: REALITY CHECK (CRITICAL)
 - Is this a REAL, PHOTO-REALISTIC photo taken by a camera?
-- Look for: Cartoon shaders, cel-shading, perfect smooth textures, AI artifacts, video game HUDs, or drawings.
-- If the image is AI-GENERATED, A VIDEO GAME, A CARTOON, or FAKE:
+- Look for: Cartoon shaders, cel-shading, perfect smooth textures, AI artifacts, video game HUDs, drawings, or digital art.
+- If the image is AI-GENERATED, A VIDEO GAME, A CARTOON, SCREENSHOT, or FAKE:
   - Set "is_real": false
   - Set "confidence": 0
   - Set "issue_type": "unknown"
 
-STEP 2: CLASSIFICATION (Only if Real)
-- Identify the issue type provided below.
+STEP 2: ISSUE IDENTIFICATION
+- Does the image show a VALID Public Infrastructure Issue?
+- Issue Types: {valid_issue_types}
+- If the image shows a "normal" scene (e.g., a clean road, a happy dog, a normal building, a selfie):
+  - Set "issue_type": "none"
+  - Set "confidence": 0 to 60 (Low)
+- If the image shows "Fire":
+  - controlled fire (bonfire, candle, bbq, festival, diya) -> "issue_type": "controlled_fire", "confidence": 30
+  - hazard fire (wildfire, building fire, accident) -> "issue_type": "fire", "confidence": 90+
 
 Return JSON:
 {{
@@ -186,7 +193,6 @@ Return JSON:
   "confidence": number (0 to 100),
   "is_real": boolean
 }}
-Provide only valid JSON.
 """
             # Run Gemini API call in a separate thread
             timeout = int(os.getenv('AI_TIMEOUT', '8'))
@@ -215,11 +221,30 @@ Provide only valid JSON.
                 confidence = 0.0
                 issue_type = "unknown"
 
+            # 1. Fake/Cartoon Filter
+            if not is_real:
+                logger.warning("AI detected FAKE/GENERATED image. Forcing confidence to 0.")
+                confidence = 0.0
+                issue_type = "unknown"
+
+            # 2. "None" / "Normal" Filter
+            if issue_type in ["none", "normal", "safe", "other", "unknown"]:
+                logger.info(f"AI detected no specific issue ('{issue_type}'). Clamping confidence.")
+                confidence = min(confidence, 65.0) # Ensure it stays < 70
+                issue_type = "unknown"
+
+            # 3. Controlled Fire Filter
+            if issue_type == "controlled_fire":
+                 logger.info("AI detected controlled fire. Marking as low confidence 'fire'.")
+                 issue_type = "fire"
+                 confidence = min(confidence, 40.0) # Low confidence for admin review
+
             # Validate issue_type
             if issue_type not in issue_category_map:
-                logger.warning(f"Invalid issue_type '{issue_type}' received, defaulting to 'unknown'")
-                issue_type = "unknown"
-                confidence = min(confidence, 70.0)
+                if issue_type != "unknown":
+                    logger.warning(f"Invalid issue_type '{issue_type}' received, defaulting to 'unknown'")
+                    issue_type = "unknown"
+                    confidence = min(confidence, 70.0)
 
             # Cross-validate with description (prioritize fallen tree first)
             description_lower = description.lower()
@@ -239,20 +264,25 @@ Provide only valid JSON.
                     "fallen branches","tree debris","debris from tree"
                 ]
             }
-            # High-priority fallen tree override
-            if any(tok in description_lower for tok in issue_keywords["tree_fallen"]):
-                issue_type = "tree_fallen"
-                confidence = max(confidence, 88.0)
-                logger.info(f"Description suggests tree_fallen. Overriding to tree_fallen with confidence {confidence}.")
-            else:
-                for issue, keywords in issue_keywords.items():
-                    if any(keyword in description_lower for keyword in keywords):
-                        issue_type = issue
-                        # Only override if confidence is not extremely low (fake detection)
-                        if confidence > 10:
-                            confidence = max(confidence, 92.0 if issue == "pothole" else 80.0)
-                            logger.info(f"Description suggests {issue}. Overriding to {issue} with confidence {confidence}.")
-                        break
+            
+            # Heuristics: Only apply if valid REAL image and not explicitly marked 'none' by AI
+            # (If AI said "none", we trust it more, unless description is VERY specific)
+            
+            if is_real and confidence > 10:
+                # High-priority fallen tree override
+                if any(tok in description_lower for tok in issue_keywords["tree_fallen"]):
+                    issue_type = "tree_fallen"
+                    confidence = max(confidence, 88.0)
+                    logger.info(f"Description suggests tree_fallen. Overriding to tree_fallen with confidence {confidence}.")
+                else:
+                    for issue, keywords in issue_keywords.items():
+                        if any(keyword in description_lower for keyword in keywords):
+                            if issue_type == "unknown": # Only assist unknown/ambiguous
+                                issue_type = issue
+                                confidence = max(confidence, 80.0)
+                                logger.info(f"Description suggests {issue}. Overriding to {issue} with confidence {confidence}.")
+                            break
+                            
             animal_tokens = ["dead animal", "carcass", "roadkill"]
             if any(t in description_lower for t in animal_tokens):
                 issue_type = "dead_animal"
@@ -267,17 +297,20 @@ Provide only valid JSON.
             ]
             controlled_tokens = [
                 "campfire","bonfire","bbq","barbecue","fire pit","controlled",
-                "festival","diwali","diya","candle","incense","smoke machine","stage"
+                "festival","diwali","diya","candle","incense","smoke machine","stage", "stove"
             ]
             has_hazard = any(t in description_lower for t in hazard_tokens)
             has_controlled = any(t in description_lower for t in controlled_tokens)
+            
             if has_controlled and not has_hazard:
+                logger.info("Description indicates controlled fire/event. Lowering confidence.")
                 confidence = min(confidence, 40.0)
             elif has_hazard and confidence > 10:
                 confidence = max(confidence, 88.0)
-            # Clamp for non-specific types
-            if issue_type in ("unknown", "other"):
-                confidence = min(confidence, 50.0)
+                
+            # Clamp for non-specific types (Final Guardrail)
+            if issue_type in ("unknown", "other", "none"):
+                confidence = min(confidence, 65.0)
             
             # Explicitly keep confidence low if it came back very low (likely fake)
             if confidence <= 10:
@@ -290,15 +323,25 @@ Provide only valid JSON.
             high_severity_issues = ["fire", "flood", "structural_damage"]
             high_severity_keywords = ["urgent", "emergency", "critical", "severe"]
             medium_severity_issues = ["pothole", "vandalism"]
-            severity = (
-                "High" if issue_type in high_severity_issues or any(k in description_lower for k in high_severity_keywords)
-                else "Medium" if issue_type in medium_severity_issues or confidence >= 85
-                else "Low"
-            )
+            
+            # Default to Low for unknowns/low-conf
+            severity = "Low"
+            
+            # Logic: High confidence + High Severity Type -> High
+            if (issue_type in high_severity_issues or any(k in description_lower for k in high_severity_keywords)) and confidence > 50:
+                severity = "High"
+            elif (issue_type in medium_severity_issues or confidence >= 85) and confidence > 50:
+                severity = "Medium"
+            
+            # Special case for fire: if low confidence/controlled -> Low
+            if issue_type == "fire" and confidence < 50:
+                 severity = "Low"
 
-            # Get category and priority
             category = issue_category_map.get(issue_type, "public")
             priority = "High" if severity == "High" or confidence > 90 else "Medium"
+            
+            if confidence < 70:
+                priority = "Low"
 
             logger.info(f"Issue classified as {issue_type} with severity {severity} (confidence: {confidence}, category: {category}, priority: {priority})")
             return issue_type, severity, confidence, category, priority
@@ -603,12 +646,13 @@ Keep the report under 200 words, professional, and specific to the issue type an
             "confidence": confidence,
             "category": category,
             "summary_explanation": (
-                f"This report documents a public infrastructure issue detected at {location_str}." "\n"
-                f"Zip code context: {zip_code if zip_code else 'N/A'}; coordinates: {latitude}, {longitude}." "\n"
-                f"The issue type is {issue_type.title()}; severity assessed as {severity.lower()} with {confidence:.1f}% confidence." "\n"
-                f"Visual indicators and metadata support the classification and estimated impact." "\n"
-                f"Initial actions recommended: {actions[0]}{(' ' + actions[1]) if len(actions) > 1 else ''}." "\n"
-                f"Please review and escalate to the appropriate authorities for resolution."
+                f"Issue Report: {issue_type.title()} at {location_str}." "\n"
+                f"Description: {description}" "\n\n"
+                f"Details: A {issue_type} has been reported with {severity.lower()} severity. "
+                f"The issue was identified based on the provided image and description." "\n"
+                f"Confidence Level: {confidence:.1f}% "
+                f"(Status: {priority} Priority). " "\n"
+                f"Please verify the situation on-site."
             )
         },
         "detailed_analysis": {
