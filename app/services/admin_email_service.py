@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # ENV CONFIG (DEV + PROD SAFE)
 # -------------------------------------------------
 
-ADMIN_DASHBOARD_URL = "https://eaiser-frontend-git-dev-raj-baidyanaths-projects-47698f46.vercel.app/admin"
+ADMIN_DASHBOARD_URL = "https://www.eaiser.ai/admin"
 
 # -------------------------------------------------
 # MAIN SERVICE FUNCTION

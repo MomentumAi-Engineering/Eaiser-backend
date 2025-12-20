@@ -118,7 +118,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:5174",
-        "https://eaiser-frontend-git-dev-raj-baidyanaths-projects-47698f46.vercel.app"
+        "https://www.eaiser.ai"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
