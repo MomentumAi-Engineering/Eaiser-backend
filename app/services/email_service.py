@@ -301,10 +301,7 @@ async def notify_user_status_change(user_email: str, issue_id: str, status: str,
 # ✅ Admin Welcome Email (Animated & Professional)
 # --------------------------------------------------------------------
 
-ADMIN_DASHBOARD_URL = os.getenv(
-    "ADMIN_DASHBOARD_URL",
-    "http://localhost:5173/admin"  # local fallback
-)
+ADMIN_DASHBOARD_URL = "https://eaiser-frontend-git-dev-raj-baidyanaths-projects-47698f46.vercel.app/admin"
 
 async def send_admin_welcome_email(
     admin_email: str,
