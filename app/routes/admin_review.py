@@ -724,6 +724,21 @@ async def delete_admin(admin_id: str, current_admin: dict = Depends(get_admin_us
              raise HTTPException(status_code=400, detail="Cannot delete your own account.")
 
         collection = await mongo_service.get_collection("admins", read_only=False)
+        
+        # Permission Check: Check target admin role
+        target_admin = await collection.find_one({"_id": ObjectId(admin_id)})
+        if not target_admin:
+             raise HTTPException(status_code=404, detail="Admin not found")
+
+        target_role = target_admin.get("role", "admin")
+        current_role = current_admin.get("role", "admin")
+
+        if target_role == "super_admin" and current_role != "super_admin":
+            raise HTTPException(
+                status_code=403, 
+                detail="Only a Super Admin can delete another Super Admin"
+            )
+
         result = await collection.delete_one({"_id": ObjectId(admin_id)})
         
         if result.deleted_count == 0:
@@ -735,6 +750,79 @@ async def delete_admin(admin_id: str, current_admin: dict = Depends(get_admin_us
     except Exception as e:
         logger.error(f"Error deleting admin: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.put("/deactivate-admin/{admin_id}")
+async def deactivate_admin_account(admin_id: str, current_admin: dict = Depends(get_admin_user)):
+    """
+    Deactivate an admin user.
+    Rules:
+    - Only super_admin can deactivate another super_admin.
+    - Cannot deactivate self.
+    """
+    mongo_service = await get_optimized_mongodb_service()
+    if not mongo_service:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+
+    try:
+        # Prevent self-deactivation
+        if str(current_admin["id"]) == admin_id:
+             raise HTTPException(status_code=400, detail="Cannot deactivate your own account.")
+
+        collection = await mongo_service.get_collection("admins", read_only=False)
+        target_admin = await collection.find_one({"_id": ObjectId(admin_id)})
+        
+        if not target_admin:
+            raise HTTPException(status_code=404, detail="Admin not found")
+            
+        # Permission Check: Only super_admin can deactivate super_admin
+        target_role = target_admin.get("role", "admin")
+        current_role = current_admin.get("role", "admin")
+        
+        if target_role == "super_admin" and current_role != "super_admin":
+            raise HTTPException(
+                status_code=403, 
+                detail="Only a Super Admin can deactivate another Super Admin"
+            )
+            
+        # Update status
+        result = await collection.update_one(
+            {"_id": ObjectId(admin_id)},
+            {"$set": {"is_active": False}}
+        )
+        
+        # If no change, it might be already inactive, but we return success anyway
+        return {"message": "Admin deactivated successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deactivating admin: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.put("/reactivate-admin/{admin_id}")
+async def reactivate_admin_account(admin_id: str, current_admin: dict = Depends(get_admin_user)):
+    """
+    Reactivate an admin user.
+    """
+    if current_admin.get("role") != "super_admin":
+         raise HTTPException(status_code=403, detail="Only Super Admin can reactivate accounts")
+
+    mongo_service = await get_optimized_mongodb_service()
+    if not mongo_service:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+
+    try:
+        collection = await mongo_service.get_collection("admins", read_only=False)
+        result = await collection.update_one(
+            {"_id": ObjectId(admin_id)},
+            {"$set": {"is_active": True}}
+        )
+        
+        return {"message": "Admin reactivated successfully"}
+    except Exception as e:
+        logger.error(f"Error reactivating admin: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ============================================
