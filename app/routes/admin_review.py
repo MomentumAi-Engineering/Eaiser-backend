@@ -662,6 +662,73 @@ async def decline_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
         logger.error(f"Error declining issue: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/update-report")
+async def update_issue_report(
+    issue_id: str = Body(...),
+    summary: Optional[str] = Body(None),
+    issue_type: Optional[str] = Body(None),
+    confidence: Optional[float] = Body(None),
+    admin: dict = Depends(get_admin_user)
+):
+    """
+    Update the report details of an issue (summary, type, confidence).
+    """
+    try:
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            raise HTTPException(status_code=503, detail="Database service unavailable")
+
+        # Get existing issue
+        issue = await mongo_service.get_issue_by_id(issue_id)
+        if not issue:
+            raise HTTPException(status_code=404, detail="Issue not found")
+        
+        update_fields = {}
+        
+        # Update Issue Type (Top level + Report level)
+        if issue_type:
+            update_fields["issue_type"] = issue_type
+            # Also update deeply nested report fields where type might be stored
+            update_fields["report.unified_report.issue_type"] = issue_type
+            update_fields["report.issue_overview.issue_type"] = issue_type
+            
+        # Update Summary (Deeply nested)
+        if summary:
+            update_fields["description"] = summary # Top level fallback
+            update_fields["report.unified_report.summary_explanation"] = summary
+            update_fields["report.issue_overview.summary_explanation"] = summary
+            
+        # Update Confidence
+        if confidence is not None:
+            update_fields["confidence"] = confidence
+            update_fields["report.unified_report.confidence_percent"] = confidence
+            update_fields["report.issue_overview.confidence_percent"] = confidence
+
+        if not update_fields:
+            return {"message": "No changes provided"}
+            
+        # Add admin edit trace
+        update_fields["last_edited_by"] = admin.get("email")
+        update_fields["last_edited_at"] = datetime.utcnow()
+
+        success = await mongo_service.update_one_optimized(
+            collection_name='issues',
+            filter_dict={"_id": issue_id},
+            update_dict={"$set": update_fields}
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update issue")
+
+        logger.info(f"Report updated for issue {issue_id} by {admin.get('email')}")
+        return {"message": "Report updated successfully", "issue_id": issue_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/skip")
 async def skip_review(action: ReviewAction, admin: dict = Depends(get_admin_user)):
     """
