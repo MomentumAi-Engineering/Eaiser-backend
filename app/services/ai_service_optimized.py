@@ -863,6 +863,14 @@ Keep the report under 200 words, professional, and specific to the issue type an
         logger.info(f"Optimized report generated and cached for issue {issue_id}")
 
         # === EAiSER FORMATTED ALERT TEMPLATE (Concise SUMMARY enforced) ===
+        # Calculate color for confidence score
+        if confidence >= 80:
+            conf_color = "#4ade80" # Green
+        elif confidence >= 50:
+            conf_color = "#facc15" # Yellow
+        else:
+            conf_color = "#ef4444" # Red
+
         formatted_alert = f"""
 Subject: EAiSER Alert – {overview.get('type', issue_type).title()} (ID: {report_id})
 🚨 EAiSER INFRASTRUCTURE ALERT 🚨
@@ -882,7 +890,7 @@ ________________________________________
 🧠 AI REPORT SUMMARY
 Field\tDetails
 Issue Type\t{issue_type.title()}
-AI Confidence\t{confidence:.2f}%
+AI Confidence\t<span style="color: {conf_color}; font-weight: bold;">{confidence:.2f}%</span><br><div style="width: 100%; max-width: 250px; height: 8px; background-color: #e5e7eb; border-radius: 4px; margin-top: 4px; overflow: hidden;"><div style="width: {confidence:.0f}%; height: 100%; background-color: {conf_color};"></div></div>
 Priority\t{priority}
 Time Reported\t{local_time} {timezone_str}
 Report ID\t{report_id}
@@ -1056,6 +1064,16 @@ Automated report generated via EAiSER AI by MomntumAI
             logger.warning(f"Failed to build concise fallback summary: {_e}")
 
         # === EAiSER FORMATTED ALERT TEMPLATE for fallback ===
+        # Calculate color for fallback confidence
+        if _ai_confidence_percent >= 80:
+            fb_conf_color = "#4ade80"
+        elif _ai_confidence_percent >= 50:
+            fb_conf_color = "#facc15"
+        else:
+            fb_conf_color = "#ef4444"
+
+        fb_conf_bar_html = f'<div style="width: 100%; max-width: 250px; height: 8px; background-color: #e5e7eb; border-radius: 4px; margin-top: 4px; overflow: hidden;"><div style="width: {_ai_confidence_percent}%; height: 100%; background-color: {fb_conf_color};"></div></div>'
+
         formatted_alert = f"""
 Subject: EAiSER Alert – {issue_type.title() if issue_type else 'Issue'} (ID: {report_id})
 🚨 EAiSER INFRASTRUCTURE ALERT 🚨
@@ -1075,7 +1093,7 @@ ________________________________________
 🧠 AI REPORT SUMMARY
 Field\tDetails
 Issue Type\t{issue_type.title() if issue_type else 'N/A'}
-AI Confidence\t{_ai_confidence_percent}%
+AI Confidence\t<span style="color: {fb_conf_color}; font-weight: bold;">{_ai_confidence_percent}%</span><br>{fb_conf_bar_html}
 Priority\t{priority}
 Time Reported\t{local_time} {timezone_str}
 Report ID\t{report_id}

@@ -600,6 +600,16 @@ async def send_authority_email(
     impact_desc = report.get('detailed_analysis', {}).get('potential_impact', 'N/A')
     location_ctx = report.get('issue_overview', {}).get('location_context', 'N/A')
     report_oid = report.get('template_fields', {}).get('oid', 'N/A')
+    
+    # Calculate color for confidence bar
+    conf_val = float(confidence) if isinstance(confidence, (int, float, str)) and str(confidence).replace('.','',1).isdigit() else 0
+    if conf_val >= 80:
+        conf_bar_color = "#4ade80" # Green
+    elif conf_val >= 50:
+        conf_bar_color = "#facc15" # Yellow
+    else:
+        conf_bar_color = "#ef4444" # Red
+        
     subject_override = f"EAiSER Alert – {issue_type} (ID: {report_oid})"
     html_content = f"""
 <!DOCTYPE html>
@@ -731,7 +741,7 @@ async def send_authority_email(
     <p><span class="label">AI Confidence:</span> {confidence}%</p>
 
     <div class="conf-bar-container">
-      <div class="conf-bar-fill"></div>
+      <div class="conf-bar-fill" style="width: {confidence}%; background: {conf_bar_color};"></div>
     </div>
 
     <br />
@@ -1282,23 +1292,37 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
             logger.error(f"DEBUG: Confidence parsing error: {e}")
             conf_val = 0.0
 
-        flagged_categories = [
-            "bonfire", "controlled_fire", "festival", "ceremony", "burning_leaves", 
-            "other", "unknown", "none"
-        ]
+        # Strict user rule: Confidence based routing + Restricted Categories
+        # If < 70 -> Admin Review
+        # If Category is in [other, none, unknown, controlled_fire, bonfire, etc] -> Admin Review
+        # Else (High Confidence + Valid Category) -> Auto Send immediately
         
         current_issue_type = report.get("issue_type") or issue.get("issue_type", "unknown")
         current_issue_type = str(current_issue_type).lower()
         
-        is_flagged_category = current_issue_type in flagged_categories or "fire" in current_issue_type
+        # Categories that ALWAYS require human verification regardless of confidence
+        restricted_categories = [
+            "other", "none", "unknown",
+            "controlled_fire", "bonfire", "campfire", "burning_leaves",
+            "festival", "ceremony", "bbq", "barbecue"
+        ]
         
-        # User rule: If category in list OR confidence < 70 -> Admin Review
-        if conf_val < 70 or is_flagged_category:
-            logger.info(f"🚨 Issue {issue_id} flagged for admin review (type={current_issue_type}, conf={conf_val}%)")
-            logger.info(f"   Reason: {'Low confidence' if conf_val < 70 else ''} {'Flagged category' if is_flagged_category else ''}")
+        # Check partial matches for fire-related terms that imply controlled burning
+        is_restricted = (
+            current_issue_type in restricted_categories or
+            any(x in current_issue_type for x in ["control", "bonfire", "campfire"])
+        )
+        
+        if conf_val < 70 or is_restricted:
+            reason = []
+            if conf_val < 70: reason.append(f"Low Confidence ({conf_val}%)")
+            if is_restricted: reason.append(f"Restricted Category '{current_issue_type}'")
+            
+            logger.info(f"🚨 Issue {issue_id} flagged for admin review. Reason: {', '.join(reason)}")
             needs_review = True
         else:
-            logger.info(f"✅ Issue {issue_id} passed review (type={current_issue_type}, conf={conf_val}%)")
+            logger.info(f"✅ Issue {issue_id} passed review checks (Conf={conf_val}%, Type={current_issue_type}). Auto-sending.")
+            needs_review = False
 
     except HTTPException:
         raise
