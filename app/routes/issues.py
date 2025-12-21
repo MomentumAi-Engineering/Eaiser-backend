@@ -1255,81 +1255,87 @@ async def submit_issue(issue_id: str, request: SubmitRequest):
 
     # Enforce guard decision: block low confidence or policy conflicts
     # FAIL SAFE LOGIC
-    needs_review = False
+    # Calculate confidence first to guide decision
+    conf_val = 0.0
     try:
-        decision_action = issue.get("dispatch_decision")
-        if decision_action == "reject":
-             logger.info(f"Issue {issue_id} auto-rejected/screened-out. Routing to Admin Review.")
-             needs_review = True
-        
-        # Calculate confidence regardless to populate fields
-        conf_val = 0.0
-        try:
-            conf_candidates = [
-                report.get("template_fields", {}).get("confidence"),
-                report.get("unified_report", {}).get("confidence"),
-                report.get("issue_overview", {}).get("confidence"),
-            ]
-            # Collect all valid confidence scores
-            valid_scores = []
-            for c in conf_candidates:
-                if c is None: continue
-                try:
-                    s = str(c).strip()
-                    if s.endswith('%'): s = s[:-1]
-                    v = float(s)
-                    if v <= 1.0: v = v * 100.0
-                    v = max(0.0, min(100.0, v))
-                    valid_scores.append(v)
-                except Exception: continue
-            
-            if valid_scores:
-                conf_val = min(valid_scores)
-            else:
-                conf_val = 0.0
-
-        except Exception as e:
-            logger.error(f"DEBUG: Confidence parsing error: {e}")
-            conf_val = 0.0
-
-        # Strict user rule: Confidence based routing + Restricted Categories
-        # If < 70 -> Admin Review
-        # If Category is in [other, none, unknown, controlled_fire, bonfire, etc] -> Admin Review
-        # Else (High Confidence + Valid Category) -> Auto Send immediately
-        
-        current_issue_type = report.get("issue_type") or issue.get("issue_type", "unknown")
-        current_issue_type = str(current_issue_type).lower()
-        
-        # Categories that ALWAYS require human verification regardless of confidence
-        restricted_categories = [
-            "other", "none", "unknown",
-            "controlled_fire", "bonfire", "campfire", "burning_leaves",
-            "festival", "ceremony", "bbq", "barbecue"
+        # Try to get confidence from multiple sources in order of preference
+        conf_candidates = [
+            request.edited_report.get('issue_overview', {}).get('confidence') if request.edited_report else None,
+            report.get("template_fields", {}).get("confidence"),
+            report.get("unified_report", {}).get("confidence"),
+            report.get("issue_overview", {}).get("confidence"),
+            issue.get("report", {}).get("issue_overview", {}).get("confidence")
         ]
         
-        # Check partial matches for fire-related terms that imply controlled burning
-        is_restricted = (
-            current_issue_type in restricted_categories or
-            any(x in current_issue_type for x in ["control", "bonfire", "campfire"])
-        )
+        # Collect all valid confidence scores
+        valid_scores = []
+        for c in conf_candidates:
+            if c is None: continue
+            try:
+                s = str(c).strip()
+                if s.endswith('%'): s = s[:-1]
+                v = float(s)
+                if v <= 1.0: v = v * 100.0
+                v = max(0.0, min(100.0, v))
+                valid_scores.append(v)
+            except Exception: continue
         
-        if conf_val < 70 or is_restricted:
-            reason = []
-            if conf_val < 70: reason.append(f"Low Confidence ({conf_val}%)")
-            if is_restricted: reason.append(f"Restricted Category '{current_issue_type}'")
-            
-            logger.info(f"🚨 Issue {issue_id} flagged for admin review. Reason: {', '.join(reason)}")
-            needs_review = True
+        # Use the highest found confidence to be permissive, or min if we want to be conservative? 
+        # User wants High Confidence -> Auto Send. Let's use the explicit value found.
+        # Usually these should align. let's take the first valid one we found (priority order).
+        if valid_scores:
+            conf_val = valid_scores[0] # Priority: Edited > Template > Unified > Overview
         else:
-            logger.info(f"✅ Issue {issue_id} passed review checks (Conf={conf_val}%, Type={current_issue_type}). Auto-sending.")
-            needs_review = False
+            conf_val = 0.0
 
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Guard logic exception for {issue_id}: {e}", exc_info=True)
-        # Fail Closed -> Review
+        logger.error(f"DEBUG: Confidence parsing error: {e}")
+        conf_val = 0.0
+
+    # Determine Issue Type
+    current_issue_type = report.get("issue_type") or issue.get("issue_type", "unknown")
+    current_issue_type = str(current_issue_type).lower().strip()
+
+    # Restricted Categories that ALWAYS require review
+    restricted_categories = [
+        "other", "none", "unknown",
+        "controlled_fire", "bonfire", "campfire", "burning_leaves",
+        "festival", "ceremony", "bbq", "barbecue",
+        "fake", "ai_generated", "cartoon", "animated", "illustration", "art", "drawing", "video_game"
+    ]
+    
+    # Check for restricted types (Exact match or Safe substring)
+    # We explicitly exclude "uncontrolled" from matching "controlled" logic
+    is_restricted = False
+    if current_issue_type in restricted_categories:
+        is_restricted = True
+    else:
+        # Substring checks
+        # Fire/Controlled checks
+        if "bonfire" in current_issue_type or "campfire" in current_issue_type:
+            is_restricted = True
+        elif "control" in current_issue_type and "uncontrolled" not in current_issue_type:
+            is_restricted = True
+        
+        # Artificial/Fake checks
+        artificial_terms = ["fake", "ai generated", "cartoon", "animated", "illustration", "drawing"]
+        if any(term in current_issue_type for term in artificial_terms):
+            is_restricted = True
+
+    # DECISION LOGIC
+    # 1. If restricted category -> Review
+    # 2. If confidence < 70 -> Review
+    # 3. Otherwise -> Auto Send
+    
+    if is_restricted:
+        logger.info(f"🚨 Issue {issue_id} flagged for review (Restricted Category: '{current_issue_type}')")
         needs_review = True
+    elif conf_val < 70:
+        logger.info(f"🚨 Issue {issue_id} flagged for review (Low Confidence: {conf_val}%)")
+        needs_review = True
+    else:
+        logger.info(f"✅ Issue {issue_id} passed review checks (Conf={conf_val}%, Type={current_issue_type}). Auto-sending.")
+        needs_review = False
 
     if needs_review:
         # Save state and return

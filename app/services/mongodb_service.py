@@ -271,84 +271,11 @@ async def close_db():
         client.close()
         logger.info("🔒 MongoDB connection closed")
 
-async def initialize_db():
-    """
-    Initialize database connection with retry logic and fallback options
-    """
-    global client, db, fs
-    
-    try:
-        mongo_uri, db_name = get_mongodb_config()
-        
-        logger.info(f"🔧 MongoDB URI configured: {mongo_uri.split('@')[0].split('://')[0]}://***")
-        logger.info(f"📊 Database name: {db_name}")
-        
-        # Create MongoDB client with timeout settings
-        client = AsyncIOMotorClient(
-            mongo_uri,
-            serverSelectionTimeoutMS=5000,  # 5 second timeout
-            connectTimeoutMS=5000,
-            socketTimeoutMS=5000,
-            maxPoolSize=10,
-            retryWrites=True
-        )
-        
-        # Test connection with retry logic
-        max_retries = 3
-        retry_delay = 2.0
-        
-        for attempt in range(1, max_retries + 1):
-            try:
-                logger.info(f"🔄 Connection attempt {attempt}/{max_retries}...")
-                
-                # Test the connection
-                await client.admin.command('ping')
-                
-                # Connection successful
-                db = client[db_name]
-                fs = AsyncIOMotorGridFS(db)
-                
-                logger.info(f"✅ MongoDB connected successfully!")
-                logger.info(f"📊 Database: {db_name}")
-                logger.info(f"🔗 Connection: Active")
-                
-                return True
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Connection attempt {attempt} failed: {str(e)}")
-                
-                if attempt < max_retries:
-                    logger.info(f"⏳ Waiting {retry_delay}s before retry...")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay *= 2.25  # Exponential backoff
-                else:
-                    logger.error(f"❌ All connection attempts failed")
-                    
-                    # Fallback for development
-                    if 'localhost' in mongo_uri:
-                        logger.info(f"🔄 Falling back to in-memory storage for development...")
-                        client = None
-                        db = None
-                        fs = None
-                        return False
-                    else:
-                        raise e
-                        
-    except Exception as e:
-        logger.error(f"❌ MongoDB initialization failed: {str(e)}")
-        logger.info(f"🔄 Running in fallback mode (no persistent storage)")
-        
-        # Set to None for fallback mode
-        client = None
-        db = None
-        fs = None
-        return False
-
 async def get_db():
     """Get the async database connection."""
     global db
     if db is None:
-        await initialize_db()
+        await init_db()
     if db is None:
         raise RuntimeError("Async database connection could not be established")
     return db
@@ -357,7 +284,7 @@ async def get_fs():
     """Get the async GridFS instance."""
     global fs
     if fs is None:
-        await initialize_db()
+        await init_db()
     if fs is None:
         raise RuntimeError("Async GridFS could not be initialized")
     return fs

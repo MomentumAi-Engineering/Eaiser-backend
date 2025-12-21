@@ -9,7 +9,7 @@ import redis.asyncio as redis
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 # Import production-ready services
-from services.mongodb_service import get_db, initialize_db
+from services.mongodb_service import get_db
 from services.redis_service import RedisService
 
 logger = logging.getLogger(__name__)
