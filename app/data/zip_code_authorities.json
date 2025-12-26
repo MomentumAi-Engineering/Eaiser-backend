@@ -87,7 +87,7 @@
     "building_inspection": [
       {
         "name": "Fairview Building Inspection",
-        "email": "building@fairviewtn.gov",
+        "email": "Dummy@fairviewtn.gov",
         "type": "building_inspection",
         "timezone": "America/Chicago"
       }
@@ -103,7 +103,7 @@
     "environment": [
       {
         "name": "Fairview Environmental Department",
-        "email": "environment@fairviewtn.gov",
+        "email": "Dummy@fairviewtn.gov",
         "type": "environment",
         "timezone": "America/Chicago"
       }
@@ -111,7 +111,7 @@
     "water_utility": [
       {
         "name": "Fairview Water Utility Department",
-        "email": "water@fairviewtn.gov",
+        "email": "Dummy@fairviewtn.gov",
         "type": "water_utility",
         "timezone": "America/Chicago"
       }
@@ -119,7 +119,7 @@
     "code_enforcement": [
       {
         "name": "Fairview Code Enforcement",
-        "email": "code@fairviewtn.gov",
+        "email": "Dummy@fairviewtn.gov",
         "type": "code_enforcement",
         "timezone": "America/Chicago"
       }
@@ -127,7 +127,7 @@
     "transportation": [
       {
         "name": "Fairview Transportation Department",
-        "email": "transport@fairviewtn.gov",
+        "email": "Dummy@fairviewtn.gov",
         "type": "transportation",
         "timezone": "America/Chicago"
       }
@@ -143,7 +143,7 @@
     "general": [
       {
         "name": "Fairview City Department",
-        "email": "info@fairviewtn.gov",
+        "email": "Dummy@fairviewtn.gov",
         "type": "general",
         "timezone": "America/Chicago"
       }

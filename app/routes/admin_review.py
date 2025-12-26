@@ -45,10 +45,18 @@ class AdminLoginRequest(BaseModel):
     password: str
     code: Optional[str] = None
 
+class UpdateStatusRequest(BaseModel):
+    issue_id: str
+    status: str
+    admin_id: str
+    notes: Optional[str] = None
+
 class UserAction(BaseModel):
     user_email: str
     reason: str
     admin_id: str
+    issue_id: Optional[str] = None
+    force_confirm: bool = False
 
 # --- Endpoints ---
 
@@ -662,6 +670,53 @@ async def decline_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
         logger.error(f"Error declining issue: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/set-status")
+async def set_issue_status(action: UpdateStatusRequest, admin: dict = Depends(get_admin_user)):
+    """
+    Set an intermediate status for a report (e.g., 'no_action_required').
+    """
+    try:
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            raise HTTPException(status_code=503, detail="Database service unavailable")
+
+        # allowed statuses
+        allowed = ["no_action_required", "needs_support", "investigating", "duplicate"]
+        if action.status not in allowed:
+             # Just a warning or strict? Let's allow it but log
+             pass
+
+        success = await mongo_service.update_one_optimized(
+            collection_name='issues',
+            filter_dict={"_id": action.issue_id},
+            update_dict={
+                "$set": {
+                    "status": action.status,
+                    "admin_review": {
+                        "action": "status_change",
+                        "status_to": action.status,
+                        "admin_id": action.admin_id,
+                        "timestamp": datetime.utcnow(),
+                        "notes": action.notes
+                    }
+                }
+            }
+        )
+
+        if not success:
+            raise HTTPException(status_code=404, detail="Issue not found")
+
+        # Notify if needed (optional)
+
+        return {"message": f"Status updated to {action.status}", "issue_id": action.issue_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error setting status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/update-report")
 async def update_issue_report(
     issue_id: str = Body(...),
@@ -742,20 +797,34 @@ async def skip_review(action: ReviewAction, admin: dict = Depends(get_admin_user
 @router.post("/deactivate-user")
 async def deactivate_user(action: UserAction, admin: dict = Depends(get_admin_user)):
     """
-    Deactivate a user account (e.g. for spamming fake reports).
+    Deactivate a user account with safeguards.
     """
     try:
         mongo_service = await get_optimized_mongodb_service()
         if not mongo_service:
             raise HTTPException(status_code=503, detail="Database service unavailable")
-            
-        # Assuming there is a 'users' collection. 
-        # If not, we might blacklist the email in a separate collection.
-        
-        # Check if users collection exists or we just blacklist
-        # For now, let's assume we update a 'users' collection or add to 'blacklisted_users'
-        
-        # Check for user by email
+
+        # SAFEGUARD: LOW CONFIDENCE CHECK
+        if action.issue_id and not action.force_confirm:
+            issue = await mongo_service.get_issue_by_id(action.issue_id)
+            if issue:
+                # Check confidence
+                conf = 0
+                try:
+                    # try to extract confidence from various places
+                    conf = float(issue.get("confidence", 0))
+                    if conf == 0:
+                         conf = float(issue.get("report", {}).get("issue_overview", {}).get("confidence", 0))
+                except:
+                    pass
+                
+                if conf > 0 and conf < 50:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"⚠️ WARNING: This report has low AI confidence ({conf}%). Are you sure you want to deactivate the user? Please retry with force_confirm=true."
+                    )
+
+        # Proceed with deactivation
         user = await mongo_service.db.users.find_one({"email": action.user_email})
         if user:
             await mongo_service.db.users.update_one(
@@ -763,7 +832,6 @@ async def deactivate_user(action: UserAction, admin: dict = Depends(get_admin_us
                 {"$set": {"is_active": False, "deactivation_reason": action.reason}}
             )
         else:
-            # If user collection user doesn't exist (maybe only in issues), create blacklist entry?
             await mongo_service.db.blacklisted_users.update_one(
                 {"email": action.user_email},
                 {"$set": {"email": action.user_email, "reason": action.reason, "admin_id": action.admin_id, "timestamp": datetime.utcnow()}},
@@ -772,6 +840,8 @@ async def deactivate_user(action: UserAction, admin: dict = Depends(get_admin_us
             
         return {"message": f"User {action.user_email} deactivated."}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deactivating user: {e}")
         raise HTTPException(status_code=500, detail=str(e))

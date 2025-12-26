@@ -462,11 +462,11 @@ Return ONLY JSON with actual values filled in (do NOT use template variables lik
     "confidence": {confidence:.1f}
   }},
   "ai_evaluation": {{
-    "image_analysis": "Describe what is happening in the image and which visual cues support your conclusion.",
+    "image_analysis": "Describe what is happening in the image and which visual cues support your conclusion. Use specific visual evidence (e.g., 'cracks in the asphalt', 'exposed wires') instead of generic phrases like 'issue detected'.",
     "issue_detected": true|false,
     "detected_issue_type": "One of the Valid Issue Types listed above or 'None'",
     "ai_confidence_percent": 0,
-    "rationale": "Brief justification referencing image clarity and visual evidence. Use integer for ai_confidence_percent only (no %). If issue_detected is false, set ai_confidence_percent between 0 and 10; if true, set between 10 and 100 based on clarity and understanding."
+    "rationale": "Brief justification referencing image clarity and visual evidence. Use integer for ai_confidence_percent only (no %). If issue_detected is false, provide a specific reason in 'image_analysis' (e.g., 'The road surface appears intact with no visible potholes', 'Streetlight is upright with no visible damage')."
   }},
   "detailed_analysis": {{
     "root_causes": "Possible causes of the issue.",
@@ -911,6 +911,28 @@ Automated report generated via EAiSER AI by MomntumAI
 """
         # Add formatted alert into report dictionary
         report["formatted_report"] = formatted_alert
+
+        # Ticket 3: Authority Recommendation Logic Adjustment
+        # If no issue detected OR confidence is low (<50%), CLEAR authorities
+        ai_eval = report.get("ai_evaluation", {})
+        # Ensure we check the boolean correctly
+        issue_detected_flag = ai_eval.get("issue_detected")
+        if isinstance(issue_detected_flag, str):
+             issue_detected_flag = issue_detected_flag.lower() == 'true'
+        
+        confidence_val = ai_eval.get("ai_confidence_percent", 0)
+
+        if not issue_detected_flag or confidence_val < 50:
+             report["responsible_authorities_or_parties"] = []
+             # report["available_authorities"] = [] # Optional: keep available for manual reassignment if needed
+             
+             # Enrich recommended actions to be helpful to the USER instead of the AUTHORITY
+             report["recommended_actions"] = [
+                 "Review the report details manually.",
+                 "If you believe this is an error, please re-submit with a clearer image.",
+                 "Monitor the situation."
+             ]
+             logger.info(f"Report {issue_id}: Cleared authorities due to Low Confidence/No Issue (Conf: {confidence_val}%, Detected: {issue_detected_flag})")
 
         return report
     except Exception as e:
