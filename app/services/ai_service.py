@@ -1,5 +1,7 @@
 import google.generativeai as genai
 from PIL import Image
+import pillow_heif  # 🟢 Ticket 1: HEIC Support
+pillow_heif.register_heif_opener() # Register HEIC opener
 import io
 import json
 import logging
@@ -398,16 +400,28 @@ async def generate_report(
             logger.info(f"Resolved department for issue type '{issue_type}' (normalized: '{normalized_issue_type}'): {department}")
             map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
-            # Get authority data
-            authority_data = (
-                await asyncio.to_thread(get_authority_by_zip_code, zip_code, issue_type, category) if zip_code
-                else await asyncio.to_thread(get_authority, address, issue_type, latitude, longitude, category)
+            # 🟢 Ticket 3: Authority Logic Adjustment
+            # Only fetch authorities if we have a valid, actionable issue
+            should_contact_authorities = (
+                issue_type.lower() not in ["none", "unknown", "normal", "safe"] 
+                and confidence > 45.0
             )
-            responsible_authorities = authority_data.get("responsible_authorities", [{"name": department, "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}])
-            available_authorities = authority_data.get("available_authorities", [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}])
 
-            if available_authorities and "message" in available_authorities[0]:
-                available_authorities = [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}]
+            if should_contact_authorities:
+                authority_data = (
+                    await asyncio.to_thread(get_authority_by_zip_code, zip_code, issue_type, category) if zip_code
+                    else await asyncio.to_thread(get_authority, address, issue_type, latitude, longitude, category)
+                )
+                responsible_authorities = authority_data.get("responsible_authorities", [{"name": department, "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}])
+                available_authorities = authority_data.get("available_authorities", [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}])
+
+                if available_authorities and "message" in available_authorities[0]:
+                    available_authorities = [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}]
+            else:
+                logger.info(f"Skipping authority lookup for non-issue/low-confidence: {issue_type} ({confidence}%)")
+                # 🟢 Ticket 3: If no issue, don't recommend contacting anyone yet
+                responsible_authorities = []
+                available_authorities = []
 
             # Get timezone
             timezone_str = await asyncio.to_thread(get_timezone_name, latitude, longitude) or "UTC"
@@ -459,12 +473,9 @@ Return this structure:
     "severity": "{severity.lower()}",
     "confidence": {confidence},
     "category": "{category}",
-    "summary_explanation": (
-    "Our AI detected a {issue_type} in {location_str}. "
-    "The image shows {description}. "
-    "Based on the location and context, this incident has been classified as {priority} "
-    "due to {category}. "
-    "Report ID: {report_id}."
+    "summary_explanation": "A polite, user-friendly summary (max 3 sentences). STATE CLEARLY what visual evidence supports the finding (e.g. 'We detected deep cracking in the asphalt indicating a pothole'). IF NO ISSUE IS FOUND, explain why (e.g. 'The road appears clear and free of obstructions').",
+    "admin_analysis": "Technical details for the admin. Mention specific visual features (texture, depth, lighting) that confirmed or rejected the issue.",
+    "user_feedback": "A very short, friendly message for the user. (e.g. 'Thank you for reporting this pothole. We have flagged it for review.')"
   }},
   "detailed_analysis": {{
     "root_causes": "Possible causes of the issue.",

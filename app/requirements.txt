@@ -13,6 +13,7 @@ redis==5.0.1
 requests==2.32.3
 aiofiles==0.8.0
 pillow==11.2.1
+pillow-heif==0.21.0
 timezonefinder==6.5.9
 Jinja2==3.1.6
 python-multipart==0.0.20
