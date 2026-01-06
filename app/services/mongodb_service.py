@@ -125,17 +125,17 @@ async def init_db():
         
         # Production-ready MongoDB client configuration
         client_config = {
-            # Connection timeout settings - adjusted by environment
-            # In development, fail fast to avoid long hangs; in production, allow longer timeouts.
-            "serverSelectionTimeoutMS": 5000 if env != "production" else 15000,
-            "connectTimeoutMS": 8000 if env != "production" else 30000,
-            "socketTimeoutMS": 12000 if env != "production" else 45000,
+            # Connection timeout settings - SIGNIFICANTLY INCREASED for slow networks
+            # Handshake can take >3s on bad connections, so we give it 30s+
+            "serverSelectionTimeoutMS": 30000,   # Wait 30s before giving up on finding a server
+            "connectTimeoutMS": 45000,           # Wait 45s for initial connection (SSL handshake)
+            "socketTimeoutMS": 60000,            # Wait 60s for operations to complete
 
             # Connection pooling for high performance
             "maxPoolSize": int(os.getenv("MONGO_POOL_MAXSIZE", "50")),
-            "minPoolSize": int(os.getenv("MONGO_POOL_MINSIZE", "5")),
+            "minPoolSize": int(os.getenv("MONGO_POOL_MINSIZE", "10")), # Increased default min pool to 10
             "maxIdleTimeMS": 120000,
-            "waitQueueTimeoutMS": 8000 if env != "production" else 20000,
+            "waitQueueTimeoutMS": 30000,         # Wait 30s in queue before error
 
             # Performance optimizations
             "retryWrites": True,
@@ -248,17 +248,24 @@ async def create_indexes() -> None:
         users = db["users"]
 
         # Index used by aggregation hint in get_issues()
-        await issues.create_index([("timestamp", -1)], name="timestamp_desc", background=True)
+        await issues.create_index([("timestamp", -1)], name="timestamp_desc")
 
         # Common filters and sorts
-        await issues.create_index([("status", 1), ("timestamp", -1)], name="status_timestamp", background=True)
-        await issues.create_index([("zip_code", 1)], name="zip_code", background=True)
-        await issues.create_index([("issue_type", 1)], name="issue_type", background=True)
-        await issues.create_index([("user_email", 1)], name="user_email", background=True)
-        await issues.create_index([("latitude", 1), ("longitude", 1)], name="lat_lon", background=True)
+        await issues.create_index([("status", 1), ("timestamp", -1)], name="status_timestamp")
+        await issues.create_index([("zip_code", 1)], name="zip_code")
+        await issues.create_index([("issue_type", 1)], name="issue_type")
+        await issues.create_index([("user_email", 1)], name="user_email")
+        await issues.create_index([("latitude", 1), ("longitude", 1)], name="lat_lon")
 
         # Users collection unique email
-        await users.create_index([("email", 1)], name="email_unique", unique=True, background=True)
+        await users.create_index([("email", 1)], name="email_unique", unique=True)
+
+        # Authority Mapping Review indexes
+        authority_mapping_review = db["authority_mapping_review"]
+        await authority_mapping_review.create_index([("resolved", 1)], name="resolved")
+        await authority_mapping_review.create_index([("issue_type", 1)], name="issue_type")
+        await authority_mapping_review.create_index([("flagged_at", -1)], name="flagged_at_desc")
+        await authority_mapping_review.create_index([("case_id", 1)], name="case_id")
 
         logger.info("✅ Core MongoDB indexes created/verified")
     except Exception as e:
@@ -580,23 +587,96 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
             
             authority_name = issue.get("authority_name", ["City Department"])
             if not isinstance(authority_name, list):
-                authority_name = [str(authority_name)] if authority_name else ["City Department"]
+                 authority_name = [str(authority_name)]
             issue["authority_name"] = authority_name
-            
-            # Convert image_id to string if needed
-            if "image_id" in issue and issue["image_id"] and not isinstance(issue["image_id"], str):
-                issue["image_id"] = str(issue["image_id"])
-            
-            issues.append(issue)
-        
-        # Cache the results in Redis for future requests
-        await redis_service.cache_issues_list(issues, limit, skip)
-        
-        logger.info(f"💾 Retrieved {len(issues)} issues from MongoDB and cached (limit: {limit}, skip: {skip})")
+
+            # Format MongoDB ID as string
+            issue["_id"] = str(issue["_id"])
+
         return issues
+        
     except Exception as e:
-        logger.error(f"Failed to retrieve issues: {str(e)}", exc_info=True)
-        raise
+        logger.error(f"Failed to retrieve issues: {str(e)}")
+        return []
+
+async def get_user_issues(user_email: str, limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
+    """
+    Retrieve issues for a specific user from MongoDB.
+    """
+    try:
+        db = await get_db()
+        LIST_TIMEOUT_MS = int(os.getenv("LIST_TIMEOUT_MS", "5000"))
+        LIST_TIMEOUT_S = max(1.0, LIST_TIMEOUT_MS / 1000.0)
+        
+        projection = {
+            "_id": 1,
+            "issue_type": 1,
+            "description": 1,
+            "address": 1,
+            "zip_code": 1,
+            "latitude": 1,
+            "longitude": 1,
+            "severity": 1,
+            "category": 1,
+            "priority": 1,
+            "user_email": 1,
+            "status": 1,
+            "timestamp": 1,
+            "timestamp_formatted": 1,
+            "timezone_name": 1,
+            "authority_email": 1,
+            "authority_name": 1,
+            "image_id": 1,
+            "decline_reason": 1,
+            "decline_history": 1,
+            "available_authorities": 1
+        }
+        
+        # Filter by user_email
+        pipeline = [
+            {"$match": {"user_email": user_email}},
+            {"$sort": {"timestamp": -1}},
+            {"$skip": skip},
+            {"$limit": limit},
+            {"$project": projection}
+        ]
+
+        async def _run_aggregate_user():
+            cursor = db.issues.aggregate(
+                pipeline,
+                hint="timestamp_desc",
+                maxTimeMS=LIST_TIMEOUT_MS,
+                allowDiskUse=False,
+                batchSize=500
+            )
+            return await cursor.to_list(length=limit)
+
+        try:
+            issues = await asyncio.wait_for(_run_aggregate_user(), timeout=LIST_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            issues = []
+        except Exception as e:
+            logger.error(f"❌ MongoDB user list failed: {str(e)}", exc_info=True)
+            issues = []
+        
+        # Process defaults (same as get_issues)
+        for issue in issues:
+            issue["_id"] = str(issue["_id"])
+            issue.setdefault("issue_type", "Unknown Issue")
+            issue.setdefault("description", "No description")
+            issue.setdefault("address", "Unknown Address")
+            issue.setdefault("zip_code", "N/A")
+            issue.setdefault("severity", "Medium")
+            issue.setdefault("category", "Public")
+            issue.setdefault("priority", "Medium")
+            issue.setdefault("status", "pending")
+            issue.setdefault("timestamp_formatted", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+        return issues
+
+    except Exception as e:
+        logger.error(f"Failed to get user issues: {e}")
+        return []
 
 # Legacy function for backward compatibility
 async def get_all_issues() -> List[Dict[str, Any]]:

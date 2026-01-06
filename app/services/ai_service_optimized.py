@@ -42,6 +42,28 @@ async def load_json_data(filename: str) -> dict:
     except Exception as e:
         logger.error(f"Error loading JSON file {filename}: {e}")
         return {}
+
+async def load_prompt_text(filename: str) -> str:
+    """Load prompt text from file with caching"""
+    cache_key = f"prompt_text:{filename}"
+    # Use default TTL of 5 minutes
+    cached = await get_cached_data(cache_key, 300)
+    if cached:
+        return cached
+
+    try:
+        file_path = Path(__file__).parent.parent / "prompts" / filename
+        if file_path.exists():
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            await set_cached_data(cache_key, content, 300)
+            return content
+        else:
+            logger.warning(f"Prompt file not found: {filename}")
+            return ""
+    except Exception as e:
+        logger.error(f"Error loading prompt file {filename}: {e}")
+        return ""
 from utils.location import get_authority_by_zip_code, get_authority
 from utils.timezone import get_timezone_name
 import redis
@@ -406,99 +428,48 @@ async def generate_report_optimized(
     # Format for prompt (comma separated, Title Case)
     valid_issue_types_str = ", ".join([t.replace("_", " ").title() for t in valid_issue_types_list])
 
-    prompt = f"""
-You are an AI assistant for eaiser AI, generating infrastructure issue reports.
-Analyze the input below and return a structured JSON report (no markdown, no explanation).
-
-Valid Issue Types:
-{valid_issue_types_str}
-
-CRITICAL INSTRUCTION ON REALISM & SAFETY:
-1. FAKE/IRRELEVANT IMAGES:
-   - If the image is a CARTOON, ANIMATION, DRAWING, VIDEO GAME SCREENSHOT, or OBVIOUSLY FAKE/GENERATED:
-     - Set "issue_detected" to false.
-     - Set "detected_issue_type" to "None".
-     - Set "ai_confidence_percent" to 5.
-     - In "image_analysis", explicitly state: "Image appears to be a cartoon, animation, or simulation, not a real-world infrastructure issue."
-   - If the image is unrelated to infrastructure (e.g., a selfie, food, indoor furniture):
-     - Set "issue_detected" to false.
-
-2. FIRES - STRICT CLASSIFICATION:
-   - Distinguish between "Dangerous Fire" (Wildfire, Building Fire, Out of Control) and "Controlled Fire" (Campfire, Bonfire, BBQ, Fire Pit, Religious Ceremony, Burning Leaves, Festival).
-   - If the image shows a SAFE, CONTROLLED fire (e.g., inside a fire pit, people sitting around, BBQ grill, small religious fire, bonfire, burning wood pile, large crowd watching fire, festival celebration):
-     - Classify the Issue Type as "Other" (do NOT use "Fire" or "Wildfire").
-     - Set "issue_detected" to false.
-     - Set "ai_confidence_percent" to 40 (Must be < 50%).
-     - In "image_analysis", explicitly state: "Detected controlled fire/bonfire; not a public safety threat."
-     - In "summary_explanation", use words like "bonfire", "controlled fire", "festival", or "ceremony".
-   - ONLY classify as "Fire" if it poses a threat to public safety (e.g., house on fire, forest burning uncontrolled).
-   - IMPORTANT: If you see people standing calmly near the fire, it is likely a BONFIRE/FESTIVAL. Classify as "Other" (40% confidence).
-
-Input:
-- Issue Type: {issue_type.title()}
-- Severity: {severity}
-- Confidence: {confidence:.1f}%
-- Description: {description}
-- Category: {category}
-- Location: {location_str}
-- Issue ID: {issue_id}
-- Responsible Department: {department}
-- Map Link: {map_link}
-- Priority: {priority}
-{decline_prompt}
-{zip_code_prompt}
-
-For recommended_actions, provide 2-3 specific, actionable steps with timeframes. Examples:
-- Potholes: ["Fill pothole and mark with cones within 48 hours.", "Conduct follow-up inspection after repair."]
-- Broken Streetlight: ["Schedule bulb replacement within 3 days.", "Check wiring and restore power."]
-- Water Leakage: ["Inspect pipeline and stop leakage within 24 hours.", "Fix joints and test pressure."]
-
-Return ONLY JSON with actual values filled in (do NOT use template variables like {{Issue_Type}} - use the actual values I provided above):
-{{
-  "issue_overview": {{
-    "type": "{issue_type.title()}",
-    "severity": "{severity}",
-    "summary_explanation": "Our AI detected a {issue_type} in {location_str}. The image shows {description}. Based on the location and context, this incident has been classified as {priority} due to {category}. Report ID: {report_id}.",
-    "confidence": {confidence:.1f}
-  }},
-  "ai_evaluation": {{
-    "image_analysis": "Describe what is happening in the image and which visual cues support your conclusion. Use specific visual evidence (e.g., 'cracks in the asphalt', 'exposed wires') instead of generic phrases like 'issue detected'.",
-    "issue_detected": true|false,
-    "detected_issue_type": "One of the Valid Issue Types listed above or 'None'",
-    "ai_confidence_percent": 0,
-    "rationale": "Brief justification referencing image clarity and visual evidence. Use integer for ai_confidence_percent only (no %). If issue_detected is false, provide a specific reason in 'image_analysis' (e.g., 'The road surface appears intact with no visible potholes', 'Streetlight is upright with no visible damage')."
-  }},
-  "detailed_analysis": {{
-    "root_causes": "Possible causes of the issue.",
-    "potential_consequences_if_ignored": "Risks if the issue is not addressed.",
-    "public_safety_risk": "low|medium|high",
-    "environmental_impact": "low|medium|high|none",
-    "structural_implications": "low|medium|high|none",
-    "legal_or_regulatory_considerations": "Relevant regulations or null",
-    "feedback": "User-provided decline reason: {decline_reason}" if decline_reason else null
-  }},
-  "recommended_actions": ["Action 1", "Action 2"],
-  "responsible_authorities_or_parties": {json.dumps(responsible_authorities)},
-  "available_authorities": {json.dumps(available_authorities)},
-  "additional_notes": "Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Track report: https://momentum-ai.org/track/{report_id}. Zip Code: {zip_code if zip_code else 'N/A'}.",
-  "template_fields": {{
-    "oid": "{report_id}",
-    "timestamp": "{local_time}",
-    "utc_time": "{utc_time}",
-    "priority": "{priority}",
-    "tracking_link": "https://momentum-ai.org/track/{report_id}",
-    "image_filename": "{image_filename}",
-    "ai_tag": "{issue_type.title()}",
-    "app_version": "1.5.3",
-    "device_type": "Mobile (Generic)",
-    "map_link": "{map_link}",
-    "zip_code": "{zip_code if zip_code else 'N/A'}",
-    "address": "{address if address else 'Not specified'}",
-    "confidence": {confidence:.1f}
-  }}
-}}
-Keep the report under 200 words, professional, and specific to the issue type and description.
+    prompt_template = await load_prompt_text("generate_report_optimized.txt")
+    if not prompt_template:
+        logger.error("Failed to load prompt template from generate_report_optimized.txt")
+        prompt_template = """
+You are an AI assistant for eaiser AI. Generate a JSON report for the infrastructure issue described.
+Input: {issue_type}, {description}, {location_str}
+Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
 """
+
+    replacements = {
+        "{valid_issue_types_str}": valid_issue_types_str,
+        "{issue_type_title}": issue_type.title(),
+        "{issue_type}": issue_type,
+        "{severity}": severity,
+        "{confidence_formatted}": f"{confidence:.1f}",
+        "{description}": description,
+        "{category}": category,
+        "{location_str}": location_str,
+        "{issue_id}": issue_id,
+        "{department}": department,
+        "{map_link}": map_link,
+        "{priority}": priority,
+        "{decline_prompt}": f"- Decline Reason: {decline_reason}\n" if decline_reason else "",
+        "{zip_code_prompt}": f"- Zip Code: {zip_code}\n" if zip_code else "",
+        "{report_id}": report_id,
+        "{local_time}": local_time,
+        "{utc_time}": utc_time,
+        "{image_filename}": image_filename,
+        "{zip_code_val}": zip_code if zip_code else "N/A",
+        "{address_val}": display_address,
+        "{responsible_authorities_json}": json.dumps(responsible_authorities),
+        "{available_authorities_json}": json.dumps(available_authorities),
+    }
+
+    if decline_reason:
+        replacements["{feedback_val}"] = json.dumps(f"User-provided decline reason: {decline_reason}")
+    else:
+        replacements["{feedback_val}"] = "null"
+
+    prompt = prompt_template
+    for k, v in replacements.items():
+        prompt = prompt.replace(k, str(v))
 
     try:
         # Generate AI report with timeout and fetch authorities concurrently
@@ -679,7 +650,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 "people standing","spectators","religious","tradition","custom"
             ]
             minor_words = ["minor","small","tiny","cosmetic","scratch","smudge","dust","stain","normal","benign"]
-            fake_words = ["cartoon", "animation", "drawing", "illustration", "game screenshot", "video game", "simulated", "generated", "fake", "render", "clipart", "sketch", "painting"]
+            fake_words = ["cartoon", "animation", "drawing", "illustration", "game screenshot", "video game", "simulated", "generated", "fake", "render", "clipart", "sketch", "painting", "ai generated", "ai-generated"]
 
             has_danger = any(w in combined for w in danger_words)
             is_controlled = any(w in combined for w in controlled_fire)
@@ -693,6 +664,12 @@ Keep the report under 200 words, professional, and specific to the issue type an
             has_animal = any(w in combined for w in animal_tokens)
             has_accident = any(w in combined for w in accident_tokens)
             has_people = any(w in combined for w in people_tokens)
+
+            # Prevent false positive animal detection if context is negative (e.g. "no animal", "without animal")
+            negative_animal_phrases = ["no animal", "no dead animal", "no stray", "without animal", "not an animal", "no wildlife"]
+            if any(phrase in combined for phrase in negative_animal_phrases):
+                has_animal = False
+
             issue_detected = bool(ai_eval.get("issue_detected"))
             
             # Special check for Fire + People -> likely controlled
@@ -704,7 +681,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 issue_detected = False
                 overview["type"] = "None"
                 ai_eval["detected_issue_type"] = "None"
-                ai_eval["image_analysis"] = "Detected as fake/cartoon/animated image."
+                ai_eval["image_analysis"] = "Detected as fake/cartoon/animated/AI-generated image."
                 ai_eval["rationale"] = "Image classified as non-realistic or simulated."
             elif not issue_detected:
                 hazard_tokens = ["hazard","danger","out of control","emergency","injury","uncontrolled","explosion","collapse","severe","major","wildfire","accident","collision","leak","burst"]
@@ -720,10 +697,14 @@ Keep the report under 200 words, professional, and specific to the issue type an
                     ai_eval["image_analysis"] = "Detected controlled fire/bonfire; not a public safety threat."
             elif is_minor and not has_danger:
                 new_conf = max(75, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 70)))
+            # Only trigger animal_accident if we are sure it's not excluded by negatives AND we trust the AI didn't pick something else strong
             elif has_animal and has_accident and not any(w in combined for w in ["fire","flame","burning","smoke"]):
-                overview["type"] = "animal_accident"
-                new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
-                issue_detected = True
+                # If AI already picked specific road damage or something else, only override if confidence is low
+                current_type = (overview.get("type") or "").lower()
+                if current_type not in ["road_damage", "pothole", "abandoned_vehicle"] or new_conf < 70:
+                    overview["type"] = "animal_accident"
+                    new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
+                    issue_detected = True
             else:
                 # Prefer fallen tree classification if strong cues present
                 tree_tokens = [

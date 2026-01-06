@@ -1,14 +1,18 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, status
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from services.ai_service import classify_issue
 from services.ai_service_optimized import generate_report_optimized as generate_report
 from services.email_service import send_email
-from services.mongodb_service import store_issue, get_issues, update_issue_status, get_db, get_fs
+from services.mongodb_service import store_issue, get_issues, get_user_issues, update_issue_status, get_db, get_fs
 from services.geocode_service import reverse_geocode, geocode_zip_code
 from services.report_generation_service import build_unified_issue_json
 from utils.location import get_authority, get_authority_by_zip_code
 from utils.timezone import get_timezone_name
+from utils.security import SECRET_KEY, ALGORITHM
+from jose import jwt, JWTError
+from services.authority_service import resolve_authorities
 from bson.objectid import ObjectId
 import uuid
 import logging
@@ -32,6 +36,28 @@ logger = logging.getLogger(__name__)
 logging.getLogger("app.services.ai_service").setLevel(logging.WARNING)
 logging.getLogger("app.services.geocode_service").setLevel(logging.WARNING)
 router = APIRouter()
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+        return {"sub": email, "id": payload.get("id"), "role": payload.get("role")}
+    except JWTError:
+        raise credentials_exception
+
+@router.get("/issues/my-issues")
+async def get_my_issues(current_user: dict = Depends(get_current_user)):
+    """Get issues reported by the current user."""
+    return await get_user_issues(current_user.get("sub"))
 
 class IssueResponse(BaseModel):
     id: str
@@ -925,33 +951,88 @@ async def create_issue(
             tf["address"] = final_address or "Not specified"
         report["template_fields"] = tf
         
+        # --- VALIDATE REPORT QUALITY (TRIGGER ALERTS) ---
+        ai_eval = report.get("ai_evaluation", {})
+        issue_overview = report.get("issue_overview", {})
+        
+        # 1. Check for Fake/Simulated Image
+        # The AI, in 'generate_report_optimized', sets 'issue_detected'=False and type='None' for fake images
+        is_issue_detected = ai_eval.get("issue_detected")
+        detected_type = str(issue_overview.get("type", "")).lower()
+        confidence_val = issue_overview.get("confidence", 0)
+        
+        # Conditions for rejection:
+        # A. Explicitly detected as fake (confidence usually forced to ~5)
+        if "fake" in str(ai_eval.get("image_analysis", "")).lower() or \
+           "simulated" in str(ai_eval.get("rationale", "")).lower():
+            logger.warning(f"🚫 Rejected fake image analysis for issue {issue_id}")
+            raise HTTPException(status_code=400, detail="Analysis failed: This image appears to be AI-generated or manipulated.")
+
+        # B. Confidence too low (Blurry or Irrelevant)
+        if confidence_val < 20: 
+            logger.warning(f"🚫 Rejected low confidence report ({confidence_val}%) for issue {issue_id}")
+            raise HTTPException(status_code=400, detail="Analysis failed: The image is too blurry or unclear to analyze.")
+            
+        # C. No issue detected
+        logger.info(f"Validation Check: type='{detected_type}', detected={is_issue_detected}, conf={confidence_val}")
+        
+        # C. No issue detected - Relaxed check (< 30 instead of < 45)
+        if is_issue_detected is False and confidence_val < 30:
+             # Allow "Other" if confidence is decent, but reject "None"
+             if detected_type in ["none", ""]:
+                 raise HTTPException(status_code=400, detail="Analysis failed: No valid infrastructure issue detected in this image.")
+
         recommended_actions = report.get("recommended_actions", [])
         if "recommended_actions" not in report:
             report["recommended_actions"] = recommended_actions
         
         logger.debug(f"Report generated for issue {issue_id}")
+    except HTTPException:
+        raise # Re-raise HTTP exceptions directly
     except Exception as e:
         logger.error(f"Failed to generate report for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
     
     try:
-        authority_data = get_authority_by_zip_code(zip_code, issue_type, category) if zip_code else get_authority(final_address, issue_type, latitude, longitude, category)
-        responsible_authorities = authority_data.get("responsible_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
-        available_authorities = authority_data.get("available_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
+        # Resolve authorities using the new service
+        # Extract context from the generated report
+        ai_json_context = report.get("issue_overview", {})
+        if not ai_json_context:
+             # Fallback context if report structure is different
+             ai_json_context = {
+                 "case_id": issue_id,
+                 "description": description,
+                 "confidence": confidence,
+                 "summary_explanation": description
+             }
+        else:
+             ai_json_context["case_id"] = issue_id
+             ai_json_context["confidence"] = confidence
+
+        authority_result = await resolve_authorities(issue_type, zip_code, ai_json_context)
         
-        responsible_authorities = [
-            {**{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}, **auth}
-            for auth in responsible_authorities
-        ]
-        available_authorities = [
-            {**{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}, **auth}
-            for auth in available_authorities
-        ]
+        resolved_auths = authority_result["authorities"]
+        
+        # Consolidate to responsible_authorities
+        responsible_authorities = []
+        if resolved_auths:
+            responsible_authorities = [
+                {**{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}, **auth}
+                for auth in resolved_auths
+            ]
+        else:
+             logger.warning(f"No authorities resolved for {issue_type} in {zip_code}")
+             responsible_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
+
+        available_authorities = responsible_authorities
 
         authority_emails = [auth["email"] for auth in responsible_authorities]
         authority_names = [auth["name"] for auth in responsible_authorities]
-        logger.debug(f"Responsible authorities fetched: {authority_emails}")
-        logger.debug(f"Available authorities fetched: {[auth['email'] for auth in available_authorities]}")
+        
+        logger.info(f"Authorities resolved: {len(responsible_authorities)} found. Mapped: {authority_result.get('is_mapped')}")
+        if not authority_result.get('is_mapped'):
+             logger.info(f"⚠️ Issue unmapped. Review entry created: {authority_result.get('mapping_review', {}).get('id')}")
+
     except Exception as e:
         logger.warning(f"Failed to fetch authorities: {str(e)}. Using default authority.", exc_info=True)
         responsible_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]

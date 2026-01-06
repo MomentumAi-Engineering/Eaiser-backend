@@ -477,13 +477,79 @@ async def get_pending_reviews(
 
                 final_reviews.append(issue)
 
+        # --- User Reputation Enrichment ---
+        reporter_emails = list(set([i.get("reporter_email") for i in final_reviews if i.get("reporter_email")]))
+        user_stats_map = {}
+        
+        if reporter_emails:
+            users_coll = await mongo_service.get_collection("users")
+            users = await users_coll.find(
+                {"email": {"$in": reporter_emails}},
+                {"email": 1, "rejected_reports_count": 1, "is_active": 1}
+            ).to_list(None)
+            
+            for u in users:
+                user_stats_map[u["email"]] = {
+                    "rejected_count": u.get("rejected_reports_count", 0),
+                    "is_active": u.get("is_active", True)
+                }
+
+        if issue.get("reporter_email") and issue["reporter_email"] in user_stats_map:
+            issue["user_reputation"] = user_stats_map[issue["reporter_email"]]
+        else:
+             issue["user_reputation"] = {"rejected_count": 0, "is_active": True}
+
         logger.info(f"Admin Dashboard: Returning {len(final_reviews)} issues (Filtered from {len(recent_issues)} recent)")
-        logger.info(f"Issue IDs being returned: {[str(i['_id'])[-8:] for i in final_reviews[:5]]}")
         return final_reviews
     except Exception as e:
         logger.error(f"Failed to fetch pending reviews: {e}", exc_info=True)
-        # DEBUG: Return actual error
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@router.get("/resolved", response_model=List[dict])
+async def get_resolved_reviews(
+    skip: int = 0,
+    limit: int = 50,
+    admin: dict = Depends(get_admin_user)
+):
+    """
+    Get history of resolved issues (approved, declined, etc).
+    """
+    try:
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            raise HTTPException(status_code=503, detail="Database service unavailable")
+        
+        collection = await mongo_service.get_collection("issues")
+        
+        # Filter for finalized statuses
+        # Statuses: 'approved' (often mapped to 'submitted'), 'rejected', 'declined', 'completed', 'submitted'
+        query = {"status": {"$in": ["rejected", "declined", "completed", "submitted", "resolved"]}}
+        
+        cursor = collection.find(query).sort("admin_review.timestamp", -1).skip(skip).limit(limit)
+        issues = await cursor.to_list(length=limit)
+        
+        results = []
+        for issue in issues:
+            # Normalize ID
+            issue["issue_id"] = str(issue["_id"])
+            if "_id" in issue: issue["_id"] = str(issue["_id"])
+            
+            # Ensure Image URL
+            if "image_url" not in issue:
+                issue["image_url"] = f"/api/issues/{issue['issue_id']}/image"
+            
+            # Normalize Resolution Info
+            # The 'admin_review' object contains who resolved it
+            if "admin_review" not in issue:
+                issue["admin_review"] = {}
+                
+            results.append(issue)
+            
+        return results
+
+    except Exception as e:
+        logger.error(f"Failed to fetch resolved reviews: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/approve")
 async def approve_issue(action: ReviewAction, admin: dict = Depends(get_admin_user)):
@@ -658,9 +724,16 @@ async def decline_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
             raise HTTPException(status_code=404, detail="Issue not found or update failed")
 
         # Notify User "Your report was declined"
-        issue = await mongo_service.get_issue_by_id(action.issue_id)
         if issue and issue.get("reporter_email"):
-             asyncio.create_task(notify_user_status_change(issue["reporter_email"], action.issue_id, 'rejected', action.notes))
+             email = issue["reporter_email"]
+             # Increment rejected count
+             await mongo_service.db.users.update_one(
+                 {"email": email},
+                 {"$inc": {"rejected_reports_count": 1}}
+             )
+             
+             # Notify User
+             asyncio.create_task(notify_user_status_change(email, action.issue_id, 'rejected', action.notes))
         
         return {"message": "Issue declined", "issue_id": action.issue_id}
 
@@ -1137,115 +1210,111 @@ async def bulk_assign_issues(request: BulkAssignRequest, current_admin: dict = D
     
     return {"message": f"Assigned {result.modified_count} issues", "count": result.modified_count}
 
-@router.get("/stats")
-async def get_admin_stats(current_admin: dict = Depends(get_admin_user)):
+
+@router.get("/stats", response_model=dict)
+async def get_admin_stats(admin: dict = Depends(get_admin_user)):
     """
-    Get dashboard statistics - optimized aggregation with real-time data.
+    Get aggregated statistics for the admin dashboard.
     """
     try:
         mongo_service = await get_optimized_mongodb_service()
         if not mongo_service:
             raise HTTPException(status_code=503, detail="Service unavailable")
+            
+        issues_coll = await mongo_service.get_collection("issues")
+        admins_coll = await mongo_service.get_collection("admins")
         
-        # 1. Fetch Admin Team Data
-        admins_collection = await mongo_service.get_collection("admins")
-        admins = await admins_collection.find({"is_active": True}).to_list(length=100)
-        issues_collection = await mongo_service.get_collection("issues")
+        # 1. General counts
+        total_issues = await issues_coll.count_documents({})
+        pending_review = await issues_coll.count_documents({"status": "needs_review"})
+        # Approved is tricky, usually 'submitted' or 'approved'
+        approved = await issues_coll.count_documents({"status": {"$in": ["submitted", "approved", "completed"]}})
+        declined = await issues_coll.count_documents({"status": {"$in": ["rejected", "declined"]}})
         
-        # 2. Aggregation Pipeline
-        pipeline = [
-            {
-                "$facet": {
-                    "total": [{"$count": "count"}],
-                    "status_counts": [{"$group": {"_id": "$status", "count": {"$sum": 1}}}],
-                    "type_counts": [
-                        {"$group": {"_id": "$issue_type", "count": {"$sum": 1}}},
-                        {"$sort": {"count": -1}}
-                    ],
-                    "recent": [
-                        {"$sort": {"timestamp": -1}},
-                        {"$limit": 10},
-                        {"$project": {"issue_type": 1, "status": 1, "assigned_to": 1, "timestamp": 1}}
-                    ],
-                    "resolved_by_admin": [
-                        {"$match": {"status": {"$in": ["submitted", "completed"]}}},
-                        {"$group": {"_id": "$assigned_to", "count": {"$sum": 1}}}
-                    ]
-                }
-            }
+        # 2. Issues by Type
+        pipeline_type = [
+            {"$group": {"_id": "$issue_type", "count": {"$sum": 1}}}
         ]
+        type_cursor = issues_coll.aggregate(pipeline_type)
+        by_type = {doc["_id"] or "Unknown": doc["count"] for doc in await type_cursor.to_list(None)}
         
-        # Execute DIRECTLY (No Cache) to ensure real-time data
-        cursor = issues_collection.aggregate(pipeline)
-        results = await cursor.to_list(length=1)
+        # 3. Team Performance
+        # Fetch all admins first to show zeros for those with no activity
+        all_admins = await admins_coll.find({}, {"email": 1, "name": 1, "role": 1}).to_list(None)
         
-        facets = results[0] if results else {}
+        # Aggregate resolved count: stored in 'admin_review.admin_id' (email or id)
+        pipeline_resolved = [
+            {"$match": {"admin_review.admin_id": {"$exists": True}}},
+            {"$group": {"_id": "$admin_review.admin_id", "count": {"$sum": 1}}}
+        ]
+        resolved_cursor = issues_coll.aggregate(pipeline_resolved)
+        resolved_map = {doc["_id"]: doc["count"] for doc in await resolved_cursor.to_list(None)}
         
-        # 3. Process Results (Robustly)
+        # Aggregate assigned count: 'assigned_to'
+        pipeline_assigned = [
+             {"$match": {"assigned_to": {"$exists": True, "$ne": None}}},
+             {"$group": {"_id": "$assigned_to", "count": {"$sum": 1}}}
+        ]
+        assigned_cursor = issues_coll.aggregate(pipeline_assigned)
+        assigned_map = {doc["_id"]: doc["count"] for doc in await assigned_cursor.to_list(None)}
         
-        # Total (Handle empty case safely)
-        total_list = facets.get("total", [])
-        total_issues = total_list[0].get("count", 0) if total_list else 0
+        team_stats = []
+        for a in all_admins:
+            email = a.get("email")
+            
+            # Count resolved (try matching email or ID if mixed)
+            r_count = resolved_map.get(email, 0)
+            # a['_id'] is ObjectId, need str
+            aid = str(a.get("_id"))
+            if aid in resolved_map:
+                r_count += resolved_map[aid]
+
+            # Count assigned (usually email)
+            a_count = assigned_map.get(email, 0)
+            
+            team_stats.append({
+                "name": a.get("name", "Unknown"),
+                "email": email,
+                "role": a.get("role", "admin"),
+                "resolved": r_count,
+                "assigned": a_count
+            })
+            
+        # 4. Recent Activity (Mock or Query)
+        # Using a simple query on issues with admin_review
+        recent_cursor = issues_coll.find(
+            {"admin_review": {"$exists": True}}
+        ).sort("admin_review.timestamp", -1).limit(5)
+        recent_docs = await recent_cursor.to_list(None)
         
-        # Status
-        status_map = {item["_id"]: item["count"] for item in facets.get("status_counts", [])}
-        pending_review = status_map.get("needs_review", 0)
-        approved = status_map.get("submitted", 0)
-        declined = sum(status_map.get(s, 0) for s in ["rejected", "declined"])
-        
-        # By Type
-        by_type = {item["_id"]: item["count"] for item in facets.get("type_counts", []) if item["_id"]}
-        
-        # Team Performance
-        resolved_map = {item["_id"]: item["count"] for item in facets.get("resolved_by_admin", []) if item["_id"]}
-        
-        team_performance = []
-        for admin in admins:
-            if admin.get("role") in ["admin", "team_member", "super_admin"]:
-                email = admin.get("email")
-                team_performance.append({
-                    "name": admin.get("name", email),
-                    "email": email,
-                    "role": admin.get("role"),
-                    "assigned": len(admin.get("assigned_issues", [])),
-                    "resolved": resolved_map.get(email, 0)
-                })
-        
-        # Recent Activity
         recent_activity = []
-        for issue in facets.get("recent", []):
-            action = "created"
-            status = issue.get("status")
-            if status == "submitted":
-                action = "approved"
-            elif status in ["rejected", "declined"]:
-                action = "declined"
-            elif issue.get("assigned_to"):
-                action = f"assigned to {issue.get('assigned_to')}"
+        for doc in recent_docs:
+            ar = doc.get("admin_review", {})
+            action = ar.get("action", "processed")
+            actor = ar.get("admin_id", "Unknown")
+            issue_type = doc.get("issue_type", "issue")
+            
+            description = f"{actor} {action} {issue_type}"
+            if action == 'approve': description = f"{actor} approved {issue_type}"
+            if action == 'decline': description = f"{actor} declined {issue_type}"
             
             recent_activity.append({
-                "description": f"Issue {issue.get('issue_type', 'unknown')} {action}",
-                "timestamp": issue.get("timestamp")
+                "description": description,
+                "timestamp": ar.get("timestamp", doc.get("timestamp"))
             })
-        
-        logger.info(f"📊 Stats fetched (Real-time) for {current_admin.get('email')}")
-        
+
         return {
             "total_issues": total_issues,
             "pending_review": pending_review,
             "approved": approved,
             "declined": declined,
             "by_type": by_type,
-            "team_performance": team_performance,
+            "team_performance": team_stats,
             "recent_activity": recent_activity
         }
-        
     except Exception as e:
         logger.error(f"Error fetching stats: {e}")
-        return {
-            "total_issues": 0, "pending_review": 0, "approved": 0, "declined": 0,
-            "by_type": {}, "team_performance": [], "recent_activity": []
-        }
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================
@@ -1362,3 +1431,170 @@ async def disable_2fa(
     )
     
     return {"message": "2FA disabled"}
+
+
+# --- MAPPING REVIEW ENDPOINTS ---
+
+@router.get("/mapping-review")
+async def get_unmapped_issues(resolved: bool = False, limit: int = 20, admin: dict = Depends(get_admin_user)):
+    """Get unmapped issues for admin review"""
+    try:
+        db = await get_database()
+        
+        # Sort by flagged_at DESC
+        cursor = db.authority_mapping_review.find({"resolved": resolved}).sort("flagged_at", -1).limit(limit)
+        entries = await cursor.to_list(length=limit)
+        
+        # Count total
+        total = await db.authority_mapping_review.count_documents({"resolved": False})
+        
+        # Convert _id to string
+        for entry in entries:
+            entry["_id"] = str(entry["_id"])
+            
+        return {
+            'entries': entries,
+            'count': len(entries),
+            'total_unmapped': total
+        }
+    except Exception as e:
+        logger.error(f"Error fetching unmapped issues: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ResolveMappingRequest(BaseModel):
+    issue_type: str
+    mapped_departments: List[str]
+
+@router.post("/mapping-review/{review_id}/resolve")
+async def resolve_mapping(review_id: str, request: ResolveMappingRequest, admin: dict = Depends(get_admin_user)):
+    """
+    Admin resolves an unmapped issue by:
+    1. Updating the specific review entry
+    2. Updating the global mapping file
+    """
+    from services.authority_service import update_department_mapping
+    
+    try:
+        db = await get_database()
+        
+        # 1. Update review entry
+        result = await db.authority_mapping_review.update_one(
+            {"id": review_id}, # Note: using "id" (uuid) not "_id" based on creation logic
+            {
+                "$set": {
+                    "resolved": True,
+                    "resolved_mapping": ','.join(request.mapped_departments),
+                    "resolved_by": admin.get("email"),
+                    "resolved_at": datetime.utcnow().isoformat()
+                }
+            }
+        )
+        
+        if result.matched_count == 0:
+            # Fallback check if it was stored with _id as uuid? 
+            # In service we used "id": str(uuid.uuid4())
+            raise HTTPException(status_code=404, detail="Review entry not found")
+            
+        # 2. Update mappings
+        # 2. Update mappings
+        success = await update_department_mapping(request.issue_type, request.mapped_departments, admin_email=admin.get("email"))
+        
+        if not success:
+             logger.warning("Mapping file update failed, but DB entry resolved.")
+        
+        return {
+            'status': 'resolved', 
+            'issue_type': request.issue_type, 
+            'mapped_to': request.mapped_departments
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving mapping: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- AUTHORITY MANAGEMENT ENDPOINTS ---
+
+@router.get("/authorities")
+async def get_authorities_list(admin: dict = Depends(get_admin_user)):
+    """Get all zip code authorities."""
+    from services.authority_service import get_all_authorities
+    return get_all_authorities()
+
+class UpdateZipRequest(BaseModel):
+    zip_code: str
+    data: dict  # format: { dept: [{name, email, type, timezone}] }
+
+@router.post("/authorities")
+async def update_authority(request: UpdateZipRequest, admin: dict = Depends(get_admin_user)):
+    """Update contacts for a zip code."""
+    from services.authority_service import update_zip_authority
+    
+    # Basic validation could happen here
+    
+    success = await update_zip_authority(request.zip_code, request.data, admin_email=admin.get("email"))
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save authority data")
+        
+    logger.info(f"Admin {admin['email']} updated authorities for ZIP {request.zip_code}")
+    
+    return {"message": "Authority data updated", "zip_code": request.zip_code}
+
+@router.get("/mappings")
+async def get_mappings(admin: dict = Depends(get_admin_user)):
+    """Get all global issue mappings."""
+    from services.authority_service import get_all_department_mappings
+    return get_all_department_mappings()
+
+class UpdateMappingRequest(BaseModel):
+    issue_type: str
+    departments: List[str]
+
+@router.post("/mappings/update")
+async def update_single_mapping(request: UpdateMappingRequest, admin: dict = Depends(get_admin_user)):
+    """Update a specific issue type mapping."""
+    from services.authority_service import update_department_mapping
+    success = await update_department_mapping(request.issue_type, request.departments, admin_email=admin.get("email"))
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save mapping")
+    return {"status": "updated", "issue_type": request.issue_type}
+
+@router.get("/stats/mapping")
+async def get_mapping_stats(admin: dict = Depends(get_admin_user)):
+    """Get high-level statistics for mapping coverage."""
+    db = await get_database()
+    from services.authority_service import ISSUE_DEPARTMENT_MAP
+    
+    # 1. Coverage
+    total_types = len(ISSUE_DEPARTMENT_MAP)
+    
+    # 2. Unmapped pending
+    unmapped_count = await db.authority_mapping_review.count_documents({"resolved": False})
+    
+    # 3. Zip Coverage (simple count for now)
+    from services.authority_service import ZIP_CODE_AUTHORITIES
+    total_zips = len(ZIP_CODE_AUTHORITIES) - 1 # exclude default?
+    
+    return {
+        "mapped_types": total_types,
+        "pending_reviews": unmapped_count,
+        "zip_codes_configured": total_zips,
+        "coverage_percent": 95 # Placeholder or calculated
+    }
+
+@router.get("/mapping-history")
+async def get_mapping_history(limit: int = 50, admin: dict = Depends(get_admin_user)):
+    """Get audit log of all changes."""
+    try:
+        db = await get_database()
+        cursor = db.audit_logs.find().sort("timestamp", -1).limit(limit)
+        history = await cursor.to_list(length=limit)
+        
+        # Convert _id to string
+        for h in history:
+            h["_id"] = str(h["_id"])
+            
+        return history
+    except Exception as e:
+        logger.error(f"Error fetching mapping history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

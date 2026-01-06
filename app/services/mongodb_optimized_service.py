@@ -113,15 +113,15 @@ class OptimizedMongoDBService:
         # Index definitions for optimal query performance
         self.index_definitions = {
             'issues': [
-                IndexModel([('status', ASCENDING), ('timestamp', DESCENDING)]),
-                IndexModel([('zip_code', ASCENDING), ('status', ASCENDING)]),
-                IndexModel([('latitude', ASCENDING), ('longitude', ASCENDING)]),
-                IndexModel([('issue_type', ASCENDING), ('severity', ASCENDING)]),
-                IndexModel([('user_email', ASCENDING)]),
-                IndexModel([('timestamp', DESCENDING)]),
-                IndexModel([('report_id', ASCENDING)]),
-                IndexModel([('category', ASCENDING), ('priority', ASCENDING)]),
-                IndexModel([('address', TEXT), ('issue_type', TEXT)]),  # Text search
+                IndexModel([('status', ASCENDING), ('timestamp', DESCENDING)], name='status_timestamp'),
+                IndexModel([('zip_code', ASCENDING), ('status', ASCENDING)], name='zip_code_status'),
+                IndexModel([('latitude', ASCENDING), ('longitude', ASCENDING)], name='lat_lon'),
+                IndexModel([('issue_type', ASCENDING), ('severity', ASCENDING)], name='issue_type_severity'),
+                IndexModel([('user_email', ASCENDING)], name='user_email'),
+                IndexModel([('timestamp', DESCENDING)], name='timestamp_desc'),
+                IndexModel([('report_id', ASCENDING)], name='report_id'),
+                IndexModel([('category', ASCENDING), ('priority', ASCENDING)], name='category_priority'),
+                IndexModel([('address', TEXT), ('issue_type', TEXT)], name='address_issue_type_text'),
             ],
             'users': [
                 IndexModel([('email', ASCENDING)], unique=True),
@@ -166,7 +166,7 @@ class OptimizedMongoDBService:
                     connectTimeoutMS=30000,
                     socketTimeoutMS=30000,
                     maxPoolSize=50,                  # Reduced from 200
-                    minPoolSize=1,                   # Reduced from 20 to prevent handshake floods
+                    minPoolSize=10,                  # Increased to 10 to reduce handshake churn
                     maxIdleTimeMS=30000,
                     waitQueueTimeoutMS=10000,
                     retryWrites=True,
@@ -180,7 +180,7 @@ class OptimizedMongoDBService:
                     connectTimeoutMS=30000,
                     socketTimeoutMS=30000,
                     maxPoolSize=50,                  # Reduced from 300
-                    minPoolSize=1,                   # Reduced from 30
+                    minPoolSize=10,                  # Increased to 10 to reduce handshake churn
                     maxIdleTimeMS=45000,
                     waitQueueTimeoutMS=10000,
                     compressors=['zlib'],
@@ -235,8 +235,8 @@ class OptimizedMongoDBService:
             for collection_name, indexes in self.index_definitions.items():
                 collection = self.db[collection_name]
                 
-                # Create indexes in background for better performance
-                await collection.create_indexes(indexes, background=True)
+                # Create indexes (background option removed as it's deprecated/unsupported in newer Mongo versions)
+                await collection.create_indexes(indexes)
                 
                 logger.info(f"📊 Created {len(indexes)} indexes for {collection_name} collection")
             

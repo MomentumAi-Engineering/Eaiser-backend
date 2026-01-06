@@ -118,6 +118,8 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
         "https://www.eaiser.ai"
     ],
     allow_credentials=True,
@@ -168,6 +170,17 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
 
 # Add timeout middleware before other middlewares
 app.add_middleware(RequestTimeoutMiddleware)
+
+# Security Headers Middleware to support Google Auth / FedCM
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        # Required for Google Sign-In popups and One Tap
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
+        response.headers["Referrer-Policy"] = "no-referrer-when-downgrade"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Log all incoming requests
 app.add_middleware(TimingMiddleware)
@@ -321,6 +334,22 @@ app.include_router(reports_router, prefix="/api/reports")
 app.include_router(ai_router, prefix="/api")
 app.include_router(admin_review_router, prefix="/api")  # Mounted at /api/admin/review
 
+# Import and include Auth Router
+try:
+    from routes.auth import router as auth_router
+except ImportError:
+    from app.routes.auth import router as auth_router
+
+app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+
+# Include Admin User Management
+try:
+    from routes.admin_users import router as admin_users_router
+except ImportError:
+    from app.routes.admin_users import router as admin_users_router
+
+app.include_router(admin_users_router, prefix="/api") # Mounted at /api/admin/users
+
 # Explicit wrappers to ensure endpoints exist even if router mounting varies
 from fastapi import UploadFile, File
 
@@ -375,6 +404,20 @@ async def shutdown_event():
     await close_redis()
     await close_optimized_mongodb()
     logger.info("✅ Shutdown completed successfully")
+
+# Import authority service loader
+try:
+    from services.authority_service import load_mappings
+except ImportError:
+    from app.services.authority_service import load_mappings
+
+@app.on_event("startup")
+async def load_authority_mappings():
+    """Load authority mappings into memory."""
+    try:
+        load_mappings()
+    except Exception as e:
+        logger.error(f"❌ Failed to load authority mappings: {e}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

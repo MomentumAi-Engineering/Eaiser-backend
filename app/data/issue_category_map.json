@@ -1,135 +1,36 @@
 {
   "pothole": "public",
   "road_damage": "public",
-  "road_sinking": "public",
-  "bridge_damage": "public",
-  "footpath_damage": "public",
-
-  "broken_streetlight": "public",
-  "no_streetlight": "public",
-  "dark_street": "public",
-
-  "graffiti": "public",
-  "wall_writing": "public",
-
+  "tree_fallen": "public",
+  "fire": "public",
+  "flooding": "public",
+  "sidewalk_damage": "public",
+  "street_sign_damage": "public",
   "garbage": "public",
   "trash": "public",
   "waste": "public",
-  "overflowing_bin": "public",
   "sewage_overflow": "public",
-  "dirty_water": "public",
-
-  "vandalism": "public",
-  "property_defacement": "public",
-
-  "open_drain": "public",
-  "blocked_drain": "public",
-  "uncovered_drain": "public",
-  "clogged_drain": "public",
-
-  "flood": "public",
-  "street_flood": "public",
-  "waterlogging": "public",
-
-  "fire": "public",
-  "building_fire": "public",
-  "gas_leak": "public",
-  "arson_suspected": "public",
-
-  "illegal_construction": "public_and_business",
-  "unauthorized_construction": "public_and_business",
-  "unsafe_building": "public_and_business",
-  "structural_damage": "public_and_business",
-  "wall_crack": "public_and_business",
-  "construction_debris": "public_and_business",
-
-  "tree_fallen": "public",
-  "tree_on_road": "public",
-
-  "public_toilet_issue": "public",
-  "broken_toilet": "public",
-
   "stray_animals": "public",
-  "loose_dog": "public",
-  "street_dog": "public",
-
   "dead_animal": "public",
-  "animal_carcass": "public",
-
   "animal_injury": "public",
-  "animal_on_road": "public",
-
-  "animal_accident": "public",
-  "wildlife_hit": "public",
-  "animal_crash": "public",
-
   "noise_pollution": "public",
-  "loud_noise": "public",
-
   "air_pollution": "public",
-  "smoke_complaint": "public",
   "water_pollution": "public",
-  "chemical_dumping": "public",
-
   "water_leakage": "public",
   "pipe_leak": "public",
   "no_water_supply": "public",
-  "low_water_pressure": "public",
-
-  "street_vendor_encroachment": "business",
-  "unauthorized_vendor": "business",
-  "illegal_hoarding": "business",
-
+  "graffiti": "public",
+  "vandalism": "public",
+  "abandoned_vehicle": "public",
+  "illegal_construction": "public",
+  "unsafe_building": "public",
   "signal_malfunction": "public",
   "traffic_signal_issue": "public",
-
-  "abandoned_vehicle": "public",
-  "car_left_on_road": "public",
-
-  "vacant_lot_issue": "public",
-  "overgrown_grass": "public",
-
   "property_damage": "private",
-  "window_broken": "private",
-  "furniture_damage": "private",
-  "broken_chair": "private",
-
   "home_repair": "private",
-  "house_fixing": "private",
-
-  "plumbing_issue": "private",
-  "leaking_tap": "private",
-
   "electrical_issue": "private",
-  "no_electricity": "private",
-  "electrocution_risk": "public",
-
-  "ac_not_working": "private",
-  "ac_problem": "private",
-
-  "cctv_issue": "private",
-  "camera_not_working": "private",
-
-  "internet_issue": "private",
-  "wifi_not_working": "private",
-
-  "water_purifier_issue": "private",
-  "filter_issue": "private",
-
-  "paint_damage": "private",
-  "wall_paint_peeled": "private",
-
-  "ceiling_leakage": "private",
-  "ceiling_drip": "private",
-
-  "door_lock_issue": "private",
-  "door_not_locking": "private",
-
-  "appliance_malfunction": "private",
-  "fridge_not_working": "private",
-
-  "building_collapse": "public",
-
+  "plumbing_issue": "private",
+  "general": "public",
   "other": "public",
   "unknown": "public"
 }

@@ -533,3 +533,169 @@ Access Admin Dashboard:
     except Exception as e:
         logger.error(f"❌ Failed to send admin welcome email to {admin_email}: {e}")
         return False
+
+
+# --------------------------------------------------------------------
+# ✅ User Welcome Email (Sleek & Explanatory)
+# --------------------------------------------------------------------
+
+async def send_user_welcome_email(user_email: str, user_name: str) -> bool:
+    """
+    Sends a sleek, dark-themed welcome email to new users explaining EAiSER.
+    """
+    try:
+        subject = "Welcome to EAiSER AI – Empowering Your Community"
+        
+        # ----------------------------
+        # HTML EMAIL (SLEEK DARK THEME)
+        # ----------------------------
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body {{
+    background-color: #000000;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    color: #e2e8f0;
+  }}
+  .container {{
+    max-width: 600px;
+    margin: 30px auto;
+    background: #0f172a; /* Slate 900 */
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid #1e293b;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }}
+  .header {{
+    background: linear-gradient(135deg, #FFC107 0%, #FF9800 100%); /* Amber/Orange */
+    padding: 30px;
+    text-align: center;
+  }}
+  .header h1 {{
+    margin: 0;
+    color: #000;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+  }}
+  .content {{
+    padding: 30px;
+  }}
+  .intro {{
+    font-size: 16px;
+    line-height: 1.6;
+    margin-bottom: 30px;
+    color: #cbd5e1;
+  }}
+  .feature-box {{
+    background: #1e293b;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    border-left: 4px solid #FFC107;
+  }}
+  .feature-title {{
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 5px;
+    font-size: 16px;
+  }}
+  .feature-desc {{
+    font-size: 14px;
+    color: #94a3b8;
+    line-height: 1.5;
+  }}
+  .cta-container {{
+    text-align: center;
+    margin: 40px 0;
+  }}
+  .cta-btn {{
+    background: #FFC107;
+    color: #000;
+    padding: 14px 40px;
+    border-radius: 50px;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 16px;
+    display: inline-block;
+    transition: transform 0.2s;
+  }}
+  .footer {{
+    text-align: center;
+    padding: 20px;
+    background: #020617;
+    font-size: 12px;
+    color: #64748b;
+  }}
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>EAiSER AI</h1>
+    </div>
+    
+    <div class="content">
+      <p class="intro">
+        Hello <strong>{user_name}</strong>,<br><br>
+        Welcome to the future of civic intelligence. You have joined a community dedicated to creating safer, smarter neighborhoods through AI-driven reporting.
+      </p>
+
+      <div class="feature-box">
+        <div class="feature-title">📸 Snap & Report</div>
+        <div class="feature-desc">Simply upload a photo of any civic issue (potholes, trash, hazards). Our AI instantly analyzes and categorizes it.</div>
+      </div>
+
+      <div class="feature-box">
+        <div class="feature-title">🤖 Smart Routing</div>
+        <div class="feature-desc">No more guessing "who do I call?". EAiSER automatically identifies the authority responsible and routes your report.</div>
+      </div>
+
+      <div class="feature-box">
+        <div class="feature-title">📊 Live Dashboard</div>
+        <div class="feature-desc">Track the status of your reports in real-time, view analytics, and see your impact on the community.</div>
+      </div>
+
+      <div class="cta-container">
+        <a href="https://www.eaiser.ai/dashboard" class="cta-btn">Go to Dashboard</a>
+      </div>
+    </div>
+
+    <div class="footer">
+      &copy; 2025 EAiSER AI · Automated Civic Reporting<br>
+      Empowering Citizens, Enabling Action.
+    </div>
+  </div>
+</body>
+</html>
+"""
+        # ----------------------------
+        # TEXT FALLBACK
+        # ----------------------------
+        text_content = f"""
+Welcome to EAiSER AI!
+
+Hello {user_name},
+
+Thank you for joining EAiSER. We are excited to have you on board!
+
+EAiSER allows you to:
+1. Snap & Report: Upload photos of civic issues instantly.
+2. Smart Routing: Our AI sends reports to the right authorities automatically.
+3. Live Dashboard: Track your reports in real-time.
+
+Go to your Dashboard: https://www.eaiser.ai/dashboard
+
+Together, let's build smarter communities.
+- The EAiSER Team
+"""
+        return await send_email(user_email, subject, html_content, text_content)
+
+    except Exception as e:
+        logger.error(f"❌ Failed to send user welcome email to {user_email}: {e}")
+        return False
