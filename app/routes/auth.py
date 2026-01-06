@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, EmailStr
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
@@ -22,6 +22,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # Schema definitions
 class UserCreate(BaseModel):
     name: str = "User"
+    fullName: Optional[str] = None # Added for compatibility with new frontend
     email: EmailStr
     password: str
 
@@ -47,6 +48,8 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+# ... (intervening lines)
+
 @router.post("/signup", response_model=Token)
 async def signup(user: UserCreate):
     try:
@@ -61,8 +64,14 @@ async def signup(user: UserCreate):
 
         # Hash password and store
         hashed_password = get_password_hash(user.password)
+        
+        # Handle logic for fullName/name compatibility
+        final_name = user.name
+        if user.fullName and (user.name == "User" or not user.name):
+            final_name = user.fullName
+            
         new_user = {
-            "name": user.name,
+            "name": final_name,
             "email": user.email,
             "hashed_password": hashed_password,
             "role": "user",
