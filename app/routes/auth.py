@@ -121,7 +121,9 @@ async def login(user_data: UserLogin):
     try:
         db = await get_db()
         user = await db["users"].find_one({"email": user_data.email})
-        if not user or not verify_password(user_data.password, user["hashed_password"]):
+        
+        # Check if user exists AND has a password (google-auth users might not have one)
+        if not user or "hashed_password" not in user or not verify_password(user_data.password, user["hashed_password"]):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect email or password",

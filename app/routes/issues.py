@@ -732,12 +732,10 @@ async def send_authority_email(
     </p>
 
     <p><span class="label">Priority:</span>
-      {report.get('issue_overview', {}).get('severity_label', 'N/A')}
+       {report.get('issue_overview', {}).get('severity_label', 'N/A')}
     </p>
 
     <p><span class="label">Reported:</span> {timestamp_formatted}</p>
-
-    <p><span class="label">Submitted By:</span> {report.get('user_email','N/A')}</p>
   </div>
 
   <!-- IMAGE -->

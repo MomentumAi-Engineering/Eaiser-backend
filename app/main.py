@@ -419,7 +419,40 @@ async def load_authority_mappings():
     except Exception as e:
         logger.error(f"❌ Failed to load authority mappings: {e}")
 
+# Attempt to use uvloop for high-performance event loop (Linux/Mac)
+try:
+    import uvloop
+    uvloop.install()
+    print("🚀 Using uvloop for high-performance networking.")
+except ImportError:
+    print("ℹ️ uvloop not installed or not supported (Windows). Using standard asyncio loop.")
+
 if __name__ == "__main__":
+    import multiprocessing
+    
+    # Calculate optimal workers (CPU count + 1 or 2 usually decent for I/O bound)
+    # For Windows, multiprocessing.cpu_count() is reliable
+    try:
+        cpu_cores = multiprocessing.cpu_count()
+        workers = max(4, cpu_cores) # Ensure at least 4 workers
+    except:
+        workers = 4 # Fallback
+
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting server on port {port}")
-    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="debug", workers=8)
+    
+    logger.info(f"🚀 Starting Eaiser AI High-Performance Node")
+    logger.info(f"⚡ Configuration: {workers} Workers | Port: {port} | Loop: Auto")
+    
+    # RUN WITH MULTIPLE WORKERS (Load Balancing)
+    # Use 'main:app' string to allow uvicorn to spawn worker processes
+    uvicorn.run(
+        "main:app", 
+        host="0.0.0.0", 
+        port=port, 
+        log_level="info", # Reduce from debug to info for production speed
+        workers=workers,
+        loop="auto",      # Will use uvloop if available
+        http="auto",      # Will use httptools if available
+        timeout_keep_alive=30,
+        proxy_headers=True
+    )

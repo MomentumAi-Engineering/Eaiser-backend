@@ -162,11 +162,11 @@ class OptimizedMongoDBService:
                 # Primary client for writes (with safe options)
                 self.primary_client = AsyncIOMotorClient(
                     self.mongo_uri,
-                    serverSelectionTimeoutMS=30000,  # Increased to 30s
+                    serverSelectionTimeoutMS=30000,
                     connectTimeoutMS=30000,
                     socketTimeoutMS=30000,
-                    maxPoolSize=50,                  # Reduced from 200
-                    minPoolSize=10,                  # Increased to 10 to reduce handshake churn
+                    maxPoolSize=20,                  # Reduced for stability
+                    minPoolSize=0,                   # Reduced to 0 to avoid startup hang
                     maxIdleTimeMS=30000,
                     waitQueueTimeoutMS=10000,
                     retryWrites=True,
@@ -176,11 +176,11 @@ class OptimizedMongoDBService:
                 # Secondary client for reads (prefer secondary)
                 self.read_client = AsyncIOMotorClient(
                     self.mongo_uri,
-                    serverSelectionTimeoutMS=30000,  # Increased to 30s
+                    serverSelectionTimeoutMS=30000,
                     connectTimeoutMS=30000,
                     socketTimeoutMS=30000,
-                    maxPoolSize=50,                  # Reduced from 300
-                    minPoolSize=10,                  # Increased to 10 to reduce handshake churn
+                    maxPoolSize=20,                  # Reduced for stability
+                    minPoolSize=0,                   # Reduced to 0 to avoid startup hang
                     maxIdleTimeMS=45000,
                     waitQueueTimeoutMS=10000,
                     compressors=['zlib'],

@@ -114,7 +114,7 @@ CACHE_TTL = {
 _MODEL = None
 
 def get_gemini_model():
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
     global _MODEL
     if _MODEL is not None:
         return _MODEL
@@ -122,13 +122,11 @@ def get_gemini_model():
         _MODEL = genai.GenerativeModel(model_name)
         return _MODEL
     except Exception as e:
-        logger.warning(f"{model_name} not available for current API version; attempting fallbacks: {e}")
+        logger.warning(f"{model_name} not available; attempting fallbacks: {e}")
         for alt in [
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
+            "gemini-1.5-flash", 
             "gemini-1.5-flash-8b",
             "gemini-1.0-pro-vision",
-            "gemini-1.0-pro"
         ]:
             try:
                 logger.info(f"Trying fallback model: {alt}")
@@ -247,6 +245,11 @@ async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: i
             model = get_gemini_model()
             # Open image in a context manager to avoid resource leaks
             with Image.open(io.BytesIO(image_content)) as img:
+                # OPTIMIZATION: Resize image if too large to speed up upload/processing
+                # 1024px is sufficient for Gemini 1.5 and reduces latency significantly
+                if img.width > 1024 or img.height > 1024:
+                    logger.info(f"Resizing image from {img.size} to max 1024px for speed optimization")
+                    img.thumbnail((1024, 1024))
                 response = model.generate_content([prompt, img])
             return response.text
         except Exception as e:
