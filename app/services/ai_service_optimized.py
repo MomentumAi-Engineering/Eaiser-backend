@@ -591,23 +591,15 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                 ai_conf_val = int(round(float(ai_conf))) if ai_conf is not None else None
             except Exception:
                 ai_conf_val = None
-            if ai_conf_val is not None:
-                overview["confidence"] = ai_conf_val
-            if len(lines) < 6:
-                extras = [
-                    f"Location context: {location_str}.",
-                    f"Issue type: {overview.get('type')}, severity: {severity.lower()}, confidence: {overview.get('confidence', confidence):.0f}%.",
-                    f"Category: {category}.",
-                    f"Potential impact: {report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')}.",
-                    f"Initial action: {', '.join(report.get('recommended_actions', [])[:2]) or 'N/A'}.",
-                    f"Tracking reference: {report.get('template_fields', {}).get('oid', '')}."
-                ]
-                for x in extras:
-                    if len(lines) >= 6:
-                        break
-                    lines.append(x)
-                overview["summary_explanation"] = "\n".join(lines)
-                expl = overview["summary_explanation"]
+            # Enforce minimal summary processing - Do NOT inject repetitive metadata
+            issue_overview = report.get("issue_overview", {})
+            # Ensure summary is present
+            if not issue_overview.get("summary_explanation"):
+                issue_overview["summary_explanation"] = f"Identified {issue_type} based on visual analysis."
+            
+            # Remove legacy "extras" injection that caused repetition
+            # Just trust the AI's output from the updated prompt
+            expl = overview["summary_explanation"]
             overview["summary"] = (expl.split("\n")[0].strip() if "\n" in expl else expl) or f"{overview['type']} reported at {display_address}."
             report["issue_overview"] = overview
             # Normalize ai_evaluation fields with sensible defaults
@@ -692,12 +684,12 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                 new_conf = 40 if not has_hazard else 80
                 issue_detected = bool(has_hazard)
             elif is_controlled and not has_danger:
-                new_conf = 40  # Explicitly set to 40% for bonfires/controlled fires
-                issue_detected = False
-                overview["type"] = "Other"
+                new_conf = 50  # Increased from 40 to 50 to avoid accidental "blurry" rejection
+                issue_detected = True # Treat as detected so it doesn't trigger the "No Issue" check
+                overview["type"] = "Other" # Categorize as Other (not emergency fire)
                 ia = ai_eval.get("image_analysis") or ""
                 if "no public issue" not in ia.lower():
-                    ai_eval["image_analysis"] = "Detected controlled fire/bonfire; not a public safety threat."
+                    ai_eval["image_analysis"] = "Detected controlled fire/bonfire/festival; classified as non-emergency."
             elif is_minor and not has_danger:
                 new_conf = max(75, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 70)))
             # Only trigger animal_accident if we are sure it's not excluded by negatives AND we trust the AI didn't pick something else strong

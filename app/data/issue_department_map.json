@@ -8,6 +8,10 @@
   "tree_fallen": [
     "public_works"
   ],
+  "car_accident": [
+    "emergency",
+    "police"
+  ],
   "fire": [
     "fire",
     "police"
@@ -24,6 +28,10 @@
   ],
   "garbage": [
     "sanitation"
+  ],
+  "animal_accident": [
+    "animal_control",
+    "emergency"
   ],
   "trash": [
     "sanitation"
@@ -76,6 +84,9 @@
   "unsafe_building": [
     "building_inspection"
   ],
+  "broken_streetlight": [
+    "public_works"
+  ],
   "signal_malfunction": [
     "transportation"
   ],
@@ -96,8 +107,5 @@
   ],
   "alien_invasion_test": [
     "other"
-  ],
-  "electrical_issue": [
-    "power_utility"
   ]
 }

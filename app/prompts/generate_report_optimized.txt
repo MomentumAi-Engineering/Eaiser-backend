@@ -19,17 +19,28 @@ PRIMARY GOALS
 REALISM & IMAGE AUTHENTICITY (CRITICAL)
 ==================================================
 
-If the image appears to be:
-- Cartoon or illustration
-- Animation or video game screenshot
-- AI-generated or digitally altered (LOOK CLOSELY for smooth/glossy textures, inconsistent lighting, or artifacts)
-- Unrealistic symmetry or strange debris patterns
+**IMPORTANT**: Only reject images that are CLEARLY fake/artificial. Do NOT reject real photos just because they are blurry or low quality.
 
-Then you MUST:
+REJECT ONLY if the image is:
+- Cartoon, illustration, or drawing
+- Animation or video game screenshot  
+- AI-generated with obvious artifacts (perfect symmetry, impossible physics, weird text/faces)
+- Digitally rendered 3D graphics
+
+**DO NOT REJECT** real photos that are:
+- Blurry or out of focus
+- Low resolution or grainy
+- Taken in poor lighting
+- Taken from a moving vehicle
+- Slightly unclear but showing a real scene
+
+If you REJECT an image as fake, you MUST:
 - Set "issue_detected": false
 - Set "detected_issue_type": "None"
 - Set confidence ≤ 40
-- Explicitly state in image_analysis that the image is likely AI-generated or not a real-world scene
+- State in image_analysis: "Image appears to be cartoon/animated/AI-generated, not a real photograph"
+
+If the image is a REAL photo (even if blurry), ANALYZE IT NORMALLY.
 
 --------------------------------------------------
 
@@ -38,8 +49,8 @@ ANIMAL CLASSIFICATION RULES (STRICT)
 
 For categories "dead_animal" or "stray_animals":
 - A REAL ANIMAL must be clearly visible in the image.
-- Do NOT assume an animal was involved in a car accident unless using the "dead_animal" category AND the animal is visible.
-- If it is a car accident with NO animal visible → Classify as "road_damage" or "abandoned_vehicle" or "other".
+- **PRIORITY EXCEPTION**: If an animal is visible under/near a damaged car (roadkill/collision), classify as "dead_animal".
+- Do NOT classify as generic "accident" or "road_damage" if the animal carcass is the primary cause/victim.
 - Do NOT hallucinate animals in debris or shadows.
 
 --------------------------------------------------
@@ -123,31 +134,26 @@ DECISION PRIORITY ORDER
 If description contradicts the image → TRUST IMAGE.
 
 ==================================================
-ALLOWED ISSUE TYPES (STRICT)
+VALID ISSUE TYPES
 ==================================================
-[
-  "pothole",
-  "fire",
-  "garbage",
-  "vandalism",
-  "flood",
-  "road_damage",
-  "broken_streetlight",
-  "tree_fallen",
-  "dead_animal",
-  "water_leakage",
-  "open_drain",
-  "blocked_drain",
-  "illegal_construction",
-  "public_toilet_issue",
-  "stray_animals",
-  "abandoned_vehicle",
-  "noise_pollution",
-  "air_pollution",
-  "other"
-]
+Choose ONE from this list only:
+- pothole
+- road_damage
+- garbage (trash, waste, debris)
+- graffiti (vandalism)
+- waterlogging (flood, standing water)
+- tree_fallen (fallen tree, broken branch blocking path)
+- broken_streetlight (damaged pole, hanging light, not working)
+- dead_animal (carcass, roadkill, animal hit by car)
+- stray_animals (livestock on road)
+- fire (ONLY uncontrolled/dangerous)
+- structural_damage (wall collapse, bridge damage)
+- property_damage (broken fence, public property)
+- accident (vehicle collision, car crash)
+- abandoned_vehicle
+- other (for real public issues not listed above)
 
-If no type fits → use "other".
+If none fit, use "None".
 
 ==================================================
 CONFIDENCE GUIDELINES
@@ -182,14 +188,18 @@ LOW:
 OUTPUT FORMAT (STRICT JSON ONLY)
 ==================================================
 
-Return ONLY the JSON below with real values filled in:
+RIf a decline reason is provided, incorporate it into the summary_explanation.
 
+Return this structure:
 {
   "issue_overview": {
-    "type": "",
-    "severity": "",
-    "summary_explanation": "",
-    "confidence": 0
+    "issue_type": "{issue_type.title()}",
+    "severity": "{severity.lower()}",
+    "confidence": {confidence},
+    "category": "{category}",
+    "summary_explanation": "MANDATORY: Visually describe the specific damage seen in the image (e.g. 'A large pothole is visible in the center of the lane', 'The streetlight fixture has broken off and is hanging by wires'). Do NOT use generic phrases like 'Issue detected'. BE SPECIFIC and DESCRIPTIVE.",
+    "admin_analysis": "Technical details for the admin. Mention specific visual features (texture, depth, lighting) that confirmed or rejected the issue.",
+    "user_feedback": "A very short, friendly message for the user. (e.g. 'Thank you for reporting this issue. We have flagged it for review.')"
   },
   "ai_evaluation": {
     "issue_detected": true,

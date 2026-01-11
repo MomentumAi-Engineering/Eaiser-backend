@@ -23,6 +23,8 @@ import pytz
 from typing import List, Optional, Dict, Any
 import gridfs.errors
 import asyncio
+from PIL import Image
+import io
 
 # Setup optimized logging
 logging.basicConfig(
@@ -889,11 +891,36 @@ async def create_issue(
     try:
         image_content = await image.read()
         logger.debug(f"Image read successfully, size: {len(image_content)} bytes")
+        
+        # Performance: Resize/Optimize image before processing
+        try:
+            with Image.open(io.BytesIO(image_content)) as img:
+                # Resize if larger than 1024x1024
+                if img.width > 1024 or img.height > 1024:
+                    img.thumbnail((1024, 1024))
+                
+                # Convert to RGB (standardize)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Compress to JPEG
+                output = io.BytesIO()
+                img.save(output, format='JPEG', quality=85, optimize=True)
+                new_content = output.getvalue()
+                
+                # Only use new content if it's actually smaller or we resized
+                if len(new_content) < len(image_content):
+                    image_content = new_content
+                    logger.info(f"⚡ Image optimized: {len(image_content)} bytes")
+        except Exception as e:
+            logger.warning(f"⚠️ Image optimization failed (using original): {e}")
+
     except Exception as e:
         logger.error(f"Failed to read image: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to read image: {str(e)}")
     
     try:
+        # Pass reduced image to initial classifier
         issue_type, severity, confidence, category, priority = await classify_issue(image_content, description or "")
         if not issue_type:
             logger.error("Failed to classify issue type")
@@ -967,9 +994,10 @@ async def create_issue(
             raise HTTPException(status_code=400, detail="Analysis failed: This image appears to be AI-generated or manipulated.")
 
         # B. Confidence too low (Blurry or Irrelevant)
-        if confidence_val < 20: 
-            logger.warning(f"🚫 Rejected low confidence report ({confidence_val}%) for issue {issue_id}")
-            raise HTTPException(status_code=400, detail="Analysis failed: The image is too blurry or unclear to analyze.")
+        # B. Confidence too low (Blurry or Irrelevant)
+        if confidence_val < 5: 
+            logger.warning(f"🚫 Rejected extremely low confidence report ({confidence_val}%) for issue {issue_id}")
+            raise HTTPException(status_code=400, detail="Analysis failed: The image is too blurry, dark, or unclear to analyze.")
             
         # C. No issue detected
         logger.info(f"Validation Check: type='{detected_type}', detected={is_issue_detected}, conf={confidence_val}")

@@ -258,7 +258,13 @@ async def create_indexes() -> None:
         await issues.create_index([("latitude", 1), ("longitude", 1)], name="lat_lon")
 
         # Users collection unique email
-        await users.create_index([("email", 1)], name="email_unique", unique=True)
+        try:
+            await users.create_index([("email", 1)], name="email_unique", unique=True)
+        except Exception as e:
+            if "IndexOptionsConflict" in str(e) or "already exists" in str(e):
+                logger.warning(f"ℹ️ Index 'email_unique' already exists with different options. Skipping creation. Error details: {str(e)}")
+            else:
+                logger.warning(f"⚠️ Failed to create 'email_unique' index: {str(e)}")
 
         # Authority Mapping Review indexes
         authority_mapping_review = db["authority_mapping_review"]
