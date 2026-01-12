@@ -201,11 +201,12 @@ async def init_db():
         
         # Create indexes for better performance
         try:
-            # Create minimal indexes required for core queries
-            await create_indexes()
-            logger.info("📇 Database indexes created/verified successfully")
+            # OPTIMIZATION: Run index creation in background to speed up startup
+            # This prevents cold starts from hanging on index checks
+            asyncio.create_task(create_indexes())
+            logger.info("🚀 Database index creation scheduled in background")
         except Exception as e:
-            logger.warning(f"⚠️ Index creation failed: {str(e)}")
+            logger.warning(f"⚠️ Index creation scheduling failed: {str(e)}")
         
         return True
         
