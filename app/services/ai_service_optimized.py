@@ -304,6 +304,53 @@ async def generate_report_optimized(
 ) -> Dict[str, Any]:
     """Optimized report generation with caching and async processing"""
     
+    # 0. PRE-CHECK: Fast local heuristic to catch obvious garbage/fakes (Professional Gateway)
+    # This prevents wasting AI tokens on 1x1 pixels, solid black images, or extreme aspect ratios.
+    from services.fake_detector_service import detect_fake_or_flag
+    
+    fake_analysis = detect_fake_or_flag(image_content)
+    if fake_analysis["classification"] == "fake":
+        logger.warning(f"⛔ Image rejected by PRE-CHECK heuristic: {fake_analysis}")
+        
+        # Build immediate rejection report
+        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        return {
+            "issue_overview": {
+                "type": "None",
+                "category": "None",
+                "severity": "low",
+                "summary": "Image rejected: Low quality or invalid format.",
+                "summary_explanation": f"The uploaded image was automatically rejected. Reason: {fake_analysis.get('reason', 'Image quality checks failed')}.",
+                "confidence": 5
+            },
+            "detailed_analysis": {
+                "root_causes": "Image quality insufficient for analysis.",
+                "potential_consequences_if_ignored": "None",
+                "public_safety_risk": "low",
+                "environmental_impact": "low", 
+                "structural_implications": "low",
+                "legal_or_regulatory_considerations": "None",
+                "feedback": "Please upload a clear, real photo of the issue."
+            },
+            "recommended_actions": ["Retake photo", "Ensure good lighting"],
+            "responsible_authorities_or_parties": [],
+            "available_authorities": [],
+            "ai_evaluation": {
+                "issue_detected": False,
+                "detected_issue_type": "None",
+                "ai_confidence_percent": 0,
+                "image_analysis": f"Heuristic check failed: {fake_analysis.get('reason')}",
+                "rationale": "Pre-screen rejected image as fake or invalid."
+            },
+            "additional_notes": "Auto-rejected by security filter.",
+            "template_fields": {
+                "oid": "REJECTED",
+                "timestamp": timestamp_str,
+                "confidence": 0,
+                "ai_tag": "Invalid Image"
+            }
+        }
+
     # Generate cache key for similar reports
     report_cache_key = generate_cache_key(
         "ai_report",

@@ -55,6 +55,13 @@ For categories "dead_animal" or "stray_animals":
 
 --------------------------------------------------
 
+FALLEN TREES / BRANCHES:
+- If a tree is uprooted, lying horizontally, or has a large broken branch, classify as 'tree_fallen'.
+- This results in HIGH CONFIDENCE (80-95%).
+- Do NOT dismiss this as 'nature' or 'scenery'. A fallen tree is a valid infrastructure/safety issue.
+
+--------------------------------------------------
+
 If the image is unrelated to civic infrastructure, such as:
 - Selfies or portraits
 - Indoor rooms or furniture
