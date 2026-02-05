@@ -235,12 +235,18 @@ class OptimizedMongoDBService:
             for collection_name, indexes in self.index_definitions.items():
                 collection = self.db[collection_name]
                 
-                # Create indexes (background option removed as it's deprecated/unsupported in newer Mongo versions)
-                await collection.create_indexes(indexes)
-                
-                logger.info(f"📊 Created {len(indexes)} indexes for {collection_name} collection")
+                try:
+                    # Create indexes (background option removed as it's deprecated/unsupported in newer Mongo versions)
+                    await collection.create_indexes(indexes)
+                    logger.info(f"📊 Created {len(indexes)} indexes for {collection_name} collection")
+                except Exception as e:
+                    # Handle IndexOptionsConflict (Code 85) - Index exists with different name/options
+                    if "IndexOptionsConflict" in str(e) or "already exists" in str(e) or getattr(e, "code", 0) == 85:
+                         logger.info(f"ℹ️ indexes for '{collection_name}' already exist (skipping update).")
+                    else:
+                        logger.error(f"❌ Failed to create indexes for {collection_name}: {str(e)}")
             
-            logger.info("✅ All database indexes created successfully")
+            logger.info("✅ All database indexes created/verified")
             
         except Exception as e:
             logger.error(f"❌ Failed to create indexes: {str(e)}")

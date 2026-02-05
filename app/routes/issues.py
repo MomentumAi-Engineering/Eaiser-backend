@@ -864,7 +864,7 @@ async def send_authority_email(
 
 @router.post("/issues", response_model=IssueResponse)
 async def create_issue(
-    image: UploadFile = File(...),
+    image: Optional[UploadFile] = File(None),  # Image is now OPTIONAL
     description: str = Form(''),
     address: str = Form(''),
     zip_code: Optional[str] = Form(None),
@@ -872,18 +872,120 @@ async def create_issue(
     longitude: float = Form(0.0),
     user_email: Optional[str] = Form(None),
     category: str = Form('public'),
+    
     severity: str = Form('medium'),
     issue_type: str = Form('other')
 ):
-    logger.debug(f"Creating issue with address: {address}, zip: {zip_code}, lat: {latitude}, lon: {longitude}, user_email: [redacted]")
+    logger.debug(f"Creating issue with address: {address}, zip: {zip_code}, lat: {latitude}, lon: {longitude}")
     try:
         db = await get_db()
         fs = await get_fs()
-        logger.debug("Database and GridFS initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
+    # -------------------------------------------------------------
+    # 1. MANUAL REPORT FLOW (No Image)
+    # -------------------------------------------------------------
+    if image is None:
+        logger.info("📝 Processing MANUAL REPORT (No Image Provided)")
+        
+        issue_id = str(uuid.uuid4())
+        
+        # Enforce "Unknown/Manual" state so user must fill it
+        final_address = address
+        if not final_address and latitude and longitude:
+             try:
+                geocode_result = await reverse_geocode(latitude, longitude)
+                final_address = geocode_result.get("address", "Unknown Address")
+                if not zip_code:
+                     zip_code = geocode_result.get("zip_code")
+             except:
+                final_address = "Unknown Address"
+
+        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        # Construct a "Blank" Report for Manual Entry
+        manual_report = {
+            "issue_overview": {
+                "issue_type": issue_type if issue_type != 'other' else "Manual Report",
+                "category": category,
+                "severity": severity or "medium",
+                "summary_explanation": description or "Manual report submitted by user.",
+                "confidence": 0,  # 0 Confidence -> Triggers "Manual Mode" in UI
+                "location_context": "Manual Entry"
+            },
+            "detailed_analysis": {
+                "root_causes": "Manual Report",
+                "public_safety_risk": "Unknown",
+                "potential_consequences_if_ignored": "Unknown",
+                "environmental_impact": "Unknown",
+                "structural_implications": "Unknown",
+                "legal_or_regulatory_considerations": "None",
+                "feedback": "None"
+            },
+            "recommended_actions": ["Review Details", "Assign Authority"],
+            "responsible_authorities_or_parties": [], # Empty -> User must select
+            "available_authorities": [],
+            "ai_evaluation": {
+                "issue_detected": True,
+                "detected_issue_type": "Manual",
+                "ai_confidence_percent": 0,
+                "image_analysis": "No image provided.",
+                "rationale": "User opted for manual reporting."
+            },
+            "template_fields": {
+                "oid": issue_id,
+                "timestamp": timestamp_str,
+                "confidence": 0,
+                "ai_tag": "Manual",
+                "address": final_address,
+                "priority": "Medium",
+                "image_filename": "No Image"
+            }
+        }
+        
+        # We DO NOT save to DB yet. We return it as a "Preview" for the user to edit/confirm.
+        # But we need an ID to submit later.
+        # Ideally, we save a draft or just user sends it back. 
+        # The frontend expects 'id' and 'report'.
+        # We will save a placeholder 'pending_manual' issue to allow 'submit' to work?
+        # Actually 'submit_issue' expects an existing issue in DB.
+        # So we MUST save this initial shell to DB.
+        
+        # Save to DB (Status: draft/pending)
+        await store_issue(
+             db,
+             fs,
+             issue_id,
+             b'', # Empty image content
+             manual_report,
+             {}, # unified_report
+             final_address,
+             zip_code,
+             latitude,
+             longitude,
+             manual_report['issue_overview']['issue_type'],
+             manual_report['issue_overview']['severity'],
+             "General", # category
+             "Medium", # priority
+             user_email,
+             [], # responsible_authorities
+             [] # available_authorities
+        )
+        
+        return IssueResponse(
+            id=issue_id,
+            message="Manual draft created. Please fill in details.",
+            report={
+                 "report": manual_report,
+                 "id": issue_id
+            }
+        )
+
+    # -------------------------------------------------------------
+    # 2. STANDARD AI FLOW (With Image)
+    # -------------------------------------------------------------
     if not image.content_type.startswith("image/"):
         logger.error(f"Invalid image format: {image.content_type}")
         raise HTTPException(status_code=400, detail="Invalid image format")
@@ -993,7 +1095,6 @@ async def create_issue(
             logger.warning(f"🚫 Rejected fake image analysis for issue {issue_id}")
             raise HTTPException(status_code=400, detail="Analysis failed: This image appears to be AI-generated or manipulated.")
 
-        # B. Confidence too low (Blurry or Irrelevant)
         # B. Confidence too low (Blurry or Irrelevant)
         if confidence_val < 5: 
             logger.warning(f"🚫 Rejected extremely low confidence report ({confidence_val}%) for issue {issue_id}")

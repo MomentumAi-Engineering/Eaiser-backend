@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -161,9 +163,8 @@ async def login(user_data: UserLogin):
 @router.post("/google", response_model=Token)
 async def google_login(login_data: GoogleLogin):
     try:
-        GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
         id_info = id_token.verify_oauth2_token(login_data.credential, requests.Request(), GOOGLE_CLIENT_ID)
-
+        
         if not id_info:
             raise HTTPException(status_code=400, detail="Invalid Google Token")
 

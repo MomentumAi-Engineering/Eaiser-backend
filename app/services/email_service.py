@@ -243,6 +243,54 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
             )
             return {"status": "dry_run", "recipients": recipients}
 
+        # -------------------------------------------------------------
+        # 🔥 Generate Secure Authority Action Link (Step 1 Strategy)
+        # -------------------------------------------------------------
+        try:
+            # We need the real DB ID for the token
+            real_id = report.get("template_fields", {}).get("oid") or report.get("_id")
+            
+            if real_id:
+                # Import here to avoid circular dependency
+                try:
+                    from app.routes.authority_action import create_authority_token
+                except ImportError:
+                    from routes.authority_action import create_authority_token
+                
+                token = create_authority_token(str(real_id))
+                
+                # Determine Frontend URL
+                frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
+                # Fallback for local dev if not set
+                if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
+                    frontend_url = "http://localhost:5173"
+
+                action_link = f"{frontend_url}/authority-action?token={token}"
+                
+                logger.info(f"🔗 Generated Authority Action Link for {real_id}")
+
+                button_html = f"""
+                <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 30px 0;">
+                <div style="text-align: center; background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0;">
+                    <h3 style="margin-top: 0; color: #1e293b;">⚡ Official Action Required</h3>
+                    <p style="color: #64748b; margin-bottom: 20px;">Use the secure link below to update the status of this issue directly.</p>
+                    
+                    <a href="{action_link}" style="background-color: #2563eb; color: white; padding: 16px 32px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);">
+                        View & Manage Issue
+                    </a>
+                    
+                    <p style="margin-top: 15px; font-size: 12px; color: #94a3b8;">
+                        Secure Access • No Login Required • Expires in 7 Days
+                    </p>
+                </div>
+                """
+                
+                formatted_content += button_html
+                
+        except Exception as token_error:
+            logger.error(f"⚠️ Failed to generate authority token: {token_error}")
+
+
         async def _send(to_email: str):
             html = formatted_content.replace("\n", "<br>")
             return await send_email(to_email, subject, html, formatted_content)

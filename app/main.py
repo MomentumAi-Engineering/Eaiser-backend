@@ -350,6 +350,14 @@ except ImportError:
 
 app.include_router(admin_users_router, prefix="/api") # Mounted at /api/admin/users
 
+# Include Authority Action Router
+try:
+    from routes.authority_action import router as authority_action_router
+except ImportError:
+    from app.routes.authority_action import router as authority_action_router
+
+app.include_router(authority_action_router, prefix="/api/authority-action", tags=["Authority Action"])
+
 # Explicit wrappers to ensure endpoints exist even if router mounting varies
 from fastapi import UploadFile, File
 

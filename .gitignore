@@ -12,6 +12,7 @@ npm-debug.log*
 # Environment / secrets
 .env
 .env.*
+.env.bk
 
 # Certificates
 certs/

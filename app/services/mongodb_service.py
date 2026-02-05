@@ -262,10 +262,11 @@ async def create_indexes() -> None:
         try:
             await users.create_index([("email", 1)], name="email_unique", unique=True)
         except Exception as e:
-            if "IndexOptionsConflict" in str(e) or "already exists" in str(e):
-                logger.warning(f"ℹ️ Index 'email_unique' already exists with different options. Skipping creation. Error details: {str(e)}")
+            # Code 85: IndexOptionsConflict - usually means it exists with different options or same options
+            if "IndexOptionsConflict" in str(e) or "already exists" in str(e) or getattr(e, "code", 0) == 85:
+                 logger.info(f"ℹ️ Index 'email_unique' already exists. Skipping.")
             else:
-                logger.warning(f"⚠️ Failed to create 'email_unique' index: {str(e)}")
+                 logger.warning(f"⚠️ Failed to create 'email_unique' index: {str(e)}")
 
         # Authority Mapping Review indexes
         authority_mapping_review = db["authority_mapping_review"]
