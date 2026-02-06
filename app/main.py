@@ -51,9 +51,15 @@ except ImportError:
                 return response
 
 try:
-    from routes.issues import router as issues_router
+    from routes.issues_optimized_v2 import router as issues_router
+    logger.info("🚀 using optimized issues router v2")
 except ImportError:
-    from app.routes.issues import router as issues_router
+    try:
+        from app.routes.issues_optimized_v2 import router as issues_router
+        logger.info("🚀 using optimized issues router v2")
+    except ImportError as e:
+        logger.warning(f"⚠️ optimized router v2 not found, falling back to legacy: {e}")
+        from app.routes.issues import router as issues_router
 
 try:
     from api.reports import router as reports_router
