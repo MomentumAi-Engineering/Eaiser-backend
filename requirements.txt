@@ -28,5 +28,8 @@ timezonefinder
 sendgrid
 python-jose
 pyotp
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
 
 
