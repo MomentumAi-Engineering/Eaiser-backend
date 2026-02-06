@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+logger.info(f"Google Auth Configured with Client ID: {GOOGLE_CLIENT_ID[:10]}..." if GOOGLE_CLIENT_ID else "GOOGLE_CLIENT_ID NOT SET")
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -163,7 +164,18 @@ async def login(user_data: UserLogin):
 @router.post("/google", response_model=Token)
 async def google_login(login_data: GoogleLogin):
     try:
-        id_info = id_token.verify_oauth2_token(login_data.credential, requests.Request(), GOOGLE_CLIENT_ID)
+        # Debug incoming credential
+        logger.info(f"Received Google Login Request. Credential prefix: {login_data.credential[:10]}...")
+        if not GOOGLE_CLIENT_ID:
+            logger.error("GOOGLE_CLIENT_ID is missing in server environment.")
+            raise HTTPException(status_code=500, detail="Server configuration error: Missing Google Client ID")
+
+        try:
+             id_info = id_token.verify_oauth2_token(login_data.credential, requests.Request(), GOOGLE_CLIENT_ID)
+        except ValueError as ve:
+             logger.error(f"Google Token Verification ValueError: {ve}")
+             # Detailed error for debugging (remove in prod if needed, but useful now)
+             raise HTTPException(status_code=400, detail=f"Invalid Token: {str(ve)}")
         
         if not id_info:
             raise HTTPException(status_code=400, detail="Invalid Google Token")
