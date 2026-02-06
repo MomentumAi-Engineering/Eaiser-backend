@@ -26,4 +26,6 @@ aiofiles
 pytz
 timezonefinder
 sendgrid
+python-jose
+
 
