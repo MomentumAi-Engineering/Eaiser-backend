@@ -25,4 +25,5 @@ pillow-heif
 aiofiles
 pytz
 timezonefinder
+sendgrid
 
