@@ -29,8 +29,17 @@ class CommandLogger(monitoring.CommandListener):
 
     def failed(self, event):
         start_time = _command_timings.pop(event.request_id, None)
+        duration = (time.time() - start_time) * 1000 if start_time else 0
+        
+        # Suppress logging for harmless "IndexOptionsConflict" or "already exists" errors during createIndexes
+        # These are expected during startup if indexes exist with different options
+        if event.command_name == "createIndexes":
+             failure_msg = str(event.failure)
+             if "IndexOptionsConflict" in failure_msg or "already exists" in failure_msg or getattr(event.failure, "code", 0) == 85:
+                 logger.debug(f"ℹ️ MongoDB index creation overlapped (harmless): {duration:.2f} ms")
+                 return
+
         if start_time:
-            duration = (time.time() - start_time) * 1000
             logger.error(f"❌ MongoDB {event.command_name} failed after {duration:.2f} ms")
         else:
             logger.error(f"❌ MongoDB {event.command_name} failed (duration unknown)")

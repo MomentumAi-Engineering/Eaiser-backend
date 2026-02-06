@@ -45,6 +45,10 @@ def get_redis_config():
     redis_url = os.getenv('REDIS_URL')
     
     if redis_url:
+        # Fix malformed URLs (missing scheme) commonly found in dev environments
+        if not redis_url.startswith(('redis://', 'rediss://', 'unix://')):
+             redis_url = f"redis://{redis_url}"
+
         # Parse Redis URL format: redis://[:password@]host:port[/db]
         # or rediss://[:password@]host:port[/db] for SSL
         try:
@@ -121,6 +125,11 @@ class RedisService:
             # Prefer REDIS_URL to avoid low-level SSL kwarg incompatibilities across client versions
             redis_url = os.getenv('REDIS_URL')
             if redis_url:
+                # Fix malformed URLs (missing scheme)
+                if not redis_url.startswith(('redis://', 'rediss://', 'unix://')):
+                     logger.warning(f"⚠️ Malformed REDIS_URL detected. Auto-fixing to 'redis://{redis_url}'")
+                     redis_url = f"redis://{redis_url}"
+
                 # Use ConnectionPool.from_url to let the client handle ssl/rediss scheme internally
                 pool_kwargs = {
                     'decode_responses': True,
