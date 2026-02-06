@@ -31,6 +31,13 @@ import uvicorn
 import json
 from datetime import datetime
 
+# Setup logging FIRST before any imports that use it
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Import local modules with proper error handling
 try:
     from utils.timing_middleware import TimingMiddleware

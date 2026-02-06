@@ -63,11 +63,11 @@ class UserAction(BaseModel):
 @router.post("/login")
 async def admin_login(creds: AdminLoginRequest, request: Request):
     """
-    Enhanced admin login with security features:
-    - Rate limiting
-    - Account lockout after failed attempts
-    - Login attempt tracking
-    - Security audit logging
+    OPTIMIZED admin login with security features:
+    - Rate limiting (cached)
+    - Account lockout (cached)
+    - Background security logging (non-blocking)
+    - Redis caching for admin lookup
     """
     
     # Get client information
@@ -75,51 +75,72 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
     ip_address = client_info["ip_address"]
     user_agent = client_info["user_agent"]
     
-    # Check rate limit
-    if not await SecurityService.check_rate_limit(ip_address):
+    # OPTIMIZATION: Run rate limit and lockout checks in parallel
+    rate_limit_task = SecurityService.check_rate_limit(ip_address)
+    lockout_task = SecurityService.check_account_lockout(creds.email)
+    
+    rate_allowed, lockout_status = await asyncio.gather(rate_limit_task, lockout_task)
+    
+    if not rate_allowed:
         logger.warning(f"🚫 Rate limit exceeded for IP: {ip_address}")
         raise HTTPException(
             status_code=429,
             detail="Too many login attempts. Please try again in 1 minute."
         )
     
-    # Check account lockout
-    lockout_status = await SecurityService.check_account_lockout(creds.email)
     if lockout_status["locked"]:
-        await SecurityService.record_login_attempt(
+        # Background task for failed login recording (non-blocking)
+        asyncio.create_task(SecurityService.record_login_attempt(
             email=creds.email,
             ip_address=ip_address,
             user_agent=user_agent,
             success=False,
             failure_reason="Account locked"
-        )
+        ))
         raise HTTPException(
             status_code=403,
             detail=f"Account locked due to multiple failed login attempts. Try again in {lockout_status['remaining_minutes']} minutes."
         )
     
-    # Get admin from database
-    mongo_service = await get_optimized_mongodb_service()
-    if not mongo_service:
-        raise HTTPException(status_code=503, detail="Service unavailable")
+    # OPTIMIZATION: Try Redis cache first for admin lookup
+    redis_service = await get_redis_cluster_service()
+    admin = None
+    
+    if redis_service:
+        cache_key = f"admin:email:{creds.email}"
+        admin = await redis_service.get_cache('user_session', cache_key)
+        if admin:
+            logger.debug(f"✅ Admin cache HIT for {creds.email}")
+    
+    # Cache miss - get from database
+    if not admin:
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            raise HTTPException(status_code=503, detail="Service unavailable")
 
-    try:
-        collection = await mongo_service.get_collection("admins")
-        admin = await collection.find_one({"email": creds.email})
-    except Exception as e:
-        logger.error(f"Database error during admin login: {e}")
-        raise HTTPException(status_code=500, detail="Database error")
+        try:
+            collection = await mongo_service.get_collection("admins")
+            admin = await collection.find_one({"email": creds.email})
+            
+            # Cache the admin data for 10 minutes
+            if admin and redis_service:
+                await redis_service.set_cache('user_session', cache_key, admin, ttl=600)
+                logger.debug(f"💾 Cached admin data for {creds.email}")
+                
+        except Exception as e:
+            logger.error(f"Database error during admin login: {e}")
+            raise HTTPException(status_code=500, detail="Database error")
 
     # Verify credentials
     if not admin or not verify_password(creds.password, admin["password_hash"]):
-        # Record failed login attempt
-        await SecurityService.record_login_attempt(
+        # OPTIMIZATION: Background task for failed login (non-blocking)
+        asyncio.create_task(SecurityService.record_login_attempt(
             email=creds.email,
             ip_address=ip_address,
             user_agent=user_agent,
             success=False,
             failure_reason="Invalid credentials"
-        )
+        ))
         
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -129,36 +150,33 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
     
     # Check if account is active
     if not admin.get("is_active", True):
-        await SecurityService.record_login_attempt(
+        asyncio.create_task(SecurityService.record_login_attempt(
             email=creds.email,
             ip_address=ip_address,
             user_agent=user_agent,
             success=False,
             failure_reason="Inactive account"
-        )
+        ))
         raise HTTPException(status_code=403, detail="Account is inactive")
 
     # 2FA Logic
     if admin.get("two_factor_enabled", False):
         if not creds.code:
-            # Check if 2FA code is needed
             return {
                 "require_2fa": True,
                 "email": creds.email,
                 "message": "Please enter your 2FA code"
             }
         
-        # Verify 2FA code
-        # For now supporting TOTP. If email method, would check against stored code.
         secret = admin.get("two_factor_secret")
         if not secret or not SecurityService.verify_2fa_code(secret, creds.code):
-            await SecurityService.record_login_attempt(
+            asyncio.create_task(SecurityService.record_login_attempt(
                 email=creds.email,
                 ip_address=ip_address,
                 user_agent=user_agent,
                 success=False,
                 failure_reason="Invalid 2FA code"
-            )
+            ))
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
 
     # Generate access token
@@ -167,25 +185,24 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
         subject=admin["email"], expires_delta=access_token_expires
     )
     
-    # Record successful login
-    await SecurityService.record_login_attempt(
+    # OPTIMIZATION: Move security logging to background (non-blocking)
+    asyncio.create_task(SecurityService.record_login_attempt(
         email=creds.email,
         ip_address=ip_address,
         user_agent=user_agent,
         success=True
-    )
+    ))
     
-    # Log security event
-    await SecurityService.log_security_event(
+    asyncio.create_task(SecurityService.log_security_event(
         admin_email=creds.email,
         action="login",
         ip_address=ip_address,
         user_agent=user_agent,
         success=True,
         details={"role": admin.get("role")}
-    )
+    ))
     
-    logger.info(f"✅ Successful login: {creds.email} from {ip_address}")
+    logger.info(f"✅ Fast login: {creds.email} from {ip_address}")
     
     return {
         "token": access_token,
