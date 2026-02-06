@@ -390,7 +390,9 @@ async def get_pending_reviews(
     admin: dict = Depends(get_admin_user)
 ):
     """
-    Get all issues that are flagged for review (status='needs_review').
+    Get all issues that are flagged for review.
+    OPTIMIZED: Uses MongoDB Aggregation to handle filtering logic on the database side.
+    Excludes heavy fields like embeddings/images.
     """
     try:
         mongo_service = await get_optimized_mongodb_service()
@@ -398,128 +400,118 @@ async def get_pending_reviews(
             raise HTTPException(status_code=503, detail="Database service unavailable")
         
         collection = await mongo_service.get_collection("issues")
+
+        # Aggregation Pipeline for efficient filtering
+        # Logic:
+        # 1. Status 'needs_review'
+        # 2. OR Status 'screened_out' / 'reject'
+        # 3. OR Status 'pending' with low confidence or fake keywords
         
-        # IMPROVED STRATEGY:
-        # Filter DB-side for non-finalized issues to ensure we don't fill the 50-item buffer 
-        # with already-resolved issues, which hides pending ones.
-        filter_query = {
-            "status": {
-                "$nin": ["approved", "submitted", "declined", "rejected", "completed", "resolved"]
+        pipeline = [
+            {
+                "$match": {
+                    "status": {
+                        "$nin": ["approved", "submitted", "declined", "rejected", "completed", "resolved"]
+                    }
+                }
+            },
+            {
+                "$addFields": {
+                    # Standardize confidence to a number globally
+                    "effective_confidence": {
+                        "$min": [
+                             { "$ifNull": [ { "$toDouble": "$confidence" }, 100 ] },
+                             { "$ifNull": [ { "$toDouble": "$report.issue_overview.confidence" }, 100 ] },
+                             { "$ifNull": [ { "$toDouble": "$report.template_fields.confidence" }, 100 ] }
+                        ]
+                    },
+                     # Check keywords in DB (Basic regex check)
+                    "is_fake_keyword": {
+                        "$regexMatch": {
+                            "input": { "$concat": [ { "$ifNull": ["$description", ""] }, " ", { "$ifNull": ["$report.issue_overview.summary_explanation", ""] } ] },
+                            "regex": "fake|cartoon|ai generate",
+                            "options": "i"
+                        }
+                    }
+                }
+            },
+            {
+                "$match": {
+                    "$or": [
+                        { "status": "needs_review" },
+                        { "status": "screened_out" },
+                        { "dispatch_decision": "reject" },
+                        {
+                            "$and": [
+                                { "status": "pending" },
+                                {
+                                    "$or": [
+                                        { "effective_confidence": { "$lt": 70 } },
+                                        { "is_fake_keyword": True },
+                                        { "issue_type": "unknown" }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            { "$sort": { "timestamp": -1 } },
+            { "$skip": skip },
+            { "$limit": limit },
+            {
+                "$project": {
+                    "image_data": 0, 
+                    "original_image": 0, 
+                    "compressed_image": 0, 
+                    "vector_embedding": 0,
+                    "logs": 0,
+                    "base64_image": 0
+                }
             }
-        }
+        ]
         
-        # Fetch candidates with projection to exclude heavy fields
-        # This significantly improves performance by not fetching base64 images or embeddings
-        projection = {
-            "image_data": 0, 
-            "original_image": 0, 
-            "compressed_image": 0, 
-            "vector_embedding": 0,
-            "logs": 0,
-            "base64_image": 0
-        }
-        
-        cursor = collection.find(filter_query, projection).sort("timestamp", -1).limit(50)
-        recent_issues = await cursor.to_list(length=50)
+        # Execute Aggregation
+        recent_issues = await collection.aggregate(pipeline).to_list(length=limit)
         
         final_reviews = []
-        seen_ids = set()
-        
-        # Helper to parse ANY format - define ONCE outside loop
-        def parse_conf(val):
-            if val is None: return None
-            try:
-                s = str(val).replace("%", "").strip()
-                return float(s)
-            except: 
-                return None
+        reporter_emails = set()
 
         for issue in recent_issues:
             sid = str(issue["_id"])
-            if sid in seen_ids: continue
             
-            status = issue.get("status", "unknown")
-            should_show = False
+            # NORMALIZATION
+            issue["issue_id"] = sid
+            if "_id" in issue: issue["_id"] = sid
+            if not issue.get("reporter_email"): issue["reporter_email"] = issue.get("user_email")
             
-            # FIRST: Skip already processed issues
-            if status in ["rejected", "declined", "completed", "submitted"]:
-                # Don't show issues that have been finalized
-                continue
+            # Ensure Image URL (Lightweight)
+            if "image_url" not in issue:
+                issue["image_url"] = f"/api/issues/{sid}/image"
+
+            # Ensure Address
+            if "address" not in issue:
+                issue["address"] = issue.get("report", {}).get("template_fields", {}).get("location", "Unknown Location")
+
+            # Clean Confidence
+            issue["confidence"] = issue.get("effective_confidence", 0)
             
-            # 1. Explicitly flagged
-            if status == "needs_review":
-                should_show = True
-            
-            # 2. Check for "fake" / "screened_out" / "reject"
-            elif status == "screened_out" or issue.get("dispatch_decision") == "reject":
-                should_show = True
-            
-            # 3. Check pending issues for low confidence
-            elif status == "pending":
-                # manual extraction
-                conf_values = []
+            # Force status for UI consistency
+            if issue.get("status") == "pending":
+                 issue["status_original"] = "pending"
+                 issue["status"] = "needs_review"
 
-                # Extract from all known locations
-                c1 = parse_conf(issue.get("confidence"))
-                c2 = parse_conf(issue.get("report", {}).get("issue_overview", {}).get("confidence"))
-                c3 = parse_conf(issue.get("report", {}).get("template_fields", {}).get("confidence"))
-                c4 = parse_conf(issue.get("report", {}).get("unified_report", {}).get("confidence"))
-                
-                if c1 is not None: conf_values.append(c1)
-                if c2 is not None: conf_values.append(c2)
-                if c3 is not None: conf_values.append(c3)
-                if c4 is not None: conf_values.append(c4)
-                
-                # Determine effective confidence
-                effective_conf = min(conf_values) if conf_values else 0
-                
-                # Check for "fake" keywords in description
-                desc = str(issue.get("description") or "").lower()
-                ai_summary = str(issue.get("report", {}).get("issue_overview", {}).get("summary_explanation") or "").lower()
-                combined_text = desc + " " + ai_summary
-                is_fake_text = any(x in combined_text for x in ["fake", "cartoon", "ai generate"])
-                
-                if effective_conf < 70 or is_fake_text or issue.get("issue_type") == "unknown":
-                    should_show = True
-                    # Force status for UI consistency
-                    issue["status_original"] = status
-                    issue["status"] = "needs_review"
+            if issue.get("reporter_email"):
+                reporter_emails.add(issue["reporter_email"])
 
-            if should_show:
-                seen_ids.add(sid)
-                
-                # DATA NORMALIZATION FOR FRONTEND
-                issue["issue_id"] = sid
-                if not issue.get("reporter_email"): issue["reporter_email"] = issue.get("user_email")
-                
-                # Ensure Image URL
-                if "image_url" not in issue:
-                    # Prefer standard endpoint
-                    issue["image_url"] = f"/api/issues/{sid}/image"
+            final_reviews.append(issue)
 
-                # Ensure Address
-                if "address" not in issue:
-                    issue["address"] = issue.get("report", {}).get("template_fields", {}).get("location", "Unknown Location")
-
-                # Ensure Confidence Display
-                if "confidence" not in issue:
-                    # re-calculate to ensure property exists
-                    valid_c = [x for x in [
-                        parse_conf(issue.get("report", {}).get("issue_overview", {}).get("confidence")),
-                        parse_conf(issue.get("report", {}).get("template_fields", {}).get("confidence"))
-                    ] if x is not None]
-                    issue["confidence"] = min(valid_c) if valid_c else 0
-
-                final_reviews.append(issue)
-
-        # --- User Reputation Enrichment ---
-        reporter_emails = list(set([i.get("reporter_email") for i in final_reviews if i.get("reporter_email")]))
+        # Bulk user fetch
         user_stats_map = {}
-        
         if reporter_emails:
             users_coll = await mongo_service.get_collection("users")
             users = await users_coll.find(
-                {"email": {"$in": reporter_emails}},
+                {"email": {"$in": list(reporter_emails)}},
                 {"email": 1, "rejected_reports_count": 1, "is_active": 1, "name": 1, "full_name": 1}
             ).to_list(None)
             
@@ -530,15 +522,19 @@ async def get_pending_reviews(
                     "name": u.get("name") or u.get("full_name") or "User"
                 }
 
-        if issue.get("reporter_email") and issue["reporter_email"] in user_stats_map:
-            issue["user_reputation"] = user_stats_map[issue["reporter_email"]]
-        else:
-             issue["user_reputation"] = {"rejected_count": 0, "is_active": True}
+        # Enrich
+        for issue in final_reviews:
+            if issue.get("reporter_email") and issue["reporter_email"] in user_stats_map:
+                issue["user_reputation"] = user_stats_map[issue["reporter_email"]]
+            else:
+                 issue["user_reputation"] = {"rejected_count": 0, "is_active": True}
 
-        logger.info(f"Admin Dashboard: Returning {len(final_reviews)} issues (Filtered from {len(recent_issues)} recent)")
+        logger.info(f"Admin Dashboard: Fetched {len(final_reviews)} issues via Optimized Aggregation")
         return final_reviews
+
     except Exception as e:
         logger.error(f"Failed to fetch pending reviews: {e}", exc_info=True)
+        # Fallback to empty list or error
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/resolved", response_model=List[dict])
@@ -640,6 +636,16 @@ async def approve_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
 
         if not success:
             raise HTTPException(status_code=400, detail="Failed to update issue status")
+
+        # LOG APPROVAL
+        asyncio.create_task(SecurityService.log_security_event(
+            admin_email=admin["email"],
+            action="approve_issue",
+            ip_address="internal", 
+            user_agent="admin_dashboard", 
+            success=True,
+            details={"issue_id": action.issue_id, "notes": action.notes}
+        ))
 
         # 2.5 If authority changed, update report and issue
         if action.new_authority_email and issue.get("report"):
@@ -773,6 +779,16 @@ async def decline_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
 
         if not success:
             raise HTTPException(status_code=404, detail="Issue not found or update failed")
+
+        # LOG DECLINE
+        asyncio.create_task(SecurityService.log_security_event(
+            admin_email=admin["email"],
+            action="decline_issue",
+            ip_address="internal", 
+            user_agent="admin_dashboard", 
+            success=True,
+            details={"issue_id": action.issue_id, "notes": action.notes}
+        ))
 
         # Fetch issue to get reporter email
         issue = await mongo_service.get_issue_by_id(action.issue_id)
@@ -1700,6 +1716,14 @@ async def get_mapping_stats(admin: dict = Depends(get_admin_user)):
         "zip_codes_configured": total_zips,
         "coverage_percent": 95 # Placeholder or calculated
     }
+
+@router.get("/analytics/forecast")
+async def get_forecast(admin: dict = Depends(get_admin_user)):
+    """
+    Get AI-generated issue forecast based on real historical regression.
+    """
+    from services.predictive_analytics import PredictiveAnalyticsService
+    return await PredictiveAnalyticsService.get_issue_forecast()
 
 @router.get("/mapping-history")
 async def get_mapping_history(limit: int = 50, admin: dict = Depends(get_admin_user)):

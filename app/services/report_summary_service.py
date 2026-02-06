@@ -22,10 +22,8 @@ class ReportSummaryBuilder:
     """
 
     DEFAULT_TEMPLATE = (
-        "Our AI detected a {Issue_Type} in {City}, {State} (ZIP {Zip_Code}). "
-        "The image shows {Short_Visual_Description}. "
-        "Based on the location and context, this incident has been classified as "
-        "{Priority_Label} due to {Risk_Tags}."
+        "Our AI analyzed the image and identified a potential {Issue_Type} showing {Short_Visual_Description}. "
+        "This issue is located at {City}, {State} (ZIP {Zip_Code})."
     )
 
     def __init__(self, template: Optional[str] = None, max_risk_tags: int = 5):

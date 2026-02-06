@@ -171,25 +171,40 @@ CONFIDENCE GUIDELINES
 - Unclear / fake → 0–39
 
 ==================================================
-SEVERITY GUIDELINES
+SEVERITY & EMERGENCY DETERMINATION
 ==================================================
-HIGH:
-- Uncontrolled fire
-- Flood covering road
-- Tree fully blocking road
-- Road collapse
+You must categorize severity as HIGH, MEDIUM, or LOW based on immediate risk to human life, property, and infrastructure.
 
-MEDIUM:
-- Pothole
-- Water leakage
-- Dead animal
-- Road damage
+1. HIGH (CRITICAL / EMERGENCY)
+Criteria: Immediate danger to life, major property damage, or total infrastructure failure.
+Indicators:
+- Uncontrolled Fire: Any building, vehicle, or large-scale forest fire.
+- Major Structural Collapse: Fallen bridge, collapsed wall, or deep road sinkholes.
+- Complete Road Blockage: Large fallen trees, primary road landslides, or major vehicle accidents blocking all lanes.
+- Severe Floods: Fast-moving water or water deep enough to submerge cars.
+- Life-Threatening Hazards: Exposed high-voltage wires, gas leaks (if observable), or live accidents with visible injuries.
 
-LOW:
-- Garbage
-- Broken streetlight
-- Public toilet issue
-- Graffiti
+2. MEDIUM (SERIOUS / NON-EMERGENCY)
+Criteria: Potential hazard if not addressed within 24-48 hours. Causes significant disruption but no immediate life-threat.
+Indicators:
+- Large Potholes: Deep enough to damage tires/rims or cause bike accidents.
+- Moderate Water Leaks: Burst pipes flooding sidewalks but not submerging roads.
+- Fallen Branches: Obstruction to secondary paths or bike lanes.
+- Dead Animals: Large carcasses on road causing traffic swerving.
+- Damaged Public Property: Broken fences, leaning (but not fallen) poles.
+
+3. LOW (ROUTINE MAINTENANCE)
+Criteria: Nuance/aesthetic issues or minor inconveniences. No threat to safety.
+Indicators:
+- Garbage/Litter: Piles of trash, overfilled bins, or small debris.
+- Graffiti: Non-offensive vandalism on walls or signs.
+- Broken Streetlights: Single light out in a non-critical area.
+- Minor Road Wear: Small cracks or scuffs on pavement.
+- Non-Urgent Signage: Leaning street signs or faded paint.
+
+EMERGENCY LOGIC:
+If any HIGH indicator is present, set severity="high" and mention "EMERGENCY" in the admin_analysis.
+If you are unsure between two levels, choose the HIGHER level to ensure safety.
 
 ==================================================
 OUTPUT FORMAT (STRICT JSON ONLY)
@@ -200,25 +215,24 @@ RIf a decline reason is provided, incorporate it into the summary_explanation.
 Return this structure:
 {
   "issue_overview": {
-    "issue_type": "{issue_type.title()}",
-    "severity": "{severity.lower()}",
-    "confidence": {confidence},
-    "category": "{category}",
-    "summary_explanation": "MANDATORY: Visually describe the specific damage seen in the image (e.g. 'A large pothole is visible in the center of the lane', 'The streetlight fixture has broken off and is hanging by wires'). Do NOT use generic phrases like 'Issue detected'. BE SPECIFIC and DESCRIPTIVE.",
-    "admin_analysis": "Technical details for the admin. Mention specific visual features (texture, depth, lighting) that confirmed or rejected the issue.",
-    "user_feedback": "A very short, friendly message for the user. (e.g. 'Thank you for reporting this issue. We have flagged it for review.')"
+    "issue_type": "The detected issue type (title case)",
+    "severity": "high/medium/low",
+    "confidence": 0,
+    "category": "public/private",
+    "summary_explanation": "MANDATORY NARRATIVE: Start by explaining the issue clearly (e.g. 'There is a severe structural crack in the bridge support'). Then, state the location immediately (e.g. 'This issue is specifically located at {location_str}'). Finally, summarize the overall situation and impact.",
+    "admin_analysis": "Technical details for the admin. 1. Mention specific visual features (texture, depth, lighting) that confirmed or rejected the issue. 2. EXPLAIN WHY this severity level was chosen based on the Indicators list (e.g., 'Classified as HIGH because uncontrolled fire is present').",
+    "user_feedback": "A very short, friendly message for the user."
   },
   "ai_evaluation": {
     "issue_detected": true,
     "detected_issue_type": "",
     "ai_confidence_percent": 0,
-    "image_analysis": "",
-    "rationale": ""
+    "image_analysis": "Detailed visual evidence breakdown. Describe textures, colors, and spatial evidence confirming the issue.",
+    "rationale": "Reasoning for the detection."
   },
-  "recommended_actions": [],
   "responsible_authorities": [],
   "available_authorities": [],
-  "additional_notes": ""
+  "additional_notes": "Combine the issue description and location into a single summary note for record keeping."
 }
 
 ==================================================

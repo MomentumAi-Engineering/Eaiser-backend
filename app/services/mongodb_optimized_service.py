@@ -87,6 +87,7 @@ class OptimizedMongoDBService:
         self.read_client: Optional[AsyncIOMotorClient] = None
         self.db: Optional[AsyncIOMotorDatabase] = None
         self.read_db: Optional[AsyncIOMotorDatabase] = None
+        self.fs: Optional[motor.motor_asyncio.AsyncIOMotorGridFSBucket] = None
         
         # Circuit breakers
         self.write_circuit_breaker = MongoDBCircuitBreaker()
@@ -194,6 +195,9 @@ class OptimizedMongoDBService:
                 # Initialize databases
                 self.db = self.primary_client[self.db_name]
                 self.read_db = self.read_client[self.db_name]
+                
+                # Initialize GridFS
+                self.fs = motor.motor_asyncio.AsyncIOMotorGridFSBucket(self.db)
                 
                 # Create indexes for optimal performance
                 await self._create_indexes()
@@ -626,6 +630,14 @@ class OptimizedMongoDBService:
                 # Motor supports max_time_ms in find_one kwargs
                 issue_data = await collection.find_one({"_id": issue_id}, max_time_ms=3000)
                 
+                # Fallback to ObjectId if string search fails (handles legacy/mixed data)
+                if not issue_data:
+                    try:
+                        from bson.objectid import ObjectId
+                        issue_data = await collection.find_one({"_id": ObjectId(issue_id)}, max_time_ms=3000)
+                    except Exception:
+                        pass
+                
                 if issue_data:
                     # Convert ObjectId to string for JSON serialization
                     if '_id' in issue_data:
@@ -768,15 +780,26 @@ class OptimizedMongoDBService:
             issue_id = await self.insert_one_optimized('issues', issue_doc)
             
             # Store image in GridFS if provided
-            if image_content:
+            if image_content and self.fs:
                 try:
-                    # This would typically use GridFS for large images
-                    # For now, we'll store a reference to the image
+                    # Optimized image storage using GridFS
+                    image_id = await self.fs.upload_from_stream(
+                        filename=f"{issue_doc['_id']}.jpg",
+                        source=image_content,
+                        metadata={"issue_id": issue_doc['_id']}
+                    )
+                    
+                    # Update issue document with image_id
                     await self.update_one_optimized(
                         'issues',
                         {"_id": issue_doc['_id']},
-                        {"$set": {"image_stored": True, "image_size": len(image_content)}}
+                        {"$set": {
+                            "image_id": str(image_id),
+                            "image_stored": True, 
+                            "image_size": len(image_content)
+                        }}
                     )
+                    logger.info(f"📸 Image stored in GridFS for issue {issue_doc['_id']} with ID {image_id}")
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to store image for issue {issue_doc['_id']}: {e}")
             
@@ -786,6 +809,32 @@ class OptimizedMongoDBService:
         except Exception as e:
             logger.error(f"❌ Failed to store issue: {str(e)}")
             raise e
+    
+    async def get_issue_image_stream(self, issue_id: str):
+        """
+        Retrieve image content stream from GridFS by issue ID.
+        """
+        try:
+            async with self._safe_operation('read'):
+                collection = await self.get_collection('issues', read_only=True)
+                issue = await collection.find_one({"_id": issue_id})
+                
+                if not issue or not issue.get('image_id'):
+                    return None
+                
+                if not self.fs:
+                    return None
+                    
+                image_id = issue['image_id']
+                try:
+                    gridout = await self.fs.open_download_stream(ObjectId(image_id))
+                    return gridout
+                except Exception as e:
+                    logger.error(f"❌ Failed to open download stream for image {image_id}: {e}")
+                    return None
+        except Exception as e:
+            logger.error(f"❌ Error retrieving image stream for issue {issue_id}: {e}")
+            return None
     
     async def get_analytics_summary(self, start_date: datetime, end_date: datetime) -> Dict[str, Any]:
         """
@@ -818,12 +867,12 @@ class OptimizedMongoDBService:
                             "total_issues": {"$sum": 1},
                             "open_issues": {
                                 "$sum": {
-                                    "$cond": [{"$eq": ["$status", "pending"]}, 1, 0]
+                                    "$cond": [{"$in": ["$status", ["pending", "needs_review", "submitted", "under_review"]]}, 1, 0]
                                 }
                             },
                             "resolved_issues": {
                                 "$sum": {
-                                    "$cond": [{"$eq": ["$status", "resolved"]}, 1, 0]
+                                    "$cond": [{"$in": ["$status", ["resolved", "completed", "accepted", "rejected", "declined"]]}, 1, 0]
                                 }
                             }
                         }

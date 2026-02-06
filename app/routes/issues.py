@@ -208,7 +208,6 @@ Fire Department Action Required:
 • GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
 • Live Location: {map_link}
 • Severity: {severity_checkboxes}
-• Recommended Action: Immediate inspection and fire suppression measures.
 • Report ID: {report.get('template_fields', {}).get('oid', 'N/A')}
 Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
@@ -231,7 +230,6 @@ Police Action Required:
 • GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
 • Live Location: {map_link}
 • Severity: {severity_checkboxes}
-• Recommended Action: Deploy officers to investigate and secure the area.
 • Report ID: {report.get('template_fields', {}).get('oid', 'N/A')}
 Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
@@ -254,7 +252,6 @@ Public Works Action Required:
 • GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
 • Live Location: {map_link}
 • Severity: {severity_checkboxes}
-• Recommended Action: Schedule maintenance and repair work.
 • Report ID: {report.get('template_fields', {}).get('oid', 'N/A')}
 Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
@@ -277,7 +274,6 @@ Action Required:
 • GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
 • Live Location: {map_link}
 • Severity: {severity_checkboxes}
-• Recommended Action: Inspect and address issue promptly.
 • Report ID: {report.get('template_fields', {}).get('oid', 'N/A')}
 Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}

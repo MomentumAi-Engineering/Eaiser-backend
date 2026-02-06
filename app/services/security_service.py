@@ -180,7 +180,8 @@ class SecurityService:
             if not mongo_service:
                 return
             
-            audit_collection = await mongo_service.get_collection("security_audit_log")
+            # UNIFIED: Use 'audit_logs' for everything so frontend can display single timeline
+            audit_collection = await mongo_service.get_collection("audit_logs")
             
             log_entry = SecurityAuditLog(
                 admin_email=admin_email,
@@ -192,6 +193,7 @@ class SecurityService:
                 details=details
             )
             
+            # Use loose schema to accommodate different log types
             await audit_collection.insert_one(log_entry.dict())
             logger.info(f"📝 Security event logged: {action} by {admin_email}")
             

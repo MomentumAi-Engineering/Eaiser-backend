@@ -237,7 +237,7 @@ async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: i
     """Generate AI report asynchronously with timeout control"""
     # Use environment variable for production timeout, fallback to 5 seconds for development
     if timeout is None:
-        timeout = int(os.getenv('AI_TIMEOUT', '8'))
+        timeout = int(os.getenv('AI_TIMEOUT', '25'))
     
     def _generate_report():
         try:
@@ -332,7 +332,7 @@ async def generate_report_optimized(
                 "legal_or_regulatory_considerations": "None",
                 "feedback": "Please upload a clear, real photo of the issue."
             },
-            "recommended_actions": ["Retake photo", "Ensure good lighting"],
+            "recommended_actions": [],
             "responsible_authorities_or_parties": [],
             "available_authorities": [],
             "ai_evaluation": {
@@ -452,6 +452,15 @@ async def generate_report_optimized(
     authority_data = None
     responsible_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
     available_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
+    
+    # 1. Fetch live authorities for this zip/issue-type EARLY
+    # This ensures they are available for both the AI prompt and the fallback logic.
+    try:
+        auth_data = await get_authority_data_cached(zip_code, address, issue_type, latitude, longitude, category)
+        responsible_authorities = auth_data.get("responsible_authorities", responsible_authorities)
+        available_authorities = auth_data.get("available_authorities", available_authorities)
+    except Exception as e:
+        logger.warning(f"Initial authority fetch failed, using defaults: {e}")
 
     # Department mapping and normalization
     issue_department_map = await get_department_mapping_cached()
@@ -522,8 +531,7 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
         prompt = prompt.replace(k, str(v))
 
     try:
-        # Generate AI report with timeout and fetch authorities concurrently
-        authority_task = asyncio.create_task(get_authority_data_cached(zip_code, address, issue_type, latitude, longitude, category))
+        # 2. Generate AI report with timeout
         ai_text = await generate_ai_report_async(prompt, image_content)
         logger.info(f"Gemini optimized report output: {ai_text[:200]}...")
 
@@ -557,10 +565,7 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                 "legal_or_regulatory_considerations": "Local regulations may apply.",
                 "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else None
             })
-            rep.setdefault("recommended_actions", [
-                "Inspect site",
-                "Schedule maintenance"
-            ])
+            rep.setdefault("recommended_actions", [])
             rep.setdefault("responsible_authorities_or_parties", responsible_authorities)
             rep.setdefault("available_authorities", available_authorities)
             rep.setdefault("additional_notes", f"Location: {location_str}. View: {map_link}. Issue ID: {issue_id}. Zip: {zip_code or 'N/A'}.")
@@ -998,10 +1003,7 @@ Automated report generated via EAiSER AI by MomntumAI
                 _ai_confidence_percent = min(_ai_confidence_percent, 50)
         except Exception:
             pass
-        _image_analysis = (
-            f"{_detected_type if _issue_detected else 'No obvious issue detected'}; "
-            f"severity {severity.lower()}, confidence {_ai_confidence_percent}% based on available visual indicators and metadata."
-        )
+        _image_analysis = f"{_detected_type if _issue_detected else 'No obvious issue detected'}."
 
         fallback_report = {
             "issue_overview": {
@@ -1009,14 +1011,9 @@ Automated report generated via EAiSER AI by MomntumAI
                 "category": category.title(),
                 "severity": severity,
                 "summary_explanation": (
-                    f"AI Analysis: {_image_analysis}\n"
-                    f"Issue reported at {location_str}.\n"
-                    f"Map context: {map_link}.\n"
-                    f"Zip code context: {zip_code if zip_code else 'N/A'}; coordinates: {latitude}, {longitude}.\n"
-                    f"The issue type is {_detected_type}; severity assessed as {severity.lower()} with {_ai_confidence_percent}% confidence.\n"
-                    f"Visual indicators and metadata support the classification and estimated impact.\n"
-                    f"Initial actions recommended: {actions[0]}{(' ' + actions[1]) if len(actions) > 1 else ''}.\n"
-                    f"Please review and escalate to the appropriate authorities for resolution."
+                    f"A potential {_detected_type.lower()} issue has been identified. "
+                    f"This issue is located at {location_str}. "
+                    f"Our system has assessed the situation with {_ai_confidence_percent}% confidence based on the provided details."
                 ),
                 "confidence": _ai_confidence_percent
             },
@@ -1036,10 +1033,10 @@ Automated report generated via EAiSER AI by MomntumAI
                 "legal_or_regulatory_considerations": "Refer to local regulations.",
                 "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else None
             },
-            "recommended_actions": actions,
+            "recommended_actions": [],
             "responsible_authorities_or_parties": responsible_authorities,
             "available_authorities": available_authorities,
-            "additional_notes": f"Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Track report: https://momentum-ai.org/track/{report_id}. Zip Code: {zip_code if zip_code else 'N/A'}.",
+            "additional_notes": f"{_detected_type if _issue_detected else 'Issue'} identified at {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Track report: https://eaiser.ai/track/{report_id}.",
             "template_fields": {
                 "oid": report_id,
                 "timestamp": local_time,

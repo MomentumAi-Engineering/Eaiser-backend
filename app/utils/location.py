@@ -24,19 +24,29 @@ def load_json_data(file_name: str) -> dict:
 def _canonical_issue(issue_type: str) -> str:
     """Normalize and canonicalize issue_type to match data map keys."""
     s = (issue_type or "unknown").strip().lower()
-    s = s.replace("-", "_").replace(" ", "_")
+    s = s.replace("-", "_").replace(" ", "_").replace("/", "_")
+    
+    # Heuristic substring matching for robust classification
+    if any(k in s for k in ["pothole", "crack", "hole", "cracked"]): return "road_damage"
+    if any(k in s for k in ["fire", "smoke", "blaze", "burn"]): return "fire"
+    if any(k in s for k in ["flood", "waterlog", "water_logging"]): return "flood"
+    if any(k in s for k in ["animal", "carcass", "dead", "roadkill"]): return "dead_animal"
+    if any(k in s for k in ["garbage", "trash", "waste", "litter"]): return "garbage"
+    if any(k in s for k in ["streetlight", "street_light", "lamp"]): return "broken_streetlight"
+    if any(k in s for k in ["vandalism", "graffiti", "paint"]): return "vandalism"
+    if any(k in s for k in ["tree", "fallen", "branch"]): return "tree_fallen"
+    if any(k in s for k in ["leak", "burst", "pipe"]): return "water_leakage"
+    
     alias = {
         "road_hole": "road_damage",
         "damaged_road": "road_damage",
-        "cracked_road": "road_damage",
         "road_broken": "road_damage",
         "building_fire": "fire",
         "street_flood": "flood",
         "uncovered_drain": "open_drain",
         "clogged_drain": "blocked_drain",
-        "animal_carcass": "dead_animal",
         "animal_on_road": "roadkill",
-        "water_leak": "water_leakage",
+        "fallen_tree": "tree_fallen",
     }
     return alias.get(s, s)
 
@@ -131,12 +141,15 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
     Strictly adheres to issue_department_map.json for responsible authorities.
     """
     try:
-        # Validate zip code format (5 digits)
+        # Clean and validate zip code format (5 digits)
+        if zip_code:
+            zip_code = str(zip_code).strip().split('-')[0][:5]
+            
         if not zip_code or not zip_code.isdigit() or len(zip_code) != 5:
-            logger.warning(f"Invalid zip code format: {zip_code}. Returning unavailable message.")
+            logger.warning(f"Invalid or missing zip code: {zip_code}. Falling back to general.")
             return {
-                "responsible_authorities": [],
-                "available_authorities": [{"message": "eaiser services are not available in this area, coming soon in the future"}]
+                "responsible_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}],
+                "available_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
             }
 
         # Normalize issue type
@@ -155,10 +168,10 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
         zip_key = zip_code if zip_code in zip_code_authorities else None
         
         if not zip_key:
-            logger.warning(f"Zip code {zip_code} not found in database. Returning unavailable message.")
+            logger.warning(f"Zip code {zip_code} not found in database. Falling back to general.")
             return {
-                "responsible_authorities": [],
-                "available_authorities": [{"message": "eaiser services are not available in this area, coming soon in the future"}]
+                "responsible_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}],
+                "available_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
             }
 
         zip_data = zip_code_authorities[zip_key]
@@ -194,10 +207,10 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
         unique_available = unique_auths(available_authorities)
 
         if not unique_responsible:
-            logger.warning(f"No matching authorities for zip code {zip_code} and issue type {issue_type}. Returning unavailable message.")
+            logger.warning(f"No matching authorities for zip code {zip_code} and issue type {issue_type}. Falling back.")
             return {
-                "responsible_authorities": [],
-                "available_authorities": [{"message": "eaiser services are not available in this area, coming soon in the future"}]
+                "responsible_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}],
+                "available_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
             }
 
         result = {

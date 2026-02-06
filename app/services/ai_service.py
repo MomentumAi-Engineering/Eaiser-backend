@@ -144,14 +144,23 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
         # Clamp for non-specific types
         if issue_type in ("unknown", "other"):
             confidence = min(confidence, 50.0)
-        high_severity_issues = ["fire", "flood", "structural_damage"]
-        high_severity_keywords = ["urgent", "emergency", "critical", "severe"]
-        medium_severity_issues = ["pothole", "vandalism"]
-        severity = (
-            "High" if issue_type in high_severity_issues or any(k in description_lower for k in high_severity_keywords)
-            else "Medium" if issue_type in medium_severity_issues or confidence >= 85
-            else "Low"
-        )
+        high_severity_issues = [
+            "fire", "flood", "flooding", "structural_damage", "car_accident", 
+            "animal_accident", "sewage_overflow", "unsafe_building", 
+            "signal_malfunction", "traffic_signal_issue", "pipe_leak", "no_water_supply"
+        ]
+        high_severity_keywords = ["urgent", "emergency", "critical", "severe", "life threat", "danger"]
+        medium_severity_issues = [
+            "pothole", "road_damage", "tree_fallen", "sidewalk_damage", 
+            "street_sign_damage", "water_leakage", "abandoned_vehicle", 
+            "illegal_construction", "broken_streetlight", "property_damage", "dead_animal"
+        ]
+        
+        severity = "Low"
+        if issue_type in high_severity_issues or any(k in description_lower for k in high_severity_keywords):
+            severity = "High"
+        elif issue_type in medium_severity_issues or confidence >= 85:
+            severity = "Medium"
         category = issue_category_map.get(issue_type, "public")
         priority = "High" if severity == "High" or confidence > 90 else "Medium"
         logger.info(f"Heuristic classification (no Gemini): {issue_type}, severity {severity}, confidence {confidence}")
@@ -192,12 +201,18 @@ STEP 2: ISSUE IDENTIFICATION
 Return JSON:
 {{
   "issue_type": "{valid_issue_types}",
+  "severity": "high|medium|low",
   "confidence": number (0 to 100),
   "is_real": boolean
 }}
 """
             # Run Gemini API call in a separate thread
-            timeout = int(os.getenv('AI_TIMEOUT', '8'))
+            timeout = int(os.getenv('AI_TIMEOUT', '25'))
+            if not GEMINI_API_KEY:
+                 logger.warning("Attempting Gemini call but GEMINI_API_KEY is missing/empty!")
+            else:
+                 logger.info(f"Starting Gemini classification with key ending in ...{GEMINI_API_KEY[-4:]} (timeout={timeout}s)")
+
             response = await asyncio.wait_for(
                 asyncio.to_thread(model.generate_content, [prompt, image, f"Description: {description}"]),
                 timeout=timeout
@@ -216,12 +231,19 @@ Return JSON:
                 is_real = is_real.lower() == "true"
             
             issue_type = parsed.get("issue_type", "unknown").lower()
-            confidence = float(parsed.get("confidence", 70.0))
+            severity = parsed.get("severity", "Medium").title()
+            
+            try:
+                conf_val = parsed.get("confidence", 70.0)
+                confidence = float(conf_val)
+            except (ValueError, TypeError):
+                confidence = 70.0
 
             if not is_real:
                 logger.warning("AI detected FAKE/GENERATED image. Forcing confidence to 0.")
                 confidence = 0.0
                 issue_type = "unknown"
+                severity = "Low"
 
             # 1. Fake/Cartoon Filter
             if not is_real:
@@ -322,18 +344,28 @@ Return JSON:
                 confidence = min(confidence, 100.0)
 
             # Determine severity
-            high_severity_issues = ["fire", "flood", "structural_damage"]
-            high_severity_keywords = ["urgent", "emergency", "critical", "severe"]
-            medium_severity_issues = ["pothole", "vandalism"]
+            high_severity_issues = [
+                "fire", "flood", "flooding", "structural_damage", "car_accident", 
+                "animal_accident", "sewage_overflow", "unsafe_building", 
+                "signal_malfunction", "traffic_signal_issue", "pipe_leak", "no_water_supply"
+            ]
+            high_severity_keywords = ["urgent", "emergency", "critical", "severe", "life threat", "danger"]
+            medium_severity_issues = [
+                "pothole", "road_damage", "tree_fallen", "sidewalk_damage", 
+                "street_sign_damage", "water_leakage", "abandoned_vehicle", 
+                "illegal_construction", "broken_streetlight", "property_damage", "dead_animal"
+            ]
             
-            # Default to Low for unknowns/low-conf
-            severity = "Low"
-            
-            # Logic: High confidence + High Severity Type -> High
-            if (issue_type in high_severity_issues or any(k in description_lower for k in high_severity_keywords)) and confidence > 50:
-                severity = "High"
-            elif (issue_type in medium_severity_issues or confidence >= 85) and confidence > 50:
-                severity = "Medium"
+            # Use AI suggested severity if valid, otherwise fallback to logic
+            ai_severity = parsed.get("severity", "").title()
+            if ai_severity in ["High", "Medium", "Low"]:
+                severity = ai_severity
+            else:
+                severity = "Low"
+                if (issue_type in high_severity_issues or any(k in description_lower for k in high_severity_keywords)) and confidence > 50:
+                    severity = "High"
+                elif (issue_type in medium_severity_issues or confidence >= 85) and confidence > 50:
+                    severity = "Medium"
             
             # Special case for fire: if low confidence/controlled -> Low
             if issue_type == "fire" and confidence < 50:
@@ -508,7 +540,7 @@ Return this structure:
 Keep the report under 200 words, professional, and specific to the issue type and description.
 """
             # Run Gemini API call
-            timeout = int(os.getenv('AI_TIMEOUT', '8'))
+            timeout = int(os.getenv('AI_TIMEOUT', '25'))
             response = await asyncio.wait_for(
                 asyncio.to_thread(model.generate_content, [prompt, Image.open(io.BytesIO(image_content))]),
                 timeout=timeout
