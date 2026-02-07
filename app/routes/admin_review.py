@@ -537,6 +537,74 @@ async def get_pending_reviews(
         # Fallback to empty list or error
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@router.get("/resolved-strict", response_model=List[dict])
+async def get_resolved_history_strict(
+    skip: int = 0,
+    limit: int = 50,
+    admin: dict = Depends(get_admin_user)
+):
+    """
+    STRICT RESOLVED HISTORY
+    Returns ONLY issues that:
+    1. Are fully resolved (status in [approved, submitted, rejected, declined, resolved])
+    2. WERE RESOLVED BY THE CURRENT ADMIN (admin_review.admin_id matches)
+    """
+    try:
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service: return []
+        
+        collection = await mongo_service.get_collection("issues")
+        current_admin_id = str(admin["_id"])
+        
+        # 1. First, find IDs of issues resolved by this admin using a robust check
+        # We query for issues where this admin touched it AND it is finalized
+        
+        final_statuses = ["approved", "submitted", "rejected", "declined", "completed", "resolved"]
+        
+        # Safe match for Admin ID (String or ObjectId)
+        match_stage = {
+            "$match": {
+                "status": {"$in": final_statuses},
+                "$or": [
+                     {"admin_review.admin_id": current_admin_id},
+                     {"admin_review.admin_id": ObjectId(current_admin_id) if ObjectId.is_valid(current_admin_id) else "invalid_id"}
+                ]
+            }
+        }
+        
+        pipeline = [
+            match_stage,
+            {"$sort": {"admin_review.timestamp": -1}},
+            {"$skip": skip},
+            {"$limit": limit},
+            {
+                "$project": {
+                    "image_data": 0, "original_image": 0, "compressed_image": 0, "vector_embedding": 0, "logs": 0, "base64_image": 0
+                }
+            }
+        ]
+        
+        issues = await collection.aggregate(pipeline).to_list(length=limit)
+        
+        # 2. Enrich with Resolver Name (Me)
+        results = []
+        for issue in issues:
+            issue["issue_id"] = str(issue["_id"])
+            if "_id" in issue: issue["_id"] = str(issue["_id"])
+            if "image_url" not in issue: issue["image_url"] = f"/api/issues/{issue['issue_id']}/image"
+            if "admin_review" not in issue: issue["admin_review"] = {}
+            
+            # Since we filtered by current admin, it IS resolved by "Me"
+            issue["admin_review"]["resolver_name"] = "Me"
+            results.append(issue)
+            
+        logger.info(f"Strict Resolved History for {current_admin_id}: Found {len(results)}")
+        return results
+
+    except Exception as e:
+        logger.error(f"Error in strict resolved history: {e}")
+        return []
+
 @router.get("/resolved", response_model=List[dict])
 async def get_resolved_reviews(
     skip: int = 0,
@@ -544,57 +612,123 @@ async def get_resolved_reviews(
     admin: dict = Depends(get_admin_user)
 ):
     """
-    Get history of resolved issues (approved, declined, etc).
+    Get history of resolved issues.
+    Includes strict Python-side filtering to ensure accuracy.
     """
     try:
         mongo_service = await get_optimized_mongodb_service()
         if not mongo_service:
-            raise HTTPException(status_code=503, detail="Database service unavailable")
+            # Fallback prevents crash
+            logger.error("Mongo service unavailable in get_resolved_reviews")
+            return []
         
         collection = await mongo_service.get_collection("issues")
         
-        # Filter for finalized statuses resolved by THIS admin only
-        # Statuses: 'approved' (often mapped to 'submitted'), 'rejected', 'declined', 'completed', 'submitted'
         current_admin_id = str(admin["_id"])
+        
+        # Build Query
+        or_conditions = [{"admin_review.admin_id": current_admin_id}]
+        try:
+            or_conditions.append({"admin_review.admin_id": ObjectId(current_admin_id)})
+        except:
+            pass
+
+        # Valid resolved statuses
+        valid_statuses = ["rejected", "declined", "completed", "submitted", "resolved", "approved"]
+        
         query = {
-            "status": {"$in": ["rejected", "declined", "completed", "submitted", "resolved"]},
-            "admin_review.admin_id": current_admin_id
+            "$and": [
+                {"status": {"$in": valid_statuses}},
+                {"status": {"$ne": "needs_review"}}, 
+                {"status": {"$ne": "pending"}},
+                {"$or": or_conditions}
+            ]
         }
         
         projection = {
-            "image_data": 0, 
-            "original_image": 0, 
-            "compressed_image": 0, 
-            "vector_embedding": 0,
-            "logs": 0,
-            "base64_image": 0
+            "image_data": 0, "original_image": 0, "compressed_image": 0, "vector_embedding": 0, "logs": 0, "base64_image": 0
         }
         
+        # Fetch Data
         cursor = collection.find(query, projection).sort("admin_review.timestamp", -1).skip(skip).limit(limit)
         issues = await cursor.to_list(length=limit)
         
+        # --- STRICT PYTHON FILTERING ---
+        # Filter out impurities that might bypass Mongo for any reason
+        filtered_issues = []
+        for issue in issues:
+            status = issue.get("status", "").lower()
+            # Double check status
+            if status not in valid_statuses:
+                continue
+            if status in ["needs_review", "pending"]:
+                continue
+            filtered_issues.append(issue)
+            
+        issues = filtered_issues
+
+        # --- ENRICHMENT ---
+        # Safe Admin Name Resolution
+        admin_ids = set()
+        for issue in issues:
+            try:
+                review_data = issue.get("admin_review", {})
+                if not isinstance(review_data, dict): review_data = {}
+                
+                aid = review_data.get("admin_id")
+                if aid and aid != 'admin':
+                    admin_ids.add(ObjectId(aid))
+            except Exception:
+                pass # Ignore malformed IDs
+
+        admin_names = {}
+        if admin_ids:
+            try:
+                admins_coll = await mongo_service.get_collection("admins")
+                found_admins = await admins_coll.find({"_id": {"$in": list(admin_ids)}}).to_list(None)
+                for adm in found_admins:
+                    admin_names[str(adm["_id"])] = adm.get("name", "Unknown Admin")
+            except Exception as e:
+                logger.error(f"Failed to fetch admin names: {e}")
+
         results = []
         for issue in issues:
-            # Normalize ID
-            issue["issue_id"] = str(issue["_id"])
-            if "_id" in issue: issue["_id"] = str(issue["_id"])
-            
-            # Ensure Image URL
-            if "image_url" not in issue:
-                issue["image_url"] = f"/api/issues/{issue['issue_id']}/image"
-            
-            # Normalize Resolution Info
-            # The 'admin_review' object contains who resolved it
-            if "admin_review" not in issue:
-                issue["admin_review"] = {}
+            try:
+                # Normalize ID
+                sid = str(issue["_id"])
+                issue["issue_id"] = sid
+                if "_id" in issue: issue["_id"] = sid
                 
-            results.append(issue)
-            
+                # Ensure Attributes
+                if "image_url" not in issue:
+                    issue["image_url"] = f"/api/issues/{sid}/image"
+                
+                if "admin_review" not in issue or not isinstance(issue["admin_review"], dict):
+                    issue["admin_review"] = {}
+                
+                # Resolver Name Logic
+                resolver_id = issue["admin_review"].get("admin_id")
+                r_name = "Unknown"
+                
+                if resolver_id == 'admin':
+                    r_name = "System Admin"
+                elif resolver_id and str(resolver_id) in admin_names:
+                    r_name = admin_names[str(resolver_id)]
+                elif resolver_id and str(resolver_id) == current_admin_id:
+                    r_name = "Me"
+                
+                issue["admin_review"]["resolver_name"] = r_name
+                results.append(issue)
+            except Exception as e:
+                logger.error(f"Error processing issue {issue.get('_id')}: {e}")
+                continue
+
         return results
 
     except Exception as e:
-        logger.error(f"Failed to fetch resolved reviews: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"CRITICAL ERROR in get_resolved_reviews: {e}", exc_info=True)
+        # Return empty list instead of 500 Error to keep UI alive
+        return []
 
 @router.post("/approve")
 async def approve_issue(action: ReviewAction, admin: dict = Depends(get_admin_user)):
