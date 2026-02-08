@@ -57,8 +57,9 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 async def signup(user: UserCreate):
     try:
         db = await get_db()
-        # Check if user exists
-        existing_user = await db["users"].find_one({"email": user.email})
+        # Check if user exists (case-insensitive)
+        import re
+        existing_user = await db["users"].find_one({"email": {"$regex": f"^{re.escape(user.email)}$", "$options": "i"}})
         if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -123,7 +124,8 @@ async def signup(user: UserCreate):
 async def login(user_data: UserLogin):
     try:
         db = await get_db()
-        user = await db["users"].find_one({"email": user_data.email})
+        import re
+        user = await db["users"].find_one({"email": {"$regex": f"^{re.escape(user_data.email)}$", "$options": "i"}})
         
         # Check if user exists AND has a password (google-auth users might not have one)
         if not user or "hashed_password" not in user or not verify_password(user_data.password, user["hashed_password"]):

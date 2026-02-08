@@ -640,9 +640,9 @@ async def get_user_issues(user_email: str, limit: int = 50, skip: int = 0) -> Li
             "available_authorities": 1
         }
         
-        # Filter by user_email
+        # Filter by user_email with case-insensitivity
         pipeline = [
-            {"$match": {"user_email": user_email}},
+            {"$match": {"user_email": {"$regex": f"^{re.escape(user_email)}$", "$options": "i"}}},
             {"$sort": {"timestamp": -1}},
             {"$skip": skip},
             {"$limit": limit},

@@ -57,9 +57,13 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
 
 @router.get("/issues/my-issues")
-async def get_my_issues(current_user: dict = Depends(get_current_user)):
+async def get_my_issues(
+    skip: int = 0,
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user)
+):
     """Get issues reported by the current user."""
-    return await get_user_issues(current_user.get("sub"))
+    return await get_user_issues(current_user.get("sub"), limit=limit, skip=skip)
 
 class IssueResponse(BaseModel):
     id: str
@@ -96,19 +100,19 @@ class EmailAuthoritiesRequest(BaseModel):
 
 class Issue(BaseModel):
     id: str = Field(..., alias="_id")
-    address: str
+    address: Optional[str] = None
     zip_code: Optional[str] = None
     latitude: float = 0.0
     longitude: float = 0.0
-    issue_type: str
-    severity: str
-    image_id: str
+    issue_type: str = "other"
+    severity: str = "Medium"
+    image_id: Optional[str] = None
     status: str = "pending"
     report: Dict = {"message": "No report generated"}
     category: str = "public"
     priority: str = "Medium"
     report_id: str = ""
-    timestamp: str
+    timestamp: Optional[str] = None
     decline_reason: Optional[str] = None
     decline_history: Optional[List[Dict[str, str]]] = None
     user_email: Optional[str] = None

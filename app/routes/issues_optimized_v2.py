@@ -22,6 +22,7 @@ import time
 import uuid
 import base64
 import json
+import re
 import hashlib
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
@@ -185,12 +186,13 @@ class SubmitRequest(BaseModel):
 
 class Issue(BaseModel):
     id: str = Field(..., alias="_id")
-    address: str
+    address: Optional[str] = None
     zip_code: Optional[str] = None
     latitude: float = 0.0
     longitude: float = 0.0
     issue_type: str = "other"
     severity: str = "Medium"
+    image_id: Optional[str] = None
     status: str = "pending"
     report: Dict = {"message": "No report generated"}
     category: str = "public"
@@ -837,8 +839,8 @@ async def get_my_issues(
         if not mongodb_service:
             raise HTTPException(status_code=503, detail="Database service unavailable")
             
-        # Filter by user_email
-        filter_query = {"user_email": user_email}
+        # Filter by user_email with case-insensitivity
+        filter_query = {"user_email": {"$regex": f"^{re.escape(user_email)}$", "$options": "i"}}
         issues_data = await mongodb_service.get_issues_optimized(
             filter_query=filter_query,
             skip=skip,
