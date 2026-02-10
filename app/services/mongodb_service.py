@@ -534,11 +534,16 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
             "available_authorities": 1
         }
         
-        # Optimized aggregation pipeline with index hints for maximum performance
+        # Define valid mission states (Excluding 'failed' and system errors)
+        valid_statuses = [
+            "needs_review", "waiting_review", "pending", 
+            "submitted", "approved", "completed", "resolved"
+        ]
+        
+        # Optimized aggregation pipeline with index hints (Excluding failed reports)
         pipeline = [
-            # Use index hint to force usage of timestamp_desc index
-            {"$match": {}},  # Empty match to allow index hinting
-            {"$sort": {"timestamp": -1}},  # Sort by timestamp descending (uses timestamp_desc index)
+            {"$match": {"status": {"$in": valid_statuses}}},
+            {"$sort": {"timestamp": -1}},
             {"$skip": skip},
             {"$limit": limit},
             {"$project": projection}
@@ -640,9 +645,21 @@ async def get_user_issues(user_email: str, limit: int = 50, skip: int = 0) -> Li
             "available_authorities": 1
         }
         
-        # Filter by user_email with case-insensitivity
+        # Define valid mission states (Excluding technical failures if preferred, but here inclusive for dashboard parity)
+        valid_statuses = [
+            "needs_review", "waiting_review", "pending", "under_review",
+            "submitted", "approved", "completed", "resolved", "rejected", 
+            "declined", "pending_ai", "investigating", "accepted", "failed"
+        ]
+        
+        # Filter by user_email AND valid status
         pipeline = [
-            {"$match": {"user_email": {"$regex": f"^{re.escape(user_email)}$", "$options": "i"}}},
+            {
+                "$match": {
+                    "user_email": {"$regex": f"^{re.escape(user_email)}$", "$options": "i"},
+                    "status": {"$in": valid_statuses}
+                }
+            },
             {"$sort": {"timestamp": -1}},
             {"$skip": skip},
             {"$limit": limit},

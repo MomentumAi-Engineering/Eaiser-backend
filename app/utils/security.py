@@ -8,9 +8,13 @@ import bcrypt
 # Password Hashing
 # pwd_context removed in favor of direct bcrypt
 
+import logging
+logger = logging.getLogger(__name__)
+
 # JWT Configuration
 # In production, these should be loaded from env vars with secure defaults
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-should-be-in-env-file-and-very-secure")
+logger.info(f"🔰 Security Config: ALGORITHM=HS256, SECRET_KEY={'SET (' + SECRET_KEY[:4] + '...)' if SECRET_KEY else 'NOT SET'}")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours for admin convenience
 

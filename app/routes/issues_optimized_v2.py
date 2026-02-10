@@ -86,9 +86,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
+            logger.warning("❌ Token validation failed: Missing 'sub' (email) in payload")
             raise credentials_exception
         return {"sub": email, "id": payload.get("id"), "role": payload.get("role")}
-    except JWTError:
+    except JWTError as e:
+        logger.warning(f"❌ Token validation failed: {str(e)}")
         raise credentials_exception
 
 # ========================================

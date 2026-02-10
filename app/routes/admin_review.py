@@ -1429,14 +1429,19 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
         issues_coll = await mongo_service.get_collection("issues")
         admins_coll = await mongo_service.get_collection("admins")
         
-        # 1. Parallelize Counting for Speed
+        # Define valid status groups (Excluding 'failed' and system errors)
+        valid_pending = ["needs_review", "waiting_review", "pending"]
+        valid_approved = ["submitted", "approved", "completed", "resolved"]
+        valid_declined = ["rejected", "declined"]
+        
+        # 1. Parallelize Counting for Speed (Exclude failed reports)
         start_time = datetime.utcnow()
         
-        # Define tasks
-        task_total = issues_coll.count_documents({})
-        task_pending = issues_coll.count_documents({"status": "needs_review"})
-        task_approved = issues_coll.count_documents({"status": {"$in": ["submitted", "approved", "completed"]}})
-        task_declined = issues_coll.count_documents({"status": {"$in": ["rejected", "declined"]}})
+        # Define tasks - Counting only verified mission states
+        task_total = issues_coll.count_documents({"status": {"$in": valid_pending + valid_approved + valid_declined}})
+        task_pending = issues_coll.count_documents({"status": {"$in": valid_pending}})
+        task_approved = issues_coll.count_documents({"status": {"$in": valid_approved}})
+        task_declined = issues_coll.count_documents({"status": {"$in": valid_declined}})
         
         # Execute counts in parallel
         total_issues, pending_review, approved, declined = await asyncio.gather(

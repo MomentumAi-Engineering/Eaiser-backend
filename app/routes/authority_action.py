@@ -13,9 +13,7 @@ import logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Config
-SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
+from utils.security import SECRET_KEY, ALGORITHM
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173") # Default to dev
 
 async def notify_user_status_change(user_email: str, issue_id: str, new_status: str, notes: str = None):
