@@ -51,135 +51,201 @@ async def send_admin_welcome_email(
         subject = f"Welcome to EAiSER — {role.replace('_', ' ').title()} Access Granted"
 
         # ----------------------------
-        # HTML EMAIL (ANIMATED + PRO)
+        # HTML EMAIL (ENTERPRISE CONSOLE)
         # ----------------------------
         html_content = f"""
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Welcome to EAiSER</title>
+<title>EAiSER Administrative Onboarding</title>
 <style>
   body {{
-    background-color: #020617;
+    background-color: #f1f5f9;
     margin: 0;
     padding: 0;
-    font-family: 'Segoe UI', Arial, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }}
+  .wrapper {{
+    background-color: #f1f5f9;
+    padding: 40px 20px;
   }}
   .container {{
     max-width: 620px;
-    margin: 40px auto;
+    margin: 0 auto;
     background: #ffffff;
-    border-radius: 14px;
+    border-radius: 16px;
     overflow: hidden;
-    box-shadow: 0 25px 70px rgba(0,0,0,0.45);
-    animation: slideUp 0.9s ease-out;
-  }}
-  @keyframes slideUp {{
-    from {{ opacity: 0; transform: translateY(25px); }}
-    to {{ opacity: 1; transform: translateY(0); }}
+    box-shadow: 0 25px 50px -12px rgba(0,0,0,0.1);
+    border: 1px solid #e2e8f0;
   }}
   .header {{
-    background: linear-gradient(135deg, #4f46e5, #9333ea);
-    padding: 35px;
+    background: #1e293b;
+    padding: 40px;
     text-align: center;
     color: #ffffff;
   }}
   .header h1 {{
     margin: 0;
-    font-size: 30px;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    color: #f6c521;
+  }}
+  .header p {{
+    margin: 8px 0 0;
+    font-size: 14px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
   }}
   .content {{
-    padding: 35px;
+    padding: 40px;
     color: #334155;
     font-size: 15px;
-    line-height: 1.7;
+    line-height: 1.6;
   }}
-  .card {{
-    background: #f8fafc;
-    border-radius: 10px;
-    padding: 22px;
-    margin: 25px 0;
-    border-left: 4px solid #6366f1;
+  .greeting {{
+    font-size: 20px;
+    font-weight: 600;
+    color: #0f172a;
+    margin-bottom: 12px;
   }}
-  .card code {{
-    background: #e5e7eb;
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 14px;
+  .access-badge {{
     display: inline-block;
-    margin-top: 6px;
+    padding: 4px 12px;
+    background: #f1f5f9;
+    color: #475569;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 25px;
   }}
-  .cta {{
+  .credential-card {{
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 24px;
+    margin: 30px 0;
+  }}
+  .credential-card h3 {{
+    margin: 0 0 15px 0;
+    font-size: 14px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }}
+  .credential-row {{
+    margin-bottom: 15px;
+  }}
+  .label {{
+    font-size: 12px;
+    color: #94a3b8;
+    display: block;
+    margin-bottom: 4px;
+  }}
+  .value {{
+    font-size: 16px;
+    color: #1e293b;
+    font-weight: 500;
+  }}
+  .password-box {{
+    background: #ffffff;
+    border: 1px dashed #cbd5e1;
+    padding: 10px 15px;
+    border-radius: 8px;
+    font-family: 'Monaco', 'Consolas', monospace;
+    font-size: 15px;
+    color: #0f172a;
+    font-weight: 600;
+    display: table;
+    margin-top: 5px;
+  }}
+  .permissions-box {{
+    border-left: 3px solid #f6c521;
+    padding-left: 20px;
+    margin: 30px 0;
+  }}
+  .permissions-box h4 {{
+    margin: 0 0 5px 0;
+    color: #1e293b;
+  }}
+  .permissions-box p {{
+    margin: 0;
+    font-size: 14px;
+    color: #64748b;
+  }}
+  .cta-block {{
     text-align: center;
-    margin: 35px 0;
+    margin: 40px 0 10px;
   }}
-  .cta a {{
-    background: linear-gradient(135deg, #4f46e5, #9333ea);
-    color: white;
-    padding: 15px 48px;
-    border-radius: 10px;
+  .cta-button {{
+    background: #1e293b;
+    color: #ffffff !important;
+    padding: 16px 40px;
+    border-radius: 8px;
     text-decoration: none;
     font-size: 16px;
     font-weight: 600;
     display: inline-block;
-    transition: all 0.25s ease;
-  }}
-  .cta a:hover {{
-    transform: translateY(-2px);
-    box-shadow: 0 14px 30px rgba(99,102,241,0.6);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
   }}
   .footer {{
+    padding: 30px 40px;
+    background: #f8fafc;
     text-align: center;
+    border-top: 1px solid #e2e8f0;
     font-size: 12px;
-    color: #64748b;
-    border-top: 1px solid #e5e7eb;
-    padding: 20px;
+    color: #94a3b8;
   }}
 </style>
 </head>
-
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>Welcome to EAiSER 🚀</h1>
-      <p>AI-Driven Civic Intelligence Platform</p>
-    </div>
-
-    <div class="content">
-      <p>Hello <strong>{admin_name}</strong>,</p>
-
-      <p>
-        You have been onboarded by <strong>{created_by}</strong> as a
-        <strong>{role.replace('_', ' ').title()}</strong>.
-      </p>
-
-      <div class="card">
-        <h3>🔐 Login Credentials</h3>
-        <p><strong>Email:</strong> {admin_email}</p>
-        <p><strong>Temporary Password:</strong><br/>
-          <code>{temporary_password}</code>
-        </p>
-        <p style="color:#dc2626;font-size:13px;">
-          ⚠️ Please change your password after first login.
-        </p>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <h1>EAiSER Enterprise Console</h1>
+        <p>Administrative Access Gateway</p>
       </div>
 
-      <div class="card">
-        <h3>🛡️ Permissions</h3>
-        <p>{permissions_text}</p>
+      <div class="content">
+        <div class="greeting">System Access Granted</div>
+        <div class="access-badge">Role: {role.replace('_', ' ').title()}</div>
+        
+        <p>Hello <strong>{admin_name}</strong>,</p>
+        <p>You have been officially onboarded to the EAiSER administrative network by <strong>{created_by}</strong>. Your account is now active and ready for deployment.</p>
+
+        <div class="credential-card">
+          <h3>Security Credentials</h3>
+          <div class="credential-row">
+            <span class="label">Access Email</span>
+            <span class="value">{admin_email}</span>
+          </div>
+          <div class="credential-row" style="margin-bottom: 0;">
+            <span class="label">Temporary Access Token</span>
+            <div class="password-box">{temporary_password}</div>
+          </div>
+          <p style="margin: 15px 0 0 0; font-size: 11px; color: #ef4444; font-weight: 600;">
+            ⚠️ PROTOCOL: For security compliance, you must update this password upon initial authentication.
+          </p>
+        </div>
+
+        <div class="permissions-box">
+          <h4>Privileged Scope</h4>
+          <p>{permissions_text}</p>
+        </div>
+
+        <div class="cta-block">
+          <a href="{ADMIN_DASHBOARD_URL}" class="cta-button">
+            Authenticate & Launch Console
+          </a>
+        </div>
       </div>
 
-      <div class="cta">
-        <a href="{ADMIN_DASHBOARD_URL}">
-          Access Admin Dashboard
-        </a>
+      <div class="footer">
+        © 2025 MomntumAi · EAiSER Intelligence Platform<br/>
+        This is an automated security transmission. Please do not reply.
       </div>
-    </div>
-
-    <div class="footer">
-      © {created_by} · EAiSER Platform<br/>
-      Secure · Scalable · Intelligent
     </div>
   </div>
 </body>

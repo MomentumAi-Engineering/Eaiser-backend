@@ -154,9 +154,9 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
         except Exception:
             default_timeout = 45
         try:
-            issues_timeout = int(os.environ.get("REQUEST_TIMEOUT_ISSUES", "60"))
+            issues_timeout = int(os.environ.get("REQUEST_TIMEOUT_ISSUES", "90"))
         except Exception:
-            issues_timeout = 60
+            issues_timeout = 90
         try:
             ai_timeout = int(os.environ.get("REQUEST_TIMEOUT_AI", "60"))
         except Exception:
@@ -477,3 +477,4 @@ if __name__ == "__main__":
         timeout_keep_alive=30,
         proxy_headers=True
     )
+ 

@@ -4,8 +4,8 @@ uvicorn[standard]==0.34.2
 python-dotenv==1.1.0
 google-generativeai==0.5.4
 pydantic==2.11.9
-sendgrid==6.12.3
-python-http-client==3.3.7
+# Removed sendgrid
+# Removed python-http-client
 motor==3.7.1
 pymongo==4.13.0
 dnspython==2.7.0

@@ -5,6 +5,8 @@
   "fire": "public",
   "flooding": "public",
   "car_accident": "public",
+  "accident": "public",
+  "abandoned_car": "public",
   "sidewalk_damage": "public",
   "street_sign_damage": "public",
   "garbage": "public",

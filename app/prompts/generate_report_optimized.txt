@@ -47,10 +47,11 @@ If the image is a REAL photo (even if blurry), ANALYZE IT NORMALLY.
 ANIMAL CLASSIFICATION RULES (STRICT)
 ==================================================
 
-For categories "dead_animal" or "stray_animals":
+For categories "dead_animal", "stray_animals", or "animal_accident":
 - A REAL ANIMAL must be clearly visible in the image.
-- **PRIORITY EXCEPTION**: If an animal is visible under/near a damaged car (roadkill/collision), classify as "dead_animal".
-- Do NOT classify as generic "accident" or "road_damage" if the animal carcass is the primary cause/victim.
+- **ANIMAL ACCIDENT**: Classify as "animal_accident" ONLY if BOTH a damaged vehicle AND a visible animal carcass are detected in the same scene.
+- **VEHICLE PRIORITY**: If a damaged car or vehicle is visible but NO animal is found, always classify as "car_accident".
+- **DEAD ANIMAL**: Classify as "dead_animal" ONLY if there is NO vehicle visible and the animal carcass is the ONLY or primary issue.
 - Do NOT hallucinate animals in debris or shadows.
 
 --------------------------------------------------
@@ -151,12 +152,13 @@ Choose ONE from this list only:
 - waterlogging (flood, standing water)
 - tree_fallen (fallen tree, broken branch blocking path)
 - broken_streetlight (damaged pole, hanging light, not working)
-- dead_animal (carcass, roadkill, animal hit by car)
+- dead_animal (carcass, roadkill, animal carcass only)
+- animal_accident (vehicle hits animal, both visible)
 - stray_animals (livestock on road)
 - fire (ONLY uncontrolled/dangerous)
 - structural_damage (wall collapse, bridge damage)
 - property_damage (broken fence, public property)
-- accident (vehicle collision, car crash)
+- car_accident (vehicle collision, car crash)
 - abandoned_vehicle
 - other (for real public issues not listed above)
 
@@ -212,27 +214,27 @@ OUTPUT FORMAT (STRICT JSON ONLY)
 
 RIf a decline reason is provided, incorporate it into the summary_explanation.
 
-Return this structure:
+Return this structure (Use professional US English and standard municipal terminology):
 {
   "issue_overview": {
-    "issue_type": "The detected issue type (title case)",
+    "issue_type": "The detected issue type (title case, e.g., 'Code Violation', 'Infrastructure Failure')",
     "severity": "high/medium/low",
     "confidence": 0,
     "category": "public/private",
-    "summary_explanation": "MANDATORY NARRATIVE: Start by explaining the issue clearly (e.g. 'There is a severe structural crack in the bridge support'). Then, state the location immediately (e.g. 'This issue is specifically located at {location_str}'). Finally, summarize the overall situation and impact.",
-    "admin_analysis": "Technical details for the admin. 1. Mention specific visual features (texture, depth, lighting) that confirmed or rejected the issue. 2. EXPLAIN WHY this severity level was chosen based on the Indicators list (e.g., 'Classified as HIGH because uncontrolled fire is present').",
-    "user_feedback": "A very short, friendly message for the user."
+    "summary_explanation": "PROFESSIONAL MUNICIPAL LOG: Provide a clear, technical description of the hazard (e.g. 'Evidence indicates a critical fracture in the primary road surface'). Explicitly state the location immediately (e.g. 'The incident is situated at {location_str}'). Conclude with the potential impact on public safety or thoroughfare accessibility.",
+    "admin_analysis": "Diagnostic details for municipal analysts. 1. Identify specific visual markers (e.g., thermal signatures, structural fatigue, debris volume) used for classification. 2. Justify the severity assignment using official public safety guidelines (e.g., 'Escalated to HIGH severity due to immediate risk of structural collapse and pedestrian hazard').",
+    "user_feedback": "A concise, professional acknowledgment for the reporter."
   },
   "ai_evaluation": {
     "issue_detected": true,
     "detected_issue_type": "",
     "ai_confidence_percent": 0,
-    "image_analysis": "Detailed visual evidence breakdown. Describe textures, colors, and spatial evidence confirming the issue.",
-    "rationale": "Reasoning for the detection."
+    "image_analysis": "Technical visual audit. Document surface textures, material degradation, and environmental context confirming the reported violation.",
+    "rationale": "Engineering-based rationale for automated detection."
   },
   "responsible_authorities": [],
   "available_authorities": [],
-  "additional_notes": "Combine the issue description and location into a single summary note for record keeping."
+  "additional_notes": "A unified case file note combining the technical description, verified location ({location_str}), and case ID ({issue_id}) for official record-keeping."
 }
 
 ==================================================

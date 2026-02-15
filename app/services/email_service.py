@@ -5,9 +5,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import base64
 import asyncio
 from fastapi import HTTPException
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, ContentId, Email
-from python_http_client.exceptions import UnauthorizedError, BadRequestsError
+import requests
 
 # --------------------------------------------------------------------
 # ✅ Environment & Logger Setup
@@ -29,115 +27,98 @@ async def send_email(
     retry: bool = True
 ) -> bool:
     """
-    Sends an email via SendGrid API with inline images and attachments.
-    Automatically retries once on transient failures.
+    Sends an email via Postmark API with inline images and attachments.
+    Uses asyncio.to_thread to keep the event loop non-blocking.
     """
-    email_user = os.getenv("EMAIL_USER", "no-reply@eaiser.ai")
-    sendgrid_api_key = os.getenv("SENDGRID_API_KEY")
-    env = os.getenv("ENV", "development").lower()
-    # Default dry_run to False so emails send by default unless explicitly disabled
+    email_user = os.getenv("EMAIL_USER", "alert@momntumai.com")
+    postmark_token = os.getenv("POSTMARK_API_TOKEN")
     dry_run = os.getenv("EMAIL_DRY_RUN", "false").lower() == "true"
 
-    # Only skip if dry_run is explicitly enabled
     if dry_run:
-        logger.info(
-            f"🧪 Email dry-run enabled. Would send to {to_email} subject='{subject}'."
-        )
+        logger.info(f"🧪 Email dry-run enabled. Would send to {to_email} subject='{subject}'.")
         return True
 
-    # Validate environment variables for production sends
-    if not all([email_user, sendgrid_api_key]):
-        missing_vars = []
-        if not email_user:
-            missing_vars.append("EMAIL_USER")
-        if not sendgrid_api_key:
-            missing_vars.append("SENDGRID_API_KEY")
-
-        logger.error(f"❌ Missing environment variables: {', '.join(missing_vars)}")
-        raise ValueError(f"Missing email configuration: {', '.join(missing_vars)}")
-
-    if not sendgrid_api_key.startswith('SG.'):
-        logger.error("❌ Invalid SendGrid API key format. It must start with 'SG.'")
+    if not postmark_token:
+        logger.error("❌ Missing POSTMARK_API_TOKEN environment variable.")
         return False
 
-    # Build SendGrid mail object
-    message = Mail(
-        from_email=Email(email_user),
-        to_emails=to_email,
-        subject=subject,
-        plain_text_content=text_content,
-        html_content=html_content
-    )
+    # Build Postmark payload
+    payload = {
+        "From": email_user,
+        "To": to_email,
+        "Subject": subject,
+        "HtmlBody": html_content,
+        "TextBody": text_content,
+        "Attachments": []
+    }
 
-    # Add inline images
+    # Add inline images to Attachments
     if embedded_images:
         for cid, base64_data, mime_type in embedded_images:
             try:
-                img_data = base64.b64decode(base64_data)
-                encoded = base64.b64encode(img_data).decode()
-                attachment = Attachment()
-                attachment.file_content = FileContent(encoded)
-                attachment.file_type = mime_type
-                attachment.file_name = f"{cid}.{mime_type.split('/')[-1]}"
-                attachment.disposition = "inline"
-                attachment.content_id = ContentId(cid)
-                message.add_attachment(attachment)
+                if not base64_data:
+                    logger.warning(f"⚠️ Skipping empty embedded image {cid}")
+                    continue
+                payload["Attachments"].append({
+                    "Name": f"{cid}.{mime_type.split('/')[-1]}",
+                    "Content": base64_data,
+                    "ContentType": mime_type,
+                    "ContentID": f"cid:{cid}"
+                })
                 logger.debug(f"🖼️ Embedded image {cid} added.")
             except Exception as e:
-                logger.error(f"⚠️ Failed to embed image {cid}: {e}")
+                logger.error(f"⚠️ Failed to prepare inline image {cid}: {e}")
 
-    # Add attachments
+    # Add attachments to Attachments
     if attachments:
         for file_path in attachments:
             try:
                 with open(file_path, "rb") as f:
                     data = f.read()
+                # Postmark requires base64 content
                 encoded = base64.b64encode(data).decode()
-                attachment = Attachment()
-                attachment.file_content = FileContent(encoded)
-                attachment.file_type = "application/octet-stream"
-                attachment.file_name = os.path.basename(file_path)
-                attachment.disposition = "attachment"
-                message.add_attachment(attachment)
+                payload["Attachments"].append({
+                    "Name": os.path.basename(file_path),
+                    "Content": encoded,
+                    "ContentType": "application/octet-stream"
+                })
                 logger.debug(f"📎 Attached file: {file_path}")
             except Exception as e:
-                logger.error(f"⚠️ Failed to attach file {file_path}: {e}")
+                logger.error(f"⚠️ Failed to prepare attachment {file_path}: {e}")
 
-    # Send via SendGrid
+    def _do_send():
+        url = "https://api.postmarkapp.com/email"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Postmark-Server-Token": postmark_token
+        }
+        logger.info(f"📤 Sending Postmark email FROM {email_user} TO {to_email}")
+        return requests.post(url, headers=headers, json=payload, timeout=15)
+
     try:
-        logger.info(f"📤 Sending email FROM {email_user} TO {to_email} with subject: {subject}")
-        sg = SendGridAPIClient(sendgrid_api_key)
-        response = sg.send(message)
-
-        # Log response for diagnostics
-        logger.info(f"📨 SendGrid response status: {response.status_code}")
-        if hasattr(response, "body") and response.body:
-            logger.debug(f"📄 SendGrid response body: {response.body.decode() if isinstance(response.body, bytes) else response.body}")
-
-        if response.status_code in (200, 202):
-            logger.info(f"✅ Email successfully sent to {to_email}")
+        response = await asyncio.to_thread(_do_send)
+        
+        if response.status_code == 200:
+            logger.info(f"✅ Email successfully sent to {to_email} via Postmark")
             return True
         else:
-            logger.warning(f"⚠️ SendGrid API returned {response.status_code} for {to_email}")
-            if retry:
+            try:
+                error_data = response.json()
+                msg = error_data.get('Message', 'Unknown Postmark error')
+            except:
+                msg = response.text
+            
+            logger.warning(f"⚠️ Postmark API returned {response.status_code}: {msg}")
+            
+            if retry and response.status_code != 401:
                 logger.info("🔁 Retrying once after 2 seconds...")
                 await asyncio.sleep(2)
                 return await send_email(to_email, subject, html_content, text_content, attachments, embedded_images, retry=False)
             return False
 
-    except UnauthorizedError:
-        # Treat 401/403 as soft failures; log and do not crash
-        logger.error("❌ SendGrid unauthorized — invalid API key.")
-        return False
-    except BadRequestsError as e:
-        logger.error(f"❌ Bad Request to SendGrid: {e}")
-        return False
     except Exception as e:
-        err_text = str(e)
-        if "403" in err_text or "Forbidden" in err_text:
-            logger.error(f"🚫 SendGrid 403 Forbidden. The 'From' address ({email_user}) is likely not verified in SendGrid. Please verify it in SendGrid Settings > Sender Authentication.")
-            return False
-        logger.error(f"❌ Unexpected error sending email to {to_email}: {e}", exc_info=True)
+        logger.error(f"❌ Unexpected error sending email to {to_email} via Postmark: {e}")
         return False
 
 
@@ -589,13 +570,14 @@ Access Admin Dashboard:
 
 async def send_user_welcome_email(user_email: str, user_name: str) -> bool:
     """
-    Sends a sleek, dark-themed welcome email to new users explaining EAiSER.
+    Sends a premium, high-converting welcome email to new users.
+    Focuses on rich aesthetics, animations, and community impact.
     """
     try:
-        subject = "Welcome to EAiSER AI – Empowering Your Community"
+        subject = "Welcome to EAiSER AI – Your Journey to a Smarter Community Begins 🚀"
         
         # ----------------------------
-        # HTML EMAIL (SLEEK DARK THEME)
+        # HTML EMAIL (PREMIUM MODERN DESIGN)
         # ----------------------------
         html_content = f"""
 <!DOCTYPE html>
@@ -604,119 +586,197 @@ async def send_user_welcome_email(user_email: str, user_name: str) -> bool:
 <meta charset="UTF-8">
 <style>
   body {{
-    background-color: #000000;
-    font-family: 'Segoe UI', Arial, sans-serif;
+    background-color: #f8fafc;
+    font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     margin: 0;
     padding: 0;
-    color: #e2e8f0;
+    color: #1e293b;
+  }}
+  .wrapper {{
+    background-color: #f8fafc;
+    padding: 40px 20px;
   }}
   .container {{
     max-width: 600px;
-    margin: 30px auto;
-    background: #0f172a; /* Slate 900 */
-    border-radius: 16px;
+    margin: 0 auto;
+    background: #ffffff;
+    border-radius: 20px;
     overflow: hidden;
-    border: 1px solid #1e293b;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    box-shadow: 0 20px 50px rgba(0,0,0,0.08);
+    border: 1px solid #e2e8f0;
   }}
   .header {{
-    background: linear-gradient(135deg, #FFC107 0%, #FF9800 100%); /* Amber/Orange */
-    padding: 30px;
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    padding: 60px 40px;
     text-align: center;
+    position: relative;
   }}
   .header h1 {{
     margin: 0;
-    color: #000;
-    font-size: 28px;
+    color: #fbbf24; /* Amber 400 */
+    font-size: 32px;
     font-weight: 800;
-    letter-spacing: -0.5px;
+    letter-spacing: -1px;
+    text-transform: uppercase;
+  }}
+  .header .badge {{
+    display: inline-block;
+    background: rgba(251, 191, 36, 0.1);
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    color: #fbbf24;
+    padding: 5px 15px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-top: 15px;
   }}
   .content {{
-    padding: 30px;
+    padding: 40px;
+  }}
+  .greeting {{
+    font-size: 24px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 20px;
   }}
   .intro {{
     font-size: 16px;
-    line-height: 1.6;
-    margin-bottom: 30px;
-    color: #cbd5e1;
+    line-height: 1.8;
+    margin-bottom: 40px;
+    color: #475569;
   }}
-  .feature-box {{
-    background: #1e293b;
-    border-radius: 12px;
+  .feature-grid {{
+    margin: 40px 0;
+  }}
+  .feature-item {{
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 25px;
     padding: 20px;
-    margin-bottom: 20px;
-    border-left: 4px solid #FFC107;
+    background: #f1f5f9;
+    border-radius: 12px;
+    transition: transform 0.2s ease;
+  }}
+  .icon {{
+    font-size: 24px;
+    margin-right: 15px;
+    background: #fff;
+    width: 45px;
+    height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  }}
+  .feature-text {{
+    flex: 1;
   }}
   .feature-title {{
     font-weight: 700;
-    color: #fff;
-    margin-bottom: 5px;
+    color: #1e293b;
+    margin-bottom: 4px;
     font-size: 16px;
   }}
   .feature-desc {{
     font-size: 14px;
-    color: #94a3b8;
+    color: #64748b;
     line-height: 1.5;
   }}
   .cta-container {{
     text-align: center;
-    margin: 40px 0;
+    margin: 50px 0 20px;
   }}
   .cta-btn {{
-    background: #FFC107;
-    color: #000;
-    padding: 14px 40px;
-    border-radius: 50px;
+    background: #1e293b;
+    color: #ffffff !important;
+    padding: 18px 45px;
+    border-radius: 12px;
     text-decoration: none;
     font-weight: 700;
     font-size: 16px;
     display: inline-block;
-    transition: transform 0.2s;
+    box-shadow: 0 10px 25px rgba(30, 41, 59, 0.2);
+    transition: all 0.3s ease;
+  }}
+  .cta-btn:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 15px 30px rgba(30, 41, 59, 0.3);
   }}
   .footer {{
     text-align: center;
-    padding: 20px;
-    background: #020617;
-    font-size: 12px;
-    color: #64748b;
+    padding: 40px;
+    background: #f8fafc;
+    font-size: 13px;
+    color: #94a3b8;
+    border-top: 1px solid #e2e8f0;
+  }}
+  .social-links {{
+    margin-top: 20px;
+  }}
+  .social-links a {{
+    margin: 0 10px;
+    color: #94a3b8;
+    text-decoration: none;
   }}
 </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>EAiSER AI</h1>
-    </div>
-    
-    <div class="content">
-      <p class="intro">
-        Hello <strong>{user_name}</strong>,<br><br>
-        Welcome to the future of civic intelligence. You have joined a community dedicated to creating safer, smarter neighborhoods through AI-driven reporting.
-      </p>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <h1>EAiSER AI</h1>
+        <div class="badge">BETA ACCESS GRANTED</div>
+      </div>
+      
+      <div class="content">
+        <div class="greeting">Welcome to the inner circle, {user_name}!</div>
+        <p class="intro">
+          You've just unlocked the most powerful tool for community transformation. EAiSER isn't just an app—it's an AI-driven mission to eliminate civic hazards and build a more responsive world, one report at a time.
+        </p>
 
-      <div class="feature-box">
-        <div class="feature-title">📸 Snap & Report</div>
-        <div class="feature-desc">Simply upload a photo of any civic issue (potholes, trash, hazards). Our AI instantly analyzes and categorizes it.</div>
+        <div class="feature-grid">
+          <div class="feature-item">
+            <div class="icon">📸</div>
+            <div class="feature-text">
+              <div class="feature-title">Impact via Imagery</div>
+              <div class="feature-desc">Snap a photo and let our Neural Engine handle the rest. We identify complexity, severity, and root causes instantly.</div>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <div class="icon">⚡</div>
+            <div class="feature-text">
+              <div class="feature-title">Autonomous Routing</div>
+              <div class="feature-desc">Say goodbye to bureaucratic hurdles. EAiSER routes your data directly to the precise authority responsible for action.</div>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <div class="icon">📈</div>
+            <div class="feature-text">
+              <div class="feature-title">Real-time Visibility</div>
+              <div class="feature-desc">Monitor the status of your reports on a live dashboard. See exactly when officials receive, review, and resolve issues.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="cta-container">
+          <a href="https://www.eaiser.ai/dashboard" class="cta-btn">Initialize My Dashboard</a>
+        </div>
+        
+        <p style="text-align:center; color:#94a3b8; font-size:14px; margin-top:30px;">
+          Together, we're building the future of civic technology.
+        </p>
       </div>
 
-      <div class="feature-box">
-        <div class="feature-title">🤖 Smart Routing</div>
-        <div class="feature-desc">No more guessing "who do I call?". EAiSER automatically identifies the authority responsible and routes your report.</div>
+      <div class="footer">
+        <strong>MomntumAi LLC</strong><br>
+        2025 EAiSER AI · Automated Civic Network<br>
+        <div class="social-links">
+          <a href="#">Terms</a> • <a href="#">Privacy</a> • <a href="#">Support</a>
+        </div>
       </div>
-
-      <div class="feature-box">
-        <div class="feature-title">📊 Live Dashboard</div>
-        <div class="feature-desc">Track the status of your reports in real-time, view analytics, and see your impact on the community.</div>
-      </div>
-
-      <div class="cta-container">
-        <a href="https://www.eaiser.ai/dashboard" class="cta-btn">Go to Dashboard</a>
-      </div>
-    </div>
-
-    <div class="footer">
-      &copy; 2025 EAiSER AI · Automated Civic Reporting<br>
-      Empowering Citizens, Enabling Action.
     </div>
   </div>
 </body>
@@ -726,21 +786,19 @@ async def send_user_welcome_email(user_email: str, user_name: str) -> bool:
         # TEXT FALLBACK
         # ----------------------------
         text_content = f"""
-Welcome to EAiSER AI!
+Welcome to EAiSER AI, {user_name}!
 
-Hello {user_name},
+You've just joined the most powerful network for community transformation.
 
-Thank you for joining EAiSER. We are excited to have you on board!
+What's Next?
+1. Snap & Report: Our Neuro Engine analyzes issues instantly.
+2. Autonomous Routing: We send data directly to the right authorities.
+3. Real-time Tracking: Monitor progress on your live dashboard.
 
-EAiSER allows you to:
-1. Snap & Report: Upload photos of civic issues instantly.
-2. Smart Routing: Our AI sends reports to the right authorities automatically.
-3. Live Dashboard: Track your reports in real-time.
-
-Go to your Dashboard: https://www.eaiser.ai/dashboard
+Get Started: https://www.eaiser.ai/dashboard
 
 Together, let's build smarter communities.
-- The EAiSER Team
+- Team EAiSER
 """
         return await send_email(user_email, subject, html_content, text_content)
 

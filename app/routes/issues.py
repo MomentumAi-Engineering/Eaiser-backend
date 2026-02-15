@@ -361,441 +361,262 @@ async def send_authority_email(
     feedback_value = report.get('detailed_analysis', {}).get('feedback')
     feedback_str = str(feedback_value) if feedback_value is not None else 'None'
     
-    # Generate enhanced recommended actions HTML
-    recommended_actions = report.get('recommended_actions', ['No recommendations provided'])
-    recommended_actions_html = ""
+    # --- PREPARE DATA FOR PROFESSIONAL TEMPLATE ---
+    display_issue_type = issue_type.replace('_', ' ').title()
+    display_priority = str(report.get('issue_overview', {}).get('severity') or report.get('template_fields', {}).get('priority') or 'Medium').title()
     
-    for i, action in enumerate(recommended_actions):
-        urgency_class = "urgency-immediate" if "immediately" in action.lower() else \
-                        "urgency-high" if "urgent" in action.lower() or "24 hours" in action.lower() else \
-                        "urgency-medium" if "48 hours" in action.lower() else "urgency-low"
-        
-        urgency_text = "Immediate" if "immediately" in action.lower() else \
-                       "High" if "urgent" in action.lower() or "24 hours" in action.lower() else \
-                       "Medium" if "48 hours" in action.lower() else "Standard"
-        
-        recommended_actions_html += f"""
-        <div class="action-item">
-            <div class="action-icon">{i+1}</div>
-            <div class="action-text">
-                {action}
-                <span class="action-urgency {urgency_class}">
-                    {urgency_text}
-                </span>
-            </div>
-        </div>
-        """
+    # Color coding for priority/severity
+    priority_color = "#d9534f" if display_priority == "High" or display_priority == "Critical" else \
+                     "#f0ad4e" if display_priority == "Medium" else "#5cb85c"
     
-    # Compute severity label for template usage
-    severity_checkboxes = (
-        str(report.get('issue_overview', {}).get('severity') or report.get('template_fields', {}).get('priority') or 'Medium')
-    )
-    severity_checkboxes = severity_checkboxes.title()
+    # Detailed Analysis Fields
+    root_causes = report.get('detailed_analysis', {}).get('root_causes', 'Not specified.')
+    potential_impact = report.get('detailed_analysis', {}).get('potential_impact') or \
+                      report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')
+    public_safety_risk = str(report.get('detailed_analysis', {}).get('public_safety_risk', 'Medium')).title()
+    
+    # Coordinates rounded for professionalism
+    lat_fmt = f"{latitude:.5f}" if isinstance(latitude, (int, float)) else "N/A"
+    lon_fmt = f"{longitude:.5f}" if isinstance(longitude, (int, float)) else "N/A"
 
+    # Generate Recommended Actions HTML
+    actions_list = report.get('recommended_actions', [])
+    if not actions_list:
+        actions_list = ["No specific recommendations provided."]
+    
+    actions_html = "".join([f"<li>{action}</li>" for action in actions_list])
+
+    # Compute confidence bar color
+    conf_val = float(confidence) if isinstance(confidence, (int, float, str)) and str(confidence).replace('.','',1).isdigit() else 0
+    conf_bar_color = "#5cb85c" if conf_val >= 80 else "#f0ad4e" if conf_val >= 50 else "#d9534f"
+    
+    report_oid = report.get('template_fields', {}).get('oid', 'N/A')
+    subject_override = f"CIVIC ALERT: {display_issue_type} - ID: {report_oid}"
+    
+    # --- PROFESSIONAL LIGHT-MODE TEMPLATE ---
     html_content = f"""
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-
-<style>
-
-    /* ---------------------------------------------------------
-       UNIVERSAL ANIMATIONS
-    --------------------------------------------------------- */
-
-    @keyframes fadeIn {{
-        from {{ opacity: 0; }}
-        to   {{ opacity: 1; }}
-    }}
-
-    @keyframes slideIn {{
-        0%   {{ transform: translateY(25px); opacity: 0; }}
-        100% {{ transform: translateY(0); opacity: 1; }}
-    }}
-
-    @keyframes shimmerMove {{
-        0%   {{ background-position: 0% 0%; }}
-        100% {{ background-position: 200% 0%; }}
-    }}
-
-    @keyframes glowPulse {{
-        0%   {{ box-shadow: 0 0 4px rgba(255,204,51,0.3); }}
-        50%  {{ box-shadow: 0 0 16px rgba(255,204,51,1); }}
-        100% {{ box-shadow: 0 0 4px rgba(255,204,51,0.3); }}
-    }}
-
-    @keyframes fillBar {{
-        from {{ width: 0%; }}
-        to   {{ width: {confidence}%; }}
-    }}
-
-    /* ---------------------------------------------------------
-       PAGE BASE
-    --------------------------------------------------------- */
-
-    body {{
-        background: #0b0b0f;
-        font-family: Segoe UI, Arial, sans-serif;
-        padding: 25px;
-        color: #f6f6f6;
-        animation: fadeIn 0.8s ease-out;
-    }}
-
-    .container {{
-        max-width: 720px;
-        margin: auto;
-        background: #121217;
-        border-radius: 12px;
-        padding: 30px;
-        border: 1px solid #1f1f26;
-        animation: slideIn 0.9s ease-out;
-    }}
-
-    /* ---------------------------------------------------------
-       SECTION TITLE
-    --------------------------------------------------------- */
-
-    .section-title {{
-        font-size: 20px;
-        font-weight: 700;
-        color: #f6c521;
-        margin-bottom: 12px;
-        text-shadow: 0 0 8px rgba(246,197,33,0.4);
-    }}
-
-    .label {{ font-weight: 600; color:#cfcfcf; }}
-    .value {{ color:#fefefe; }}
-
-    /* ---------------------------------------------------------
-       CONFIDENCE BAR (Email Safe)
-    --------------------------------------------------------- */
-
-    .conf-container {{
-        width: 100%;
-        height: 14px;
-        background: #1c1c23;
-        border: 1px solid #292933;
-        border-radius: 10px;
-        overflow: hidden;
-        margin-top: 6px;
-        position: relative;
-    }}
-
-    .conf-fill {{
-        height: 100%;
-        width: 0%;
-        border-radius: 10px;
-        background: linear-gradient(90deg, #ffcc33, #ffdf72, #ffcc33);
-        animation:
-            fillBar 2s ease-out forwards,
-            shimmerMove 2s linear infinite;
-        background-size: 200% 100%;
-        position: relative;
-    }}
-
-    .conf-fill::after {{
-        content: "";
-        position: absolute;
-        inset: 0;
-        border-radius: 10px;
-        animation: glowPulse 2s infinite ease-in-out;
-    }}
-
-    /* SCANLINES */
-    .scanlines {{
-        width: 100%;
-        height: 5px;
-        border-radius: 4px;
-        margin-top: 4px;
-        background: linear-gradient(90deg, transparent, rgba(246,197,33,0.18), transparent);
-        background-size: 200% 100%;
-        animation: shimmerMove 3s linear infinite;
-    }}
-
-    /* ---------------------------------------------------------
-       IMAGE
-    --------------------------------------------------------- */
-
-    .issue-image {{
-        width: 100%;
-        margin-top: 10px;
-        border-radius: 8px;
-        border: 1px solid #2d2d33;
-    }}
-
-    hr {{
-        border: none;
-        border-bottom: 1px solid #23232a;
-        margin: 25px 0;
-    }}
-
-</style>
-
+    <meta charset="UTF-8">
+    <style>
+        body {{
+            font-family: 'Segoe UI', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333333;
+            background-color: #f4f7f6;
+            margin: 0;
+            padding: 20px;
+        }}
+        .email-container {{
+            max-width: 650px;
+            margin: auto;
+            background: #ffffff;
+            border: 1px solid #e1e4e8;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }}
+        .header {{
+            background-color: #1a202c;
+            color: #ffffff;
+            padding: 25px;
+            text-align: center;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 24px;
+            letter-spacing: 1px;
+            color: #f6c521;
+        }}
+        .status-badge {{
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: white;
+            background-color: {priority_color};
+            margin-top: 10px;
+        }}
+        .content-section {{
+            padding: 30px;
+        }}
+        .section-header {{
+            font-size: 18px;
+            font-weight: 700;
+            color: #2c3e50;
+            border-bottom: 2px solid #f1f1f1;
+            padding-bottom: 8px;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
+        .info-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 25px;
+        }}
+        .info-item {{
+            margin-bottom: 15px;
+        }}
+        .label {{
+            font-size: 12px;
+            color: #7f8c8d;
+            font-weight: 600;
+            text-transform: uppercase;
+            display: block;
+        }}
+        .value {{
+            font-size: 15px;
+            color: #2d3436;
+            font-weight: 500;
+        }}
+        .description-box {{
+            background-color: #f8fafc;
+            border-left: 4px solid #f6c521;
+            padding: 15px;
+            font-style: italic;
+            margin-bottom: 25px;
+        }}
+        .evidence-image {{
+            width: 100%;
+            max-width: 100%;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            margin: 15px 0;
+        }}
+        .analysis-card {{
+            background-color: #f1f5f9;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }}
+        .actions-list {{
+            padding-left: 20px;
+            margin: 0;
+        }}
+        .actions-list li {{
+            margin-bottom: 8px;
+        }}
+        .confidence-meter {{
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            margin: 10px 0;
+            overflow: hidden;
+        }}
+        .confidence-fill {{
+            height: 100%;
+            background-color: {conf_bar_color};
+            width: {confidence}%;
+        }}
+        .footer {{
+            background-color: #f8fafc;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #94a3b8;
+            border-top: 1px solid #e2e8f0;
+        }}
+        .map-btn {{
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #1a202c;
+            color: white !important;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 14px;
+            margin-top: 10px;
+        }}
+    </style>
 </head>
 <body>
-
-<div class="container">
-
-    <!-- HEADER -->
-    <h1 style="color:#f6c521; margin:0 0 5px 0;">EAiSER CIVIC – Incident Report</h1>
-    <p style="color:#8f8f8f; margin-top:0;">Automated Issue Analysis & Routing System</p>
-    <hr>
-
-    <!-- 1. SUMMARY -->
-    <div>
-        <div class="section-title">1. Incident Summary</div>
-
-        <p><span class="label">Issue:</span> <span class="value">{issue_type}</span></p>
-
-        <p><span class="label">Description:</span><br>
-            <span class="value">{short_description}</span>
-        </p>
-
-        <p><span class="label">Location:</span> <span class="value">{final_address}</span>
-            — <a href="{map_link}" style="color:#f6c521;">View Map</a></p>
-
-        <p><span class="label">Priority:</span>
-            {report.get('template_fields', {}).get('priority')}</p>
-
-        <p><span class="label">Reported:</span> {timestamp_formatted} {timezone_name}</p>
-    </div>
-
-    <hr>
-
-    <!-- 2. IMAGE -->
-    <div>
-        <div class="section-title">2. Image Evidence</div>
-        <img src="cid:issue_image" class="issue-image">
-    </div>
-
-    <hr>
-
-    <!-- 3. AUTHORITY -->
-    <div>
-        <div class="section-title">3. Recommended Authority</div>
-        <p><span class="label">Route To:</span>
-            {", ".join([auth["name"] for auth in authorities])}
-        </p>
-    </div>
-
-    <hr>
-
-    <!-- 4. SYSTEM METADATA -->
-    <div>
-        <div class="section-title">4. System Metadata</div>
-
-        <p><span class="label">Report ID:</span>
-            {report.get('template_fields', {}).get('oid', 'N/A')}</p>
-
-        <p><span class="label">AI Confidence:</span> {confidence}%</p>
-
-        <div class="conf-container">
-            <div class="conf-fill"></div>
+    <div class="email-container">
+        <div class="header">
+            <h1>EAiSER CIVIC</h1>
+            <div class="status-badge">{display_priority} Priority</div>
+            <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.8;">Automated Incident Routing System</p>
         </div>
 
-        <div class="scanlines"></div>
+        <div class="content-section">
+            <div class="section-header">1. Incident Overview</div>
+            
+            <div class="description-box">
+                {short_description}
+            </div>
 
-        <p style="margin-top:15px;">
-            <span class="label">Coordinates:</span> {latitude}, {longitude}
-        </p>
+            <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td width="50%" style="padding-bottom: 15px;">
+                        <span class="label">Issue Type</span>
+                        <span class="value">{display_issue_type}</span>
+                    </td>
+                    <td width="50%" style="padding-bottom: 15px;">
+                        <span class="label">Reported On</span>
+                        <span class="value">{timestamp_formatted}</span>
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="padding-bottom: 15px;">
+                        <span class="label">Location</span>
+                        <span class="value">{final_address}</span>
+                        <br>
+                        <a href="{map_link}" class="map-btn">📍 View Precise Location Map</a>
+                    </td>
+                </tr>
+                <tr>
+                    <td width="50%">
+                        <span class="label">GPS Coordinates</span>
+                        <span class="value">{lat_fmt}, {lon_fmt}</span>
+                    </td>
+                    <td width="50%">
+                        <span class="label">Report ID</span>
+                        <span class="value">{report_oid}</span>
+                    </td>
+                </tr>
+            </table>
+
+            <div class="section-header" style="margin-top: 40px;">2. Photographic Evidence</div>
+            <p style="font-size: 13px; color: #666; margin-bottom: 5px;">Primary visual evidence from the scene:</p>
+            <img src="cid:issue_image" alt="Incident Evidence" class="evidence-image">
+
+            <div class="section-header" style="margin-top: 40px;">3. AI Deployment Analysis</div>
+            
+            <div class="analysis-card">
+                <span class="label">System Confidence</span>
+                <div class="confidence-meter">
+                    <div class="confidence-fill"></div>
+                </div>
+                <div style="font-size: 12px; color: #666;">Analysis match: {confidence}% precision</div>
+
+                <div style="margin-top: 20px;">
+                    <span class="label">Root Cause Analysis</span>
+                    <p style="margin: 5px 0 15px 0; font-size: 14px;">{root_causes}</p>
+                    
+                    <span class="label">Potential Impact / Hazard</span>
+                    <p style="margin: 5px 0 0 0; font-size: 14px;">{potential_impact}</p>
+                </div>
+            </div>
+
+            <div class="section-header" style="margin-top: 40px;">4. Recommended Response Protocol</div>
+            <ul class="actions-list" style="font-size: 14px;">
+                {actions_html}
+            </ul>
+        </div>
+
+        <div class="footer">
+            <img src="cid:momentumai_logo" alt="MomntumAi" style="height: 25px; margin-bottom: 10px; opacity: 0.5;">
+            <p style="margin: 0;">This report was transmitted electronically via EAiSER AI.</p>
+            <p style="margin: 5px 0;">Verification of on-site conditions is recommended before full deployment.</p>
+            <p style="margin: 10px 0 0 0; font-size: 10px;">© 2025 MomntumAi LLC — Confidentiality Notice: This document may contain privileged information.</p>
+        </div>
     </div>
-
-    <hr>
-
-    <!-- FOOTER -->
-    <p style="font-size:12px; color:#888;">
-        This report was generated automatically by EAiSER AI.<br>
-        © 2025 MomntumAi LLC — All Rights Reserved.
-    </p>
-
-</div>
-
 </body>
 </html>
-
-"""
-    city_val = final_address.split(',')[0] if final_address else "Unknown"
-    state_val = "Unknown"
-    try:
-        parts = [p.strip() for p in final_address.split(',')] if final_address else []
-        if len(parts) >= 2:
-            state_val = parts[1]
-    except Exception:
-        state_val = "Unknown"
-    confidence_percent = int(confidence) if isinstance(confidence, (int, float)) else 0
-    image_name = report.get('template_fields', {}).get('image_filename', 'N/A')
-    impact_desc = report.get('detailed_analysis', {}).get('potential_impact', 'N/A')
-    location_ctx = report.get('issue_overview', {}).get('location_context', 'N/A')
-    report_oid = report.get('template_fields', {}).get('oid', 'N/A')
-    
-    # Calculate color for confidence bar
-    conf_val = float(confidence) if isinstance(confidence, (int, float, str)) and str(confidence).replace('.','',1).isdigit() else 0
-    if conf_val >= 80:
-        conf_bar_color = "#4ade80" # Green
-    elif conf_val >= 50:
-        conf_bar_color = "#facc15" # Yellow
-    else:
-        conf_bar_color = "#ef4444" # Red
-        
-    subject_override = f"EAiSER Alert – {issue_type} (ID: {report_oid})"
-    html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8" />
-<title>EAiSER CIVIC – Incident Report</title>
-
-<style>
-  .container {{
-    width: 100%;
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 20px;
-    background: #0b0b0f;
-    color: #f6f6f6;
-    font-family: Segoe UI, Arial, sans-serif;
-  }}
-  .card {{
-    background: #121217;
-    border: 1px solid #1f1f26;
-    border-radius: 8px;
-    padding: 20px;
-    margin-bottom: 25px;
-  }}
-  h1, h2 {{
-    margin: 0 0 10px;
-    color: #f6c521;
-  }}
-  a {{
-    color: #f6c521;
-    text-decoration: none;
-  }}
-  .label {{
-    color: #dcdcdc;
-    font-weight: 600;
-  }}
-  hr {{
-    border: 0;
-    border-bottom: 1px solid #222;
-    margin: 20px 0;
-  }}
-
-  /* Confidence bar */
-  .conf-bar-container {{
-    background: #1b1b23;
-    border: 1px solid #2a2a33;
-    height: 14px;
-    width: 100%;
-    border-radius: 10px;
-    overflow: hidden;
-    margin-top: 8px;
-  }}
-  .conf-bar-fill {{
-    height: 100%;
-    background: linear-gradient(90deg, #f6c521, #ffdf6a);
-    animation: loadConf 1.8s ease-out forwards;
-    width: 0%;
-  }}
-  @keyframes loadConf {{
-    0% {{ width: 0%; }}
-    100% {{ width: {confidence}%; }}
-  }}
-</style>
-
-</head>
-
-<body style="margin:0;padding:0;">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0b0b0f;width:100%;margin:0;padding:0;">
-<tr>
-<td align="center" style="background:#0b0b0f;padding:20px;">
-
-<div class="container">
-
-  <h1>EAiSER CIVIC – Incident Report</h1>
-  <p style="color:#888;font-size:14px;margin-top:-6px;">
-    Automated Issue Analysis & Routing System
-  </p>
-  <hr />
-
-  <!-- INCIDENT SUMMARY -->
-  <div class="card">
-    <h2>1. Incident Summary</h2>
-
-    <p><span class="label">Issue:</span> {issue_type}</p>
-
-    <p><span class="label">Description:</span>
-       {short_description}
-    <span style="color:#777;font-size:12px;">(Auto-summary)</span>
-    </p>
-
-    <p><span class="label">Location:</span> {final_address}
-      <a href="{map_link}" target="_blank"> — View Map</a>
-    </p>
-
-    <p><span class="label">Priority:</span>
-       {report.get('issue_overview', {}).get('severity_label', 'N/A')}
-    </p>
-
-    <p><span class="label">Reported:</span> {timestamp_formatted}</p>
-  </div>
-
-  <!-- IMAGE -->
-  <div class="card">
-    <h2>2. Image Evidence</h2>
-    <p style="color:#ccc;">Attached below:</p>
-    <img src="cid:issue_image"
-         style="max-width:100%;border-radius:6px;border:1px solid #2a2a33;" />
-  </div>
-
-  <!-- AUTHORITY -->
-  <div class="card">
-    <h2>3. Recommended Authority</h2>
-    <p><span class="label">Route To:</span>
-      {", ".join([auth["name"] for auth in authorities])}
-    </p>
-  </div>
-
-  <!-- SYSTEM METADATA -->
-  <div class="card">
-    <h2>4. System Metadata</h2>
-
-    <p><span class="label">Report ID:</span>
-      {report.get('template_fields', {}).get('oid', 'N/A')}
-    </p>
-
-    <p><span class="label">AI Confidence:</span> {confidence}%</p>
-
-    <div class="conf-bar-container">
-      <div class="conf-bar-fill" style="width: {confidence}%; background: {conf_bar_color};"></div>
-    </div>
-
-    <br />
-
-    <p><span class="label">Coordinates:</span>
-       {latitude}, {longitude}
-    </p>
-  </div>
-
-  <hr />
-
-  <!-- FOOTER -->
-  <p style="font-size:12px;color:#888;line-height:1.6;">
-    This report was submitted through <strong style="color:#f6c521;">EAiSER CIVIC</strong>, powered by MomntumAi LLC.<br>
-    EAiSER analyzes images, classifies incidents, assigns priority and routes issues to relevant authorities.
-  </p>
-
-  <p style="font-size:11px;color:#555;">© 2025 MomntumAi LLC — All Rights Reserved.</p>
-
-</div>
-
-</td>
-</tr>
-</table>
-
-</body>
-</html>
-
 """
     errors = []
     successful_emails = []

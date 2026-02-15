@@ -12,6 +12,13 @@
     "emergency",
     "police"
   ],
+  "accident": [
+    "emergency",
+    "police"
+  ],
+  "abandoned_car": [
+    "public_works"
+  ],
   "fire": [
     "fire",
     "police"

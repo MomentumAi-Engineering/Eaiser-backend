@@ -163,9 +163,9 @@ class OptimizedMongoDBService:
                 # Primary client for writes (with safe options)
                 self.primary_client = AsyncIOMotorClient(
                     self.mongo_uri,
-                    serverSelectionTimeoutMS=30000,
-                    connectTimeoutMS=30000,
-                    socketTimeoutMS=30000,
+                    serverSelectionTimeoutMS=45000,
+                    connectTimeoutMS=45000,
+                    socketTimeoutMS=45000,
                     maxPoolSize=20,                  # Reduced for stability
                     minPoolSize=0,                   # Reduced to 0 to avoid startup hang
                     maxIdleTimeMS=30000,
@@ -177,9 +177,9 @@ class OptimizedMongoDBService:
                 # Secondary client for reads (prefer secondary)
                 self.read_client = AsyncIOMotorClient(
                     self.mongo_uri,
-                    serverSelectionTimeoutMS=30000,
-                    connectTimeoutMS=30000,
-                    socketTimeoutMS=30000,
+                    serverSelectionTimeoutMS=45000,
+                    connectTimeoutMS=45000,
+                    socketTimeoutMS=45000,
                     maxPoolSize=20,                  # Reduced for stability
                     minPoolSize=0,                   # Reduced to 0 to avoid startup hang
                     maxIdleTimeMS=45000,
@@ -779,35 +779,41 @@ class OptimizedMongoDBService:
             # Store the main issue document
             issue_id = await self.insert_one_optimized('issues', issue_doc)
             
-            # Store image in GridFS if provided
+            # Store image in GridFS as a BACKGROUND task to avoid blocking the main API response
+            # and preventing timeouts for large images.
             if image_content and self.fs:
-                try:
-                    # Optimized image storage using GridFS
-                    image_id = await self.fs.upload_from_stream(
-                        filename=f"{issue_doc['_id']}.jpg",
-                        source=image_content,
-                        metadata={"issue_id": issue_doc['_id']}
-                    )
-                    
-                    # Update issue document with image_id
-                    await self.update_one_optimized(
-                        'issues',
-                        {"_id": issue_doc['_id']},
-                        {"$set": {
-                            "image_id": str(image_id),
-                            "image_stored": True, 
-                            "image_size": len(image_content)
-                        }}
-                    )
-                    logger.info(f"📸 Image stored in GridFS for issue {issue_doc['_id']} with ID {image_id}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to store image for issue {issue_doc['_id']}: {e}")
+                async def _background_image_storage():
+                    try:
+                        # Optimized image storage using GridFS
+                        image_id_internal = await self.fs.upload_from_stream(
+                            filename=f"{issue_doc['_id']}.jpg",
+                            source=image_content,
+                            metadata={"issue_id": issue_doc['_id']}
+                        )
+                        
+                        # Update issue document with image_id
+                        await self.update_one_optimized(
+                            'issues',
+                            {"_id": issue_doc['_id']},
+                            {"$set": {
+                                "image_id": str(image_id_internal),
+                                "image_stored": True, 
+                                "image_size": len(image_content)
+                            }}
+                        )
+                        logger.info(f"📸 [Background] Image stored in GridFS for issue {issue_doc['_id']} with ID {image_id_internal}")
+                    except Exception as bg_e:
+                        logger.warning(f"⚠️ [Background] Failed to store image for issue {issue_doc['_id']}: {bg_e}")
+                
+                # Fire and forget (it will run on the current event loop)
+                asyncio.create_task(_background_image_storage())
+                logger.info(f"⚡ Image upload task for issue {issue_doc['_id']} spawned in background")
             
-            logger.info(f"✅ Stored issue {issue_doc['_id']} with optimized operation")
+            logger.info(f"✅ Metadata stored for issue {issue_doc['_id']} via optimized operation")
             return issue_id
             
         except Exception as e:
-            logger.error(f"❌ Failed to store issue: {str(e)}")
+            logger.error(f"❌ Failed to store issue metadata: {str(e)}")
             raise e
     
     async def get_issue_image_stream(self, issue_id: str):

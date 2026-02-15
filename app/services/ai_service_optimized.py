@@ -114,7 +114,7 @@ CACHE_TTL = {
 _MODEL = None
 
 def get_gemini_model():
-    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     global _MODEL
     if _MODEL is not None:
         return _MODEL
@@ -124,8 +124,10 @@ def get_gemini_model():
     except Exception as e:
         logger.warning(f"{model_name} not available; attempting fallbacks: {e}")
         for alt in [
-            "gemini-1.5-flash", 
-            "gemini-1.5-flash-8b",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-pro",
             "gemini-1.0-pro-vision",
         ]:
             try:
@@ -319,8 +321,8 @@ async def generate_report_optimized(
                 "type": "None",
                 "category": "None",
                 "severity": "low",
-                "summary": "Image rejected: Low quality or invalid format.",
-                "summary_explanation": f"The uploaded image was automatically rejected. Reason: {fake_analysis.get('reason', 'Image quality checks failed')}.",
+                "summary": "Invalid Image / No Issue",
+                "summary_explanation": "Please provide the correct image. I have not seen any issue, or this image appears to be animated or fake.",
                 "confidence": 5
             },
             "detailed_analysis": {
@@ -705,12 +707,16 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             is_fake = any(w in combined for w in fake_words)
             
             animal_tokens = ["animal","deer","boar","hog","dog","cow","cat","wildlife","goat","pig","carcass","roadkill"]
-            accident_tokens = ["accident","collision","crash","hit","struck","run over","under car","under vehicle"]
+            accident_tokens = ["accident","collision","crash","hit","struck","run over","under car","under vehicle","smashed","wrecked","overturned","pileup","mangled","damaged vehicle","wreckage","body damage"]
+            abandoned_tokens = ["abandoned","junk","parked for long","covered in dust","flat tires","broken windows","unattended car","old car","rusty vehicle","scrap","clamped","stationary for weeks","derelict","abandoned car"]
             people_tokens = ["people", "crowd", "spectators", "gathering", "watching", "standing", "men", "women", "children", "group"]
+            vehicle_tokens = ["car", "vehicle", "truck", "bike", "bicycle", "van", "bus", "auto", "collision", "damaged car", "wrecked", "suv"]
             
-            has_animal = any(w in combined for w in animal_tokens)
+            has_animal = any(w in combined or w in (overview.get("type") or "").lower() for w in animal_tokens)
             has_accident = any(w in combined for w in accident_tokens)
+            has_abandoned = any(w in combined for w in abandoned_tokens)
             has_people = any(w in combined for w in people_tokens)
+            has_vehicle = any(w in combined or w in (overview.get("type") or "").lower() for w in vehicle_tokens)
 
             # Prevent false positive animal detection if context is negative (e.g. "no animal", "without animal")
             negative_animal_phrases = ["no animal", "no dead animal", "no stray", "without animal", "not an animal", "no wildlife"]
@@ -744,14 +750,28 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                     ai_eval["image_analysis"] = "Detected controlled fire/bonfire/festival; classified as non-emergency."
             elif is_minor and not has_danger:
                 new_conf = max(75, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 70)))
-            # Only trigger animal_accident if we are sure it's not excluded by negatives AND we trust the AI didn't pick something else strong
-            elif has_animal and has_accident and not any(w in combined for w in ["fire","flame","burning","smoke"]):
-                # If AI already picked specific road damage or something else, only override if confidence is low
-                current_type = (overview.get("type") or "").lower()
-                if current_type not in ["road_damage", "pothole", "abandoned_vehicle"] or new_conf < 70:
+            elif has_accident and not any(w in combined for w in ["fire","flame","burning"]):
+                # User Priority: Only use animal_accident if an animal is clearly visible and involved.
+                # If both vehicle and animal are present, check for specific collision/injury context.
+                is_animal_involved = has_animal and any(w in combined for w in ["hit","struck","under","carcass","roadkill","lying","dead","collision","crash"])
+                
+                if has_vehicle and is_animal_involved:
                     overview["type"] = "animal_accident"
+                    new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
+                elif has_vehicle:
+                    overview["type"] = "car_accident"
+                    new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
+                elif has_animal:
+                    overview["type"] = "dead_animal"
                     new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
-                    issue_detected = True
+                else:
+                    overview["type"] = "car_accident"
+                    new_conf = max(80, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 75)))
+                issue_detected = True
+            elif has_abandoned and has_vehicle:
+                overview["type"] = "abandoned_vehicle"
+                new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
+                issue_detected = True
             else:
                 # Prefer fallen tree classification if strong cues present
                 tree_tokens = [
@@ -770,12 +790,14 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             # Use dynamically loaded valid types + standard fallbacks
             allowed_types = set(valid_issue_types_list) | {"unknown", "other"}
             ttype = (overview.get("type") or "").lower()
-            if ttype and ttype not in allowed_types:
-                new_conf = min(new_conf, 40)
+            if ttype and (ttype not in allowed_types or ttype == "none"):
+                new_conf = 0
+                issue_detected = False
                 ai_eval["issue_detected"] = False
                 ia = ai_eval.get("image_analysis") or ""
                 if "no public issue" not in ia.lower():
-                    ai_eval["image_analysis"] = "I did not find any public issue."
+                    ai_eval["image_analysis"] = "I did not find any public issue. Please provide the correct image if this was a mistake."
+                overview["summary_explanation"] = "Please provide the correct image. I have not seen any issue, or this image appears to be animated or fake."
             # Clamp confidence for non-specific types
             if ttype in ("other", "unknown", "none"):
                 new_conf = min(new_conf, 50)
@@ -787,9 +809,10 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                     "fire", "wildfire",
                     "dead animal", "animal carcass", "animal_carcass",
                     "garbage", "trash", "waste",
-                    "flood", "waterlogging",
+                    "flood", "waterlogging", "flooding",
                     "tree fallen", "fallen tree", "tree_fallen",
-                    "public toilet", "public_toilet_issue"
+                    "public toilet", "public_toilet_issue",
+                    "abandoned_vehicle", "abandoned_car"
                 ]
                 is_target = any(tt in ttype for tt in target_types)
                 if is_target and not (is_controlled and not has_danger):

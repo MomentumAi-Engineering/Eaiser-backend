@@ -133,20 +133,74 @@ async def delete_user(user_id: str, admin: dict = Depends(get_admin_user)):
             
         user_email = user.get("email")
         
-        # 1. Delete User
+        # 1. Collect all reports to clean up assets (Images)
+        deleted_count = 0
+        image_delete_count = 0
+        if user_email:
+            # Find all issues to get image_id's
+            user_issues_cursor = issues_coll.find({"user_email": user_email})
+            user_issues = await user_issues_cursor.to_list(length=None)
+            
+            # Extract Image IDs
+            image_ids = [i.get("image_id") for i in user_issues if i.get("image_id")]
+            
+            # 2. Delete Images from GridFS (Parallel for speed)
+            if image_ids:
+                from services.mongodb_service import get_fs
+                fs = await get_fs()
+                
+                async def safe_delete(img_id):
+                    try:
+                        obj_id = None
+                        if isinstance(img_id, str) and ObjectId.is_valid(img_id):
+                            obj_id = ObjectId(img_id)
+                        elif isinstance(img_id, ObjectId):
+                            obj_id = img_id
+                        
+                        if obj_id:
+                            await fs.delete(obj_id)
+                            return True
+                    except Exception as e:
+                        # Silently skip if file not found (already "deleted")
+                        if "no file could be deleted" not in str(e):
+                            logger.warning(f"Error during GridFS delete for {img_id}: {e}")
+                    return False
+
+                # Execute all deletions in parallel
+                results = await asyncio.gather(*[safe_delete(mid) for mid in image_ids])
+                image_delete_count = sum(1 for r in results if r)
+            
+            # 3. Delete from Issues Collection
+            result = await issues_coll.delete_many({"user_email": user_email})
+            deleted_count = result.deleted_count
+
+        # 4. Delete From Other potential collections (Clean Slate)
+        # Any other user-specific data should be wiped here
+        try:
+             # Clean security logs and attempts associated with this email
+             await db["audit_logs"].delete_many({"admin_email": user_email}) # Use admin_email field if user was ever an admin or referenced as such
+             await db["login_attempts"].delete_many({"email": user_email})
+             
+             # General audit logs where email might be in details
+             await db["audit_logs"].delete_many({"details.user_email": user_email})
+             
+             # Use general regex check if needed, but per-field is safer/faster
+             logger.info(f"🧼 Security logs cleared for {user_email}")
+        except Exception as log_err:
+             logger.warning(f"Failed to clear some auxiliary logs: {log_err}")
+
+        # 5. Delete User
         await users_coll.delete_one({"_id": ObjectId(user_id)})
         
-        # 2. Delete Users Issues? Or Keep them anonymized?
-        # User asked: "data base me se bhi delete ho jaye" (delete from DB too) implies full cleanup.
-        deleted_issues_count = 0
-        if user_email:
-             result = await issues_coll.delete_many({"user_email": user_email})
-             deleted_issues_count = result.deleted_count
-        
-        logger.info(f"User {user_email} (ID: {user_id}) deleted by {admin.get('email')}. Removed {deleted_issues_count} issues.")
+        logger.info(f"🗑️ FULL WIPE: User {user_email} deleted. {deleted_count} issues and {image_delete_count} images purged.")
         
         return {
-            "message": f"User permanently deleted along with {deleted_issues_count} reports.",
+            "message": f"User account and all associated data permanently deleted.",
+            "details": {
+                "deleted_reports": deleted_count,
+                "deleted_images": image_delete_count,
+                "fresh_start": True
+            },
             "deleted_id": user_id
         }
 
