@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, Depends, Body, Request
+from fastapi import APIRouter, HTTPException, Depends, Body, Request, Response, Cookie
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
 import logging
 import asyncio
+from fastapi.responses import JSONResponse
 
 from services.mongodb_optimized_service import get_optimized_mongodb_service
 from services.email_service import send_email, send_formatted_ai_alert, notify_user_status_change
@@ -12,7 +13,8 @@ from core.database import get_database
 from services.mongodb_service import get_fs
 from bson.objectid import ObjectId
 from routes.issues import send_authority_email
-from utils.security import verify_password, create_access_token, get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES
+from utils.security import verify_password, create_access_token, get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES, create_refresh_token, verify_refresh_token, REFRESH_TOKEN_EXPIRE_DAYS
+import os
 from models.admin_model import AdminCreate, AdminInDB
 from datetime import timedelta
 from fastapi import status
@@ -70,19 +72,37 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
     - Redis caching for admin lookup
     """
     
-    # Get client information
-    client_info = SecurityService.get_client_info(request)
-    ip_address = client_info["ip_address"]
-    user_agent = client_info["user_agent"]
+    # Get client information — use Cloudflare-safe IP extraction
+    from services.admin_login_monitor import AdminLoginMonitor
+    ip_address = AdminLoginMonitor.extract_real_ip(request)
+    user_agent = request.headers.get("User-Agent", "unknown")
     
-    # OPTIMIZATION: Run rate limit and lockout checks in parallel
+    # OPTIMIZATION: Run rate limit, lockout, and IP block checks in parallel
     rate_limit_task = SecurityService.check_rate_limit(ip_address)
     lockout_task = SecurityService.check_account_lockout(creds.email)
+    ip_block_task = AdminLoginMonitor.is_ip_blocked(ip_address)
     
-    rate_allowed, lockout_status = await asyncio.gather(rate_limit_task, lockout_task)
+    rate_allowed, lockout_status, ip_block_status = await asyncio.gather(
+        rate_limit_task, lockout_task, ip_block_task
+    )
+    
+    # Check IP block (admin_login_logs: 3 failures in 5 min → 15 min block)
+    if ip_block_status.get("blocked"):
+        asyncio.create_task(AdminLoginMonitor.log_attempt(
+            email=creds.email, ip=ip_address, user_agent=user_agent,
+            success=False, failure_reason="IP blocked"
+        ))
+        raise HTTPException(
+            status_code=403,
+            detail=f"Your IP is temporarily blocked due to suspicious activity. Try again in {ip_block_status['remaining_minutes']} minutes."
+        )
     
     if not rate_allowed:
         logger.warning(f"🚫 Rate limit exceeded for IP: {ip_address}")
+        asyncio.create_task(AdminLoginMonitor.log_attempt(
+            email=creds.email, ip=ip_address, user_agent=user_agent,
+            success=False, failure_reason="Rate limited"
+        ))
         raise HTTPException(
             status_code=429,
             detail="Too many login attempts. Please try again in 1 minute."
@@ -96,6 +116,10 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
             user_agent=user_agent,
             success=False,
             failure_reason="Account locked"
+        ))
+        asyncio.create_task(AdminLoginMonitor.log_attempt(
+            email=creds.email, ip=ip_address, user_agent=user_agent,
+            success=False, failure_reason="Account locked"
         ))
         raise HTTPException(
             status_code=403,
@@ -141,6 +165,10 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
             success=False,
             failure_reason="Invalid credentials"
         ))
+        asyncio.create_task(AdminLoginMonitor.log_attempt(
+            email=creds.email, ip=ip_address, user_agent=user_agent,
+            success=False, failure_reason="Invalid credentials"
+        ))
         
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -157,6 +185,10 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
             success=False,
             failure_reason="Inactive account"
         ))
+        asyncio.create_task(AdminLoginMonitor.log_attempt(
+            email=creds.email, ip=ip_address, user_agent=user_agent,
+            success=False, failure_reason="Inactive account"
+        ))
         raise HTTPException(status_code=403, detail="Account is inactive")
 
     # 2FA Logic
@@ -169,6 +201,15 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
             }
         
         secret = admin.get("two_factor_secret")
+        if secret:
+            # Decrypt secret if encrypted (backward compatible with plaintext secrets)
+            try:
+                from utils.totp_encryption import decrypt_totp_secret, is_encrypted
+                if is_encrypted(secret):
+                    secret = decrypt_totp_secret(secret)
+            except Exception as decrypt_err:
+                logger.error(f"Failed to decrypt 2FA secret for {creds.email}: {decrypt_err}")
+        
         if not secret or not SecurityService.verify_2fa_code(secret, creds.code):
             asyncio.create_task(SecurityService.record_login_attempt(
                 email=creds.email,
@@ -176,6 +217,10 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
                 user_agent=user_agent,
                 success=False,
                 failure_reason="Invalid 2FA code"
+            ))
+            asyncio.create_task(AdminLoginMonitor.log_attempt(
+                email=creds.email, ip=ip_address, user_agent=user_agent,
+                success=False, failure_reason="Invalid 2FA code"
             ))
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
 
@@ -185,11 +230,21 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
         subject=admin["email"], expires_delta=access_token_expires
     )
     
+    # Generate refresh token (stored in HTTP-only cookie)
+    refresh_token = create_refresh_token(
+        subject=admin["email"],
+        extra_claims={"role": admin.get("role", "admin"), "admin_id": str(admin["_id"])}
+    )
+    
     # OPTIMIZATION: Move security logging to background (non-blocking)
     asyncio.create_task(SecurityService.record_login_attempt(
         email=creds.email,
         ip_address=ip_address,
         user_agent=user_agent,
+        success=True
+    ))
+    asyncio.create_task(AdminLoginMonitor.log_attempt(
+        email=creds.email, ip=ip_address, user_agent=user_agent,
         success=True
     ))
     
@@ -204,9 +259,12 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
     
     logger.info(f"✅ Fast login: {creds.email} from {ip_address}")
     
-    return {
+    # Build response with HTTP-only refresh token cookie
+    is_production = os.getenv("ENV", "production").lower() == "production"
+    response_data = {
         "token": access_token,
         "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # seconds
         "admin": {
             "email": admin["email"],
             "id": str(admin["_id"]),
@@ -216,6 +274,86 @@ async def admin_login(creds: AdminLoginRequest, request: Request):
             "two_factor_enabled": admin.get("two_factor_enabled", False)
         }
     }
+    
+    from fastapi.responses import JSONResponse
+    response = JSONResponse(content=response_data)
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=is_production,  # True in production (requires HTTPS)
+        samesite="strict",
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,  # 7 days in seconds
+        path="/api/admin/review"
+    )
+    return response
+
+@router.post("/refresh-token")
+async def refresh_access_token(
+    request: Request,
+    refresh_token: Optional[str] = Cookie(None)
+):
+    """
+    Issue a new access token using the refresh token from HTTP-only cookie.
+    The refresh token is never exposed to JavaScript.
+    """
+    if not refresh_token:
+        raise HTTPException(
+            status_code=401,
+            detail="No refresh token provided"
+        )
+    
+    # Verify refresh token
+    payload = verify_refresh_token(refresh_token)
+    if not payload:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired refresh token"
+        )
+    
+    email = payload.get("sub")
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    
+    # Verify admin still exists and is active
+    mongo_service = await get_optimized_mongodb_service()
+    if not mongo_service:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    
+    collection = await mongo_service.get_collection("admins")
+    admin = await collection.find_one({"email": email})
+    
+    if not admin or not admin.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Account is inactive or not found")
+    
+    # Issue new access token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    new_access_token = create_access_token(
+        subject=email, expires_delta=access_token_expires
+    )
+    
+    return {
+        "token": new_access_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
+
+@router.post("/logout")
+async def admin_logout(response: Response):
+    """
+    Logout by clearing the refresh token cookie.
+    Frontend should also discard the access token from memory.
+    """
+    is_production = os.getenv("ENV", "production").lower() == "production"
+    response = JSONResponse(content={"message": "Logged out successfully"})
+    response.delete_cookie(
+        key="refresh_token",
+        httponly=True,
+        secure=is_production,
+        samesite="strict",
+        path="/api/admin/review"
+    )
+    return response
 
 @router.post("/create", response_model=dict)
 async def create_admin(new_admin: AdminCreate, current_admin: dict = Depends(get_admin_user)):
@@ -1669,6 +1807,10 @@ async def verify_2fa_setup(
     if not SecurityService.verify_2fa_code(secret, verify_data.code):
         raise HTTPException(status_code=400, detail="Invalid code")
         
+    # Encrypt the TOTP secret before storing in database
+    from utils.totp_encryption import encrypt_totp_secret
+    encrypted_secret = encrypt_totp_secret(secret)
+    
     # Enable 2FA for user
     mongo_service = await get_optimized_mongodb_service()
     collection = await mongo_service.get_collection("admins")
@@ -1678,7 +1820,7 @@ async def verify_2fa_setup(
         {
             "$set": {
                 "two_factor_enabled": True,
-                "two_factor_secret": secret,
+                "two_factor_secret": encrypted_secret,
                 "two_factor_method": "totp"
             }
         }

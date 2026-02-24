@@ -126,6 +126,7 @@ app.add_middleware(
         "http://easier-frontend.vercel.app",
         "https://www.eaiser.ai",
         "https://eaiser.ai",
+        "https://admin.eaiser.ai",
         "https://eaiserai.io",
         "http://localhost:5173",
         "http://localhost:3000",
@@ -133,7 +134,9 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
-        "https://www.eaiser.ai"
+        "http://admin.localhost:5173",
+        "http://admin.localhost:3000",
+        "http://admin.localhost:5174",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -184,16 +187,54 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
 # Add timeout middleware before other middlewares
 app.add_middleware(RequestTimeoutMiddleware)
 
-# Security Headers Middleware to support Google Auth / FedCM
+# Production Security Headers Middleware
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
+        # Anti-clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        # HSTS (1 year, include subdomains)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        # Referrer policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # Content Security Policy (strict defaults)
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' https://accounts.google.com https://apis.google.com; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https://eaiser.ai https://admin.eaiser.ai https://*.eaiser.ai; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
         # Required for Google Sign-In popups and One Tap
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
-        response.headers["Referrer-Policy"] = "no-referrer-when-downgrade"
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+# Admin Panel Kill Switch Middleware
+class AdminKillSwitchMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        # Check if this is an admin route
+        if "/admin/" in path:
+            admin_enabled = os.environ.get("ADMIN_PANEL_ENABLED", "true").lower()
+            if admin_enabled == "false":
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "Admin panel is temporarily disabled for maintenance.",
+                        "status": "maintenance"
+                    }
+                )
+        return await call_next(request)
+
+app.add_middleware(AdminKillSwitchMiddleware)
 
 # Log all incoming requests
 app.add_middleware(TimingMiddleware)
@@ -417,6 +458,14 @@ async def startup_event():
         logger.info("✅ Optimized MongoDB Service initialized")
     except Exception as e:
         logger.error(f"❌ Optimized MongoDB Service initialization failed: {str(e)}")
+
+    # Initialize Admin Login Monitoring indexes
+    try:
+        from services.admin_login_monitor import AdminLoginMonitor
+        await AdminLoginMonitor.create_indexes()
+        logger.info("✅ Admin login monitoring initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Admin login monitor index creation failed: {str(e)}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
