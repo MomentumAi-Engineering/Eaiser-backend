@@ -100,6 +100,24 @@ async def create_database_indexes():
             "location_idx", 
             "geospatial index (latitude, longitude)"
         )
+
+        # 8. Create indexes for users collection
+        users_collection = db.users
+        logger.info("👥 Creating user indexes...")
+        
+        # Email index (unique)
+        try:
+            await users_collection.create_index("email", name="user_email_unique", unique=True)
+            logger.info("✅ User email unique index created")
+        except Exception as e:
+            logger.info(f"⏭️ User email index already exists or failed: {e}")
+
+        # Username index (unique)
+        try:
+            await users_collection.create_index("username", name="user_username_unique", unique=True)
+            logger.info("✅ User username unique index created")
+        except Exception as e:
+            logger.info(f"⏭️ User username index already exists or failed: {e}")
         
         # List all indexes to verify creation
         logger.info("📋 Listing all indexes...")

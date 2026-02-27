@@ -221,8 +221,8 @@ Return this structure (Use professional US English and standard municipal termin
     "severity": "high/medium/low",
     "confidence": 0,
     "category": "public/private",
-    "summary_explanation": "PROFESSIONAL MUNICIPAL LOG: Provide a clear, technical description of the hazard (e.g. 'Evidence indicates a critical fracture in the primary road surface'). Explicitly state the location immediately (e.g. 'The incident is situated at {location_str}'). Conclude with the potential impact on public safety or thoroughfare accessibility.",
-    "admin_analysis": "Diagnostic details for municipal analysts. 1. Identify specific visual markers (e.g., thermal signatures, structural fatigue, debris volume) used for classification. 2. Justify the severity assignment using official public safety guidelines (e.g., 'Escalated to HIGH severity due to immediate risk of structural collapse and pedestrian hazard').",
+    "summary_explanation": "DETAILED & ENGAGING SUMMARY: Provide a professional, engaging summary of the issue (at least 3-4 detailed lines). IMPORTANT: Describe the specific issue clearly, its exact location context, how critical it is for public safety, and what kind of damage or disruption it could cause (e.g., traffic blockage, injury risk, structural failure). Include visual markers like surface cracks, debris type, or hazardous objects detected in the visual audit. Aim for a high-impact description that informs both authorities and citizens.",
+    "admin_analysis": "Diagnostic details for municipal analysts. Identify specific visual markers used for classification. Justify the severity assignment. Mention that reports with <75% confidence are routed to the EAiSER team for manual verification.",
     "user_feedback": "A concise, professional acknowledgment for the reporter."
   },
   "ai_evaluation": {

@@ -565,8 +565,61 @@ Access Admin Dashboard:
 
 
 # --------------------------------------------------------------------
-# ✅ User Welcome Email (Sleek & Explanatory)
+# ✅ User Verification Email (Sleek & Actionable)
 # --------------------------------------------------------------------
+
+async def send_verification_email(user_email: str, user_name: str, token: str) -> bool:
+    """
+    Sends a verification email to new users.
+    """
+    try:
+        frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
+        # Fallback for local dev if not set
+        if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
+            frontend_url = "http://localhost:5173"
+            
+        verification_link = f"{frontend_url}/verify-email?token={token}"
+        subject = "Verify your EAiSER AI Account"
+        
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body {{ background-color: #f8fafc; font-family: 'Inter', sans-serif; margin: 0; padding: 0; }}
+  .container {{ max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; }}
+  .header {{ background: #1e293b; padding: 40px; text-align: center; }}
+  .header h1 {{ margin: 0; color: #fbbf24; font-size: 28px; }}
+  .content {{ padding: 40px; color: #334155; line-height: 1.6; }}
+  .cta {{ text-align: center; margin: 30px 0; }}
+  .cta a {{ background: #fbbf24; color: #000; padding: 16px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; }}
+  .footer {{ text-align: center; padding: 20px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; }}
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="header"><h1>EAiSER AI</h1></div>
+    <div class="content">
+      <h2>Welcome to the Mission, {user_name}!</h2>
+      <p>Please verify your email address to activate your account and start reporting civic issues with AI precision.</p>
+      <div class="cta">
+        <a href="{verification_link}">Verify My Account</a>
+      </div>
+      <p>Or copy this link: <br>{verification_link}</p>
+      <p>This link will expire in 24 hours.</p>
+    </div>
+    <div class="footer">© 2025 EAiSER AI · Automated Civic Network</div>
+  </div>
+</body>
+</html>
+"""
+        text_content = f"Welcome to EAiSER AI, {user_name}!\n\nPlease verify your email: {verification_link}"
+        
+        return await send_email(user_email, subject, html_content, text_content)
+    except Exception as e:
+        logger.error(f"Failed to send verification email: {e}")
+        return False
 
 async def send_user_welcome_email(user_email: str, user_name: str) -> bool:
     """
@@ -804,4 +857,60 @@ Together, let's build smarter communities.
 
     except Exception as e:
         logger.error(f"❌ Failed to send user welcome email to {user_email}: {e}")
+        return False
+# --------------------------------------------------------------------
+# ✅ Password Reset Email
+# --------------------------------------------------------------------
+
+async def send_password_reset_email(email: str, token: str) -> bool:
+    """
+    Sends a secure password reset email with a 15-minute expiry warning.
+    """
+    try:
+        # Determine Frontend URL
+        frontend_url = os.getenv("FRONTEND_URL")
+        # Fallback for local dev if not set
+        if not frontend_url:
+            frontend_url = "http://localhost:5173"
+        elif frontend_url.endswith("/"):
+            frontend_url = frontend_url[:-1]
+
+        reset_link = f"{frontend_url}/reset-password?token={token}"
+        subject = "Reset Your EAiSER Password"
+        
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body {{ background-color: #0f172a; font-family: 'Inter', sans-serif; color: #f8fafc; padding: 40px 20px; }}
+  .container {{ max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; padding: 40px; border: 1px solid #334155; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); }}
+  h2 {{ color: #fbbf24; margin-top: 0; font-size: 24px; font-weight: 800; }}
+  p {{ color: #94a3b8; line-height: 1.6; font-size: 16px; }}
+  .btn {{ display: inline-block; background: #fbbf24; color: #0f172a !important; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: 700; margin: 25px 0; }}
+  .footer {{ margin-top: 30px; font-size: 12px; color: #64748b; border-top: 1px solid #334155; padding-top: 20px; text-align: center; }}
+</style>
+</head>
+<body>
+  <div class="container">
+    <h2>Secure Password Reset</h2>
+    <p>We received a request to reset your password. Click the button below to choose a new one. This link will expire in 15 minutes.</p>
+    
+    <a href="{reset_link}" class="btn">Reset Password</a>
+    
+    <p style="font-size: 14px;">If you didn't request this, you can safely ignore this email. Your password will remain unchanged.</p>
+    
+    <div class="footer">
+      © 2025 EAiSER AI · Secure Identity Protection
+    </div>
+  </div>
+</body>
+</html>
+"""
+        text_content = f"Reset your EAiSER password: {reset_link}\n\nThis link will expire in 15 minutes."
+
+        return await send_email(email, subject, html_content, text_content)
+    except Exception as e:
+        logger.error(f"Failed to send password reset email to {email}: {e}")
         return False

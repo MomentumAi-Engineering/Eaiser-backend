@@ -379,12 +379,13 @@ async def send_authority_email(
     lat_fmt = f"{latitude:.5f}" if isinstance(latitude, (int, float)) else "N/A"
     lon_fmt = f"{longitude:.5f}" if isinstance(longitude, (int, float)) else "N/A"
 
-    # Generate Recommended Actions HTML
-    actions_list = report.get('recommended_actions', [])
-    if not actions_list:
-        actions_list = ["No specific recommendations provided."]
-    
-    actions_html = "".join([f"<li>{action}</li>" for action in actions_list])
+    # Generate Routing HTML
+    if not authorities:
+        department_list = [{"name": "City Department", "type": "general"}]
+    else:
+        department_list = authorities
+        
+    routing_html = "".join([f"<li><strong>{auth.get('name', 'Department')}</strong> ({auth.get('type', 'General').title()})</li>" for auth in department_list])
 
     # Compute confidence bar color
     conf_val = float(confidence) if isinstance(confidence, (int, float, str)) and str(confidence).replace('.','',1).isdigit() else 0
@@ -494,24 +495,13 @@ async def send_authority_email(
             padding: 20px;
             margin-top: 20px;
         }}
-        .actions-list {{
+        .routing-list {{
             padding-left: 20px;
             margin: 0;
+            color: #475569;
         }}
-        .actions-list li {{
+        .routing-list li {{
             margin-bottom: 8px;
-        }}
-        .confidence-meter {{
-            height: 8px;
-            background: #e2e8f0;
-            border-radius: 4px;
-            margin: 10px 0;
-            overflow: hidden;
-        }}
-        .confidence-fill {{
-            height: 100%;
-            background-color: {conf_bar_color};
-            width: {confidence}%;
         }}
         .footer {{
             background-color: #f8fafc;
@@ -584,28 +574,13 @@ async def send_authority_email(
             <p style="font-size: 13px; color: #666; margin-bottom: 5px;">Primary visual evidence from the scene:</p>
             <img src="cid:issue_image" alt="Incident Evidence" class="evidence-image">
 
-            <div class="section-header" style="margin-top: 40px;">3. AI Deployment Analysis</div>
-            
+            <div class="section-header" style="margin-top: 40px;">3. Incident Routing</div>
             <div class="analysis-card">
-                <span class="label">System Confidence</span>
-                <div class="confidence-meter">
-                    <div class="confidence-fill"></div>
-                </div>
-                <div style="font-size: 12px; color: #666;">Analysis match: {confidence}% precision</div>
-
-                <div style="margin-top: 20px;">
-                    <span class="label">Root Cause Analysis</span>
-                    <p style="margin: 5px 0 15px 0; font-size: 14px;">{root_causes}</p>
-                    
-                    <span class="label">Potential Impact / Hazard</span>
-                    <p style="margin: 5px 0 0 0; font-size: 14px;">{potential_impact}</p>
-                </div>
+                <p style="margin: 0 0 15px 0; font-size: 14px; color: #334155; font-weight: 500;">This incident has been securely routed to the following departments for appropriate action:</p>
+                <ul class="routing-list" style="font-size: 15px;">
+                    {routing_html}
+                </ul>
             </div>
-
-            <div class="section-header" style="margin-top: 40px;">4. Recommended Response Protocol</div>
-            <ul class="actions-list" style="font-size: 14px;">
-                {actions_html}
-            </ul>
         </div>
 
         <div class="footer">

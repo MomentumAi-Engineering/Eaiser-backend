@@ -155,7 +155,9 @@ class IssueResponse(BaseModel):
     confidence: Optional[float] = 0.0
     issue_type: Optional[str] = None
     severity: Optional[str] = None
+    image_url: Optional[str] = None
     cached: Optional[bool] = False
+    is_guest: bool = False
 
 class IssueStatusUpdate(BaseModel):
     status: str
@@ -203,6 +205,7 @@ class Issue(BaseModel):
     user_email: Optional[str] = None
     authority_email: Optional[List[str]] = None
     authority_name: Optional[List[str]] = None
+    image_url: Optional[str] = None
     processing_time_ms: Optional[float] = None
     
     class Config:
@@ -567,7 +570,9 @@ async def process_issue_background(
             
             # Determine initial status based on guard decision
             final_status = "pending"
-            if decision.action == "route_to_review_team":
+            if decision.action == "auto_dispatch":
+                final_status = "dispatched"
+            elif decision.action in ("route_to_review_team", "hold_for_review"):
                 final_status = "needs_review"
             elif decision.action == "reject":
                 final_status = "rejected"
@@ -726,16 +731,47 @@ async def create_issue_optimized(
     _: None = Depends(rate_limit_dependency)
 ):
     """
-    🚀 Ultra-optimized issue creation endpoint
-    
-    Features:
-    - Async background processing
-    - Intelligent caching
-    - Fast response times
-    - Automatic scaling
+    🚀 Ultra-optimized issue creation endpoint with Guest Limits
     """
     start_time = time.time()
+    is_guest_user = False
     
+    # Check for authentication
+    token = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+    
+    user_info = None
+    if token:
+        try:
+            user_info = await get_current_user(token)
+            logger.info(f"✅ Authenticated user {user_info.get('sub')} creating issue")
+        except:
+            logger.warning("⚠️ Invalid token provided, treating as guest")
+            token = None
+    
+    if not token:
+        is_guest_user = True
+        # Guest Limit Enforcement (Max 2 reports per guest)
+        client_ip = request.client.host if request.client else "unknown"
+        redis_service = await get_redis_cluster_service()
+        if redis_service:
+            guest_key = f"guest_report_count:{client_ip}"
+            count_data = await redis_service.redis_client.get(guest_key)
+            count = int(count_data) if count_data else 0
+            
+            if count >= 2:
+                logger.warning(f"🚫 Guest limit reached for IP: {client_ip}")
+                raise HTTPException(
+                    status_code=403, 
+                    detail="Guest report limit reached (2/2). Please login or create an account to continue reporting."
+                )
+            
+            # Increment guest report count (expire in 24 hours)
+            await redis_service.redis_client.setex(guest_key, 86400, count + 1)
+            logger.info(f"👤 Guest report created. New count for {client_ip}: {count + 1}")
+
     try:
         image_content = b""
         if image:
@@ -751,9 +787,8 @@ async def create_issue_optimized(
         # Generate unique issue ID
         issue_id = str(uuid.uuid4())
         
-        # Prepare request for processing
-        # Wait for processing to complete to ensure "End-to-End" integration
-        # This provides immediate feedback to the user on the frontend
+        # Use authenticated email if available
+        final_email = user_info.get("sub") if user_info else user_email
         
         # 1. We call the async processor directly (AWAIT)
         issue_doc = await process_issue_background(
@@ -763,7 +798,7 @@ async def create_issue_optimized(
             zip_code=zip_code,
             latitude=latitude,
             longitude=longitude,
-            user_email=user_email,
+            user_email=final_email,
             description=description,
             category=category,
             severity=severity,
@@ -783,7 +818,7 @@ async def create_issue_optimized(
             issue_id=issue_id,
             id=issue_id, # Compatibility
             status=issue_doc.get("status", "pending"),
-            message="Issue processed successfully",
+            message="Issue processed successfully" if not is_guest_user else "Guest report generated! Login to view full details and submit.",
             report={
                 "issue_id": issue_id,
                 "status": issue_doc.get("status", "pending"),
@@ -794,7 +829,9 @@ async def create_issue_optimized(
             processing_time_ms=processing_time,
             confidence=issue_doc.get("confidence", 0.0),
             issue_type=issue_doc.get("issue_type", issue_type),
-            severity=issue_doc.get("severity", severity)
+            severity=issue_doc.get("severity", severity),
+            image_url=f"/api/issues/{issue_id}/image" if issue_doc.get("image_hash") != f"manual_{issue_id}" else None,
+            is_guest=is_guest_user
         )
         
 
@@ -995,8 +1032,10 @@ async def get_issue_optimized(
         if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
             issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
         
-        # Merge processing_time_ms into issue_data to avoid duplicate parameter error
+        # Merge processing_time_ms and image_url into issue_data
         issue_data['processing_time_ms'] = processing_time
+        if issue_data.get('image_id') or issue_data.get('image_hash') != f"manual_{issue_id}":
+            issue_data['image_url'] = f"/api/issues/{issue_id}/image"
         return Issue(**issue_data)
         
     except HTTPException:
@@ -1106,6 +1145,9 @@ async def get_issues_optimized(
         for issue_data in issues_data:
             if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
                 issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
+            # Populate image_url
+            if issue_data.get('image_id') or issue_data.get('image_hash') != f"manual_{issue_data.get('_id')}":
+                issue_data['image_url'] = f"/api/issues/{issue_data['_id']}/image"
         
         return [
             Issue(**{**issue_data, 'processing_time_ms': processing_time})
@@ -1296,10 +1338,12 @@ async def get_issue_image(issue_id: str):
 async def submit_issue_optimized(
     issue_id: str,
     request: SubmitRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user)
 ):
     """
     📨 Submit issue to authorities with optimized logic and guard checks
+    🔒 Authentication Required
     """
     logger.info(f"🚀 Processing optimized submit request for issue {issue_id}")
     start_time = time.time()
@@ -1361,9 +1405,9 @@ async def submit_issue_optimized(
         issue_type = (report.get("issue_type") or issue.get("issue_type", "unknown")).lower()
         restricted_categories = ["other", "none", "unknown", "fake", "ai_generated", "cartoon"]
         
-        is_restricted = any(r in issue_type for r in restricted_categories) or "fire" in issue_type and "uncontrolled" not in issue_type
+        is_restricted = any(r in issue_type for r in restricted_categories) or ("fire" in issue_type and "uncontrolled" not in issue_type)
         
-        needs_review = is_restricted or conf_val < 70
+        needs_review = is_restricted or conf_val <= 75
         
         if needs_review:
             # Move to needs_review status

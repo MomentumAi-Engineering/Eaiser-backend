@@ -72,7 +72,7 @@ class FraudScorer:
 class AuthorityDispatchGuard:
     """Guard orchestrates Risk & Fraud scorers to decide final action."""
 
-    def __init__(self, auto_dispatch_threshold: float = 85, fraud_reject_threshold: float = 65):
+    def __init__(self, auto_dispatch_threshold: float = 75.0, fraud_reject_threshold: float = 85.0):
         self.risk_scorer = RiskScorer()
         self.fraud_scorer = FraudScorer()
         self.auto_dispatch_threshold = auto_dispatch_threshold
@@ -95,62 +95,51 @@ class AuthorityDispatchGuard:
         policy_conflict = bool(payload.get("policy_conflict"))
         reporter_trust = float(payload.get("reporter_trust_score") or 50)
 
-        # Decision logic
-        # 1. Reject Case: EXTREMELY high fraud signals only
-        # Raised threshold to 85 to prevent screening out legitimate but low-quality/duplicate tests
-        if fraud >= 85 and confidence < 30:
+        # Decision logic based on User Requirements:
+        # 1. Reject Case: Very low confidence or extreme fraud (spam/fakes)
+        if fraud >= self.fraud_reject_threshold and confidence < 30:
              action = "reject"
-             reasons.append("Critical fraud risk detected with low confidence.")
-             if duplicates:
-                 reasons.append("Duplicate report detected.")
+             reasons.append("Critical fraud risk detected with extremely low confidence.")
              steps.append("Auto-screen out; do not notify.")
         
-        # 2. Benign/Controlled Fire/Normal Image Case -> Route to Review Team
-        # Now captures duplicates and low confidence reports instead of rejecting them
-        # Changed confidence threshold from 60 to 70 as per user request
-        # Also catches Unknown/Other/None issue types for manual review
-        elif policy_conflict or confidence < 70 or severity == "low" or duplicates or issue_type in ["unknown", "other", "none", "general", "bonfire", "controlled_fire", "festival", "ceremony"]:
+        # 2. Review Team Case: 
+        # - Confidence <= 75%
+        # - AI is confused or category is "other", "none", "unknown"
+        # - Potential policy conflict or duplicates
+        elif (
+            confidence < self.auto_dispatch_threshold 
+            or policy_conflict 
+            or duplicates
+            or issue_type in ["unknown", "other", "none", "general", "bonfire", "controlled_fire", "festival", "ceremony"]
+        ):
             action = "route_to_review_team"
+            if confidence < self.auto_dispatch_threshold:
+                reasons.append(f"Confidence ({confidence}%) is below the direct authority notification threshold of {self.auto_dispatch_threshold}%.")
+            if issue_type in ["unknown", "other", "none", "general"]:
+                reasons.append(f"Issue category '{issue_type}' is ambiguous or unrecognized by our AI.")
             if policy_conflict:
-                reasons.append("Policy context suggests controlled/allowed activity.")
-            if confidence < 70:
-                reasons.append(f"Confidence below threshold ({confidence}%).")
-            if severity == "low":
-                reasons.append("Low severity issue.")
+                reasons.append("Environmental context suggests a potential false positive or policy-compliant activity.")
             if duplicates:
-                reasons.append("Potential duplicate report.")
-            if issue_type in ["unknown", "other", "none", "general", "bonfire", "controlled_fire", "festival", "ceremony"]:
-                reasons.append(f"Issue type '{issue_type}' routed for manual review.")
-            steps.append("Route to internal review team for manual verification.")
+                reasons.append("Potential duplicate report detected in this area.")
             
-        # 3. Auto Dispatch Case
+            reasons.append("Report routed to EAiSER Admin Team for human verification before authority dispatch.")
+            steps.append("EAiSER team must verify context and severity manually.")
+            
+        # 3. Auto Dispatch Case: Confidence > 75% + High Severity + Valid Metadata
         elif (
             confidence >= self.auto_dispatch_threshold
-            and severity in ("high", "urgent")
             and metadata_ok
             and not duplicates
         ):
             action = "auto_dispatch"
-            reasons.append("High confidence, severe issue, complete metadata, and no duplicates.")
-            steps.append("Dispatch to authority; include concise summary and map link.")
+            reasons.append(f"High confidence ({confidence}%) report verified for direct authority notification.")
+            steps.append("Directly dispatch alert to relevant municipal authorities via EAiSER Secure Portal.")
             
-        # 4. Default Fallback -> Hold for Review (General)
+        # 4. Default Fallback
         else:
-            action = "hold_for_review"
-            if duplicates:
-                reasons.append("Potential duplicate in same area/time window.")
-            if reporter_trust < 40:
-                reasons.append("Low reporter trust score.")
-            if not metadata_ok:
-                reasons.append("Incomplete metadata (address/coordinates/evidence).")
-            steps.extend(
-                [
-                    "Request second photo/video or short confirmation.",
-                    "Run duplicate check across recent nearby reports.",
-                    "Verify geocoding; attach authoritative policy/burn-ban info.",
-                    "Escalate to human reviewer if risk high (>70).",
-                ]
-            )
+            action = "route_to_review_team"
+            reasons.append("Defaulting to review team for additional safety verification.")
+            steps.append("Manual review required.")
 
         return DispatchDecision(
             action=action,

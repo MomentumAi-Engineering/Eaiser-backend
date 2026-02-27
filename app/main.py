@@ -119,34 +119,7 @@ app = FastAPI(title="Eaiser AI Backend")
 template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
 templates = Jinja2Templates(directory=template_dir)
 
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://easier-frontend.vercel.app",
-        "https://www.eaiser.ai",
-        "https://eaiser.ai",
-        "https://admin.eaiser.ai",
-        "https://eaiserai.io",
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "http://admin.localhost:5173",
-        "http://admin.localhost:3000",
-        "http://admin.localhost:5174",
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=[
-        "Accept", "Accept-Language", "Content-Language", "Content-Type",
-        "Authorization", "X-Requested-With", "Origin",
-        "Access-Control-Request-Method", "Access-Control-Request-Headers"
-    ],
-    expose_headers=["*"]
-)
+
 
 # Request timeout middleware to prevent hung requests
 class RequestTimeoutMiddleware(BaseHTTPMiddleware):
@@ -248,8 +221,11 @@ async def log_requests(request: Request, call_next):
         path.startswith("/assets/"),
         path.endswith((".ico", ".png", ".jpg", ".css", ".js"))
     ])
+    
     if should_log:
-        logger.info(f"📥 {request.method} {path} from {request.client.host}")
+        client_host = request.client.host if request.client else "unknown"
+        logger.info(f"📥 {request.method} {path} from {client_host}")
+    
     try:
         response = await call_next(request)
         if should_log and response.status_code >= 400:
@@ -257,7 +233,39 @@ async def log_requests(request: Request, call_next):
         return response
     except Exception as e:
         logger.error(f"💥 Error processing {request.method} {path}: {str(e)}", exc_info=True)
-        raise
+        # If we hit an error here, WE MUST still return a response or CORS will fail
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error during request processing"}
+        )
+
+# --------------------------------------------------------------------
+# 🛡️ FINAL WRAPPERS (CORS MUST BE OUTSIDE EVERYTHING)
+# --------------------------------------------------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://easier-frontend.vercel.app",
+        "https://www.eaiser.ai",
+        "https://eaiser.ai",
+        "https://admin.eaiser.ai",
+        "https://eaiserai.io",
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://admin.localhost:5173",
+        "http://admin.localhost:3000",
+        "http://admin.localhost:5174",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
+)
 
 @app.exception_handler(Exception)
 async def custom_exception_handler(request: Request, exc: Exception):

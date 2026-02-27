@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, EmailStr
 from datetime import datetime, timedelta
@@ -10,6 +10,8 @@ from google.oauth2 import id_token
 from google.auth.transport import requests
 import os
 import logging
+import secrets
+import hashlib
 
 # Setup Logging
 logger = logging.getLogger(__name__)
@@ -21,20 +23,59 @@ logger.info(f"Google Auth Configured with Client ID: {GOOGLE_CLIENT_ID[:10]}..."
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from fastapi.security import OAuth2PasswordBearer
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+        return {"sub": email, "id": payload.get("id"), "role": payload.get("role")}
+    except JWTError:
+        raise credentials_exception
+
+class ProfileUpdate(BaseModel):
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    username: Optional[str] = None
+
+class PasswordChange(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+class NotificationUpdate(BaseModel):
+    email: Optional[bool] = None
+    push: Optional[bool] = None
+    updates: Optional[bool] = None
 
 # Schema definitions
 class UserCreate(BaseModel):
-    name: str = "User"
-    fullName: Optional[str] = None # Added for compatibility with new frontend
+    firstName: str
+    lastName: str
+    username: str
     email: EmailStr
     password: str
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    identifier: str # Email or Username
     password: str
 
 class GoogleLogin(BaseModel):
     credential: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
 
 class Token(BaseModel):
     access_token: str
@@ -53,63 +94,61 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 # ... (intervening lines)
 
-@router.post("/signup", response_model=Token)
-async def signup(user: UserCreate):
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+@router.post("/signup", response_model=Dict[str, Any])
+async def signup(user: UserCreate, background_tasks: BackgroundTasks):
     try:
         db = await get_db()
-        # Check if user exists (case-insensitive)
-        import re
-        existing_user = await db["users"].find_one({"email": {"$regex": f"^{re.escape(user.email)}$", "$options": "i"}})
-        if existing_user:
+        email = user.email.lower()
+        username = user.username.lower()
+
+        # Check if email exists
+        if await db["users"].find_one({"email": email}):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already registered"
             )
 
-        # Hash password and store
+        # Check if username exists
+        if await db["users"].find_one({"username": username}):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already taken"
+            )
+
+        # Hash password
         hashed_password = get_password_hash(user.password)
         
-        # Handle logic for fullName/name compatibility
-        final_name = user.name
-        if user.fullName and (user.name == "User" or not user.name):
-            final_name = user.fullName
+        # Verification token
+        verification_token = secrets.token_urlsafe(32)
             
         new_user = {
-            "name": final_name,
-            "email": user.email,
+            "first_name": user.firstName,
+            "last_name": user.lastName,
+            "username": username,
+            "email": email,
             "hashed_password": hashed_password,
             "role": "user",
             "is_active": True,
+            "email_verified": False,
+            "verification_token": verification_token,
             "created_at": datetime.utcnow()
         }
         
-        result = await db["users"].insert_one(new_user)
-        new_user["_id"] = str(result.inserted_id)
+        await db["users"].insert_one(new_user)
         
-        # Create token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": user.email, "role": "user", "id": str(result.inserted_id)},
-            expires_delta=access_token_expires
-        )
-        
-        # Send Welcome Email
+        # Send Verification Email in background
         try:
-            from services.email_service import send_user_welcome_email
-            await send_user_welcome_email(user.email, user.name)
+            from services.email_service import send_verification_email
+            background_tasks.add_task(send_verification_email, email, user.firstName, verification_token)
         except Exception as email_error:
-             # Log but don't fail the signup
-            logger.error(f"Failed to send welcome email: {email_error}")
+            logger.error(f"Failed to dispatch verification email: {email_error}")
 
         return {
-            "access_token": access_token, 
-            "token_type": "bearer",
-            "user": {
-                "id": str(result.inserted_id),
-                "name": user.name,
-                "email": user.email,
-                "role": "user"
-            }
+            "message": "Account created successfully. Please check your email to verify your account.",
+            "email": email
         }
             
     except HTTPException:
@@ -124,14 +163,20 @@ async def signup(user: UserCreate):
 async def login(user_data: UserLogin):
     try:
         db = await get_db()
-        import re
-        user = await db["users"].find_one({"email": {"$regex": f"^{re.escape(user_data.email)}$", "$options": "i"}})
+        identifier = user_data.identifier.lower()
         
-        # Check if user exists AND has a password (google-auth users might not have one)
+        # Find by email or username
+        user = await db["users"].find_one({
+            "$or": [
+                {"email": identifier},
+                {"username": identifier}
+            ]
+        })
+        
         if not user or "hashed_password" not in user or not verify_password(user_data.password, user["hashed_password"]):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password",
+                detail="Incorrect credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
@@ -140,6 +185,10 @@ async def login(user_data: UserLogin):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account is deactivated. Please contact support."
             )
+
+        # check email verification if needed
+        # if not user.get("email_verified", False):
+        #     raise HTTPException(status_code=403, detail="Please verify your email first.")
 
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
@@ -152,7 +201,9 @@ async def login(user_data: UserLogin):
             "token_type": "bearer",
             "user": {
                 "id": str(user["_id"]),
-                "name": user.get("name", "User"),
+                "first_name": user.get("first_name", ""),
+                "last_name": user.get("last_name", ""),
+                "username": user.get("username", ""),
                 "email": user.get("email"),
                 "role": user.get("role", "user")
             }
@@ -161,6 +212,37 @@ async def login(user_data: UserLogin):
         raise
     except Exception as e:
         logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.post("/verify-email")
+async def verify_email(request: VerifyEmailRequest):
+    try:
+        db = await get_db()
+        user = await db["users"].find_one({"verification_token": request.token})
+        
+        if not user:
+            raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+            
+        await db["users"].update_one(
+            {"_id": user["_id"]},
+            {
+                "$set": {"email_verified": True},
+                "$unset": {"verification_token": ""}
+            }
+        )
+        
+        # Optional: Send welcome email after verification
+        try:
+            from services.email_service import send_user_welcome_email
+            await send_user_welcome_email(user["email"], user.get("first_name", "User"))
+        except:
+            pass
+            
+        return {"message": "Email verified successfully. You can now log in."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Verification error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/google", response_model=Token)
@@ -240,3 +322,182 @@ async def google_login(login_data: GoogleLogin):
     except Exception as e:
         logger.error(f"Google Login Error: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest, background_tasks: BackgroundTasks):
+    """
+    Generate a secure reset token and send it via email.
+    Always returns success to prevent email enumeration.
+    """
+    try:
+        db = await get_db()
+        email = request.email.lower()
+        
+        # 1. Check if user exists
+        user = await db["users"].find_one({"email": email})
+        
+        if user:
+            # 2. Generate secure token
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+            
+            # 3. Store hashed token in DB with 15-min expiry
+            await db["users"].update_one(
+                {"_id": user["_id"]},
+                {
+                    "$set": {
+                        "reset_password_token": token_hash,
+                        "reset_password_expires": datetime.utcnow() + timedelta(minutes=15)
+                    }
+                }
+            )
+            
+            # 4. Send email in background
+            from services.email_service import send_password_reset_email
+            background_tasks.add_task(send_password_reset_email, user["email"], raw_token)
+            
+            logger.info(f"🔑 Password reset initiated for {email}")
+
+        # Always return generic success message
+        return {"message": "If an account exists with this email, you will receive a password reset link shortly."}
+
+    except Exception as e:
+        logger.error(f"Forgot password error: {e}")
+        # Still return success to prevent enumeration
+        return {"message": "If an account exists with this email, you will receive a password reset link shortly."}
+
+@router.post("/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    """
+    Verify token hash and expiry, then update password.
+    Invalides token after successful reset.
+    """
+    try:
+        db = await get_db()
+        token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+        
+        # Find user with valid, non-expired token
+        user = await db["users"].find_one({
+            "reset_password_token": token_hash,
+            "reset_password_expires": {"$gt": datetime.utcnow()}
+        })
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired reset token"
+            )
+            
+        # Hash new password
+        hashed_password = get_password_hash(request.new_password)
+        
+        # Update password and clear reset token fields (single-use)
+        await db["users"].update_one(
+            {"_id": user["_id"]},
+            {
+                "$set": {"hashed_password": hashed_password},
+                "$unset": {
+                    "reset_password_token": "",
+                    "reset_password_expires": ""
+                }
+            }
+        )
+        
+        logger.info(f"✅ Password successfully reset for user {user['email']}")
+        return {"message": "Password has been successfully updated. You can now log in."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Reset password error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.get("/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    try:
+        db = await get_db()
+        user = await db["users"].find_one({"email": current_user["sub"]})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return {
+            "id": str(user["_id"]),
+            "first_name": user.get("first_name", ""),
+            "last_name": user.get("last_name", ""),
+            "username": user.get("username", ""),
+            "email": user.get("email"),
+            "role": user.get("role", "user"),
+            "avatar": user.get("avatar"),
+            "notifications": user.get("notifications", {"email": True, "push": False, "updates": True}),
+            "email_verified": user.get("email_verified", False),
+            "created_at": user.get("created_at")
+        }
+    except Exception as e:
+        logger.error(f"Error fetching user: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.put("/profile")
+async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_current_user)):
+    try:
+        db = await get_db()
+        update_data = {}
+        if data.firstName: update_data["first_name"] = data.firstName
+        if data.lastName: update_data["last_name"] = data.lastName
+        if data.username:
+            # Check if username is taken
+            existing = await db["users"].find_one({"username": data.username.lower(), "email": {"$ne": current_user["sub"]}})
+            if existing:
+                raise HTTPException(status_code=400, detail="Username already taken")
+            update_data["username"] = data.username.lower()
+        
+        if not update_data:
+            return {"message": "No changes requested"}
+            
+        await db["users"].update_one(
+            {"email": current_user["sub"]},
+            {"$set": update_data}
+        )
+        return {"message": "Profile updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating profile: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.post("/change-password")
+async def change_password(data: PasswordChange, current_user: dict = Depends(get_current_user)):
+    try:
+        db = await get_db()
+        user = await db["users"].find_one({"email": current_user["sub"]})
+        
+        if not user or not verify_password(data.currentPassword, user["hashed_password"]):
+            raise HTTPException(status_code=400, detail="Incorrect current password")
+            
+        hashed_password = get_password_hash(data.newPassword)
+        await db["users"].update_one(
+            {"_id": user["_id"]},
+            {"$set": {"hashed_password": hashed_password}}
+        )
+        return {"message": "Password updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing password: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.put("/notifications")
+async def update_notifications(data: NotificationUpdate, current_user: dict = Depends(get_current_user)):
+    try:
+        db = await get_db()
+        update_data = {}
+        if data.email is not None: update_data["notifications.email"] = data.email
+        if data.push is not None: update_data["notifications.push"] = data.push
+        if data.updates is not None: update_data["notifications.updates"] = data.updates
+        
+        await db["users"].update_one(
+            {"email": current_user["sub"]},
+            {"$set": update_data}
+        )
+        return {"message": "Notification preferences updated"}
+    except Exception as e:
+        logger.error(f"Error updating notifications: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
