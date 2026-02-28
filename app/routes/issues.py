@@ -13,6 +13,7 @@ from utils.timezone import get_timezone_name
 from utils.security import SECRET_KEY, ALGORITHM
 from jose import jwt, JWTError
 from services.authority_service import resolve_authorities
+from services.post_classification_engine import apply_fire_detection_override, apply_confidence_controls, DANGER_INDICATORS
 from bson.objectid import ObjectId
 import uuid
 import logging
@@ -162,6 +163,29 @@ def get_department_email_content(department_type: str, issue_data: dict, is_user
         or "No summary available"
     )
     
+    # ---------------------------------------------------------------
+    # TASK 1: EMAIL LANGUAGE HARDENING
+    # ---------------------------------------------------------------
+    ai_eval = report.get("ai_evaluation", {})
+    issue_detected = ai_eval.get("issue_detected", True)
+    ai_confidence_val = 0.0
+    try:
+        ai_confidence_val = float(confidence)
+    except (ValueError, TypeError):
+        ai_confidence_val = 0.0
+
+    # A. If issue_detected == false, replace summary with safe language
+    if issue_detected is False:
+        summary_text = (
+            "AI did not confidently detect a civic issue. "
+            "This report has been flagged for manual review."
+        )
+
+    # B. If confidence < 60, add disclaimer line
+    if ai_confidence_val < 60:
+        summary_text += "\nConfidence level is low; manual verification recommended."
+    # ---------------------------------------------------------------
+    
     severity_checkboxes = {
         "High": "□ High  ☑ Medium  □ Low" if report.get("issue_overview", {}).get("severity", "").lower() == "medium" else "☑ High  □ Medium  □ Low" if report.get("issue_overview", {}).get("severity", "").lower() == "high" else "□ High  □ Medium  ☑ Low",
         "Medium": "□ High  ☑ Medium  □ Low",
@@ -197,76 +221,34 @@ Disclaimer: This AI-generated report may contain inaccuracies. Refer to the atta
 """
         return subject, text_content
     else:
-        templates = {
-            "fire": {
-                "subject": f"Urgent Fire Hazard Alert – {issue_type.title()} at {final_address}",
-                "text_content": f"""
-Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
-Dear {authority_name.title()} Team,
-A critical {issue_type.title()} issue has been reported at {final_address} (Zip: {zip_code})
-Fire Department Action Required:
-• Issue Type: {category.title()} – {issue_type.title()}
-• Time Reported: {timestamp_formatted} {timezone_name}
-• Location: {final_address}
-• Zip Code: {zip_code}
-• GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
-• Live Location: {map_link}
-• Severity: {severity_checkboxes}
-• Report ID: {report.get('template_fields', {}).get('oid', 'N/A')}
-Photo Evidence:
-• File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
-• AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
-Contact eaiser@momntumai.com for further details.
-Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
-"""
-            },
-            "police": {
-                "subject": f"Public Safety Alert – {issue_type.title()} at {final_address}",
-                "text_content": f"""
-Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
-Dear {authority_name.title()} Team,
-A public safety issue ({issue_type.title()}) has been reported at {final_address} (Zip: {zip_code})
-Police Action Required:
-• Issue Type: {category.title()} – {issue_type.title()}
-• Time Reported: {timestamp_formatted} {timezone_name}
-• Location: {final_address}
-• Zip Code: {zip_code}
-• GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
-• Live Location: {map_link}
-• Severity: {severity_checkboxes}
-• Report ID: {report.get('template_fields', {}).get('oid', 'N/A')}
-Photo Evidence:
-• File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
-• AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
-Contact eaiser@momntumai.com for further details.
-Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
-"""
-            },
-            "public_works": {
-                "subject": f"Infrastructure Issue – {issue_type.title()} at {final_address}",
-                "text_content": f"""
-Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
-Dear {authority_name.title()} Team,
-An infrastructure issue ({issue_type.title()}) has been reported at {final_address} (Zip: {zip_code})
-Public Works Action Required:
-• Issue Type: {category.title()} – {issue_type.title()}
-• Time Reported: {timestamp_formatted} {timezone_name}
-• Location: {final_address}
-• Zip Code: {zip_code}
-• GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
-• Live Location: {map_link}
-• Severity: {severity_checkboxes}
-• Report ID: {report.get('template_fields', {}).get('oid', 'N/A')}
-Photo Evidence:
-• File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
-• AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
-Contact eaiser@momntumai.com for further details.
-Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
-"""
-            },
-            "general": {
-                "subject": f"General Issue – {issue_type.title()} at {final_address}",
-                "text_content": f"""
+        # TASK 1A: If issue_detected == false, do NOT use urgent/emergency subjects
+        if issue_detected is False:
+            safe_subject = f"Civic Report – {issue_type.title()} at {final_address} – Flagged for Review"
+            templates = {
+                "fire": {"subject": safe_subject},
+                "police": {"subject": safe_subject},
+                "public_works": {"subject": safe_subject},
+                "general": {"subject": safe_subject},
+            }
+        else:
+            templates = {
+                "fire": {
+                    "subject": f"Fire Hazard Alert – {issue_type.title()} at {final_address}",
+                },
+                "police": {
+                    "subject": f"Public Safety Alert – {issue_type.title()} at {final_address}",
+                },
+                "public_works": {
+                    "subject": f"Infrastructure Issue – {issue_type.title()} at {final_address}",
+                },
+                "general": {
+                    "subject": f"General Issue – {issue_type.title()} at {final_address}",
+                },
+            }
+
+        # Common text content builder (same for all departments)
+        template_subject = templates.get(department_type, templates["general"])["subject"]
+        text_content = f"""
 Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
 Dear {authority_name.title()} Team,
 An issue ({issue_type.title()}) has been reported at {final_address} (Zip: {zip_code})
@@ -285,12 +267,13 @@ Photo Evidence:
 Contact eaiser@momntumai.com for further details.
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
-            }
-        }
-        template = templates.get(department_type, templates["general"])
         # Override subject with unified subject if available, and append summary
-        subject = unified.get("email_subject", template["subject"]) 
-        text_content = template["text_content"] + f"\nUnified Summary:\n{summary_text}\n"
+        subject = unified.get("email_subject", template_subject)
+        # TASK 1A: Strip any remaining urgent/emergency phrases from subject
+        if issue_detected is False:
+            for phrase in ["Urgent Action Required", "Immediate Attention Needed", "Urgent "]:
+                subject = subject.replace(phrase, "")
+        text_content = text_content + f"\nUnified Summary:\n{summary_text}\n"
         return subject, text_content
 
 async def send_authority_email(
@@ -392,7 +375,14 @@ async def send_authority_email(
     conf_bar_color = "#5cb85c" if conf_val >= 80 else "#f0ad4e" if conf_val >= 50 else "#d9534f"
     
     report_oid = report.get('template_fields', {}).get('oid', 'N/A')
-    subject_override = f"CIVIC ALERT: {display_issue_type} - ID: {report_oid}"
+
+    # TASK 1: Email subject hardening based on ai_evaluation
+    ai_eval_email = report.get('ai_evaluation', {})
+    email_issue_detected = ai_eval_email.get('issue_detected', True)
+    if email_issue_detected is False:
+        subject_override = f"CIVIC REPORT: {display_issue_type} - ID: {report_oid} - Flagged for Review"
+    else:
+        subject_override = f"CIVIC ALERT: {display_issue_type} - ID: {report_oid}"
     
     # --- PROFESSIONAL LIGHT-MODE TEMPLATE ---
     html_content = f"""
@@ -817,6 +807,21 @@ async def create_issue(
         logger.error(f"Failed to read image: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to read image: {str(e)}")
     
+    # ---------------------------------------------------------------
+    # TASK 4: ADDRESS VALIDATION (STRICT MODE)
+    # ---------------------------------------------------------------
+    invalid_address_values = {"", "unknown", "unknown address", "not specified", "n/a"}
+    if not address or str(address).strip().lower() in invalid_address_values:
+        logger.warning(f"Address validation failed: '{address}'")
+        raise HTTPException(status_code=400, detail="Valid address required to generate report.")
+
+    # ---------------------------------------------------------------
+    # TASK 5: LATITUDE / LONGITUDE VALIDATION
+    # ---------------------------------------------------------------
+    if latitude is None or longitude is None or latitude == 0 or longitude == 0:
+        logger.warning(f"Coordinate validation failed: lat={latitude}, lon={longitude}")
+        raise HTTPException(status_code=400, detail="Valid geographic coordinates required.")
+
     try:
         # Pass reduced image to initial classifier
         issue_type, severity, confidence, category, priority = await classify_issue(image_content, description or "")
@@ -824,6 +829,39 @@ async def create_issue(
             logger.error("Failed to classify issue type")
             raise ValueError("Failed to classify issue type")
         logger.debug(f"Issue classified: type={issue_type}, severity={severity}, confidence={confidence}, category={category}, priority={priority}")
+
+        # ---------------------------------------------------------------
+        # TASK 6: FIRE DETECTION OVERRIDE ENGINE (post-classification)
+        # ---------------------------------------------------------------
+        fire_override = apply_fire_detection_override(
+            description=description or "",
+            issue_detected=True,  # classify_issue doesn't return issue_detected; default True
+            issue_type=issue_type,
+            severity=severity,
+            ai_confidence_percent=confidence,
+        )
+        if fire_override["fire_override_applied"]:
+            issue_type = fire_override["issue_type"]
+            severity = fire_override["severity"]
+            confidence = fire_override["ai_confidence_percent"]
+            logger.info(f"🔥 Fire override applied: type={issue_type}, severity={severity}, confidence={confidence}")
+
+        # ---------------------------------------------------------------
+        # TASK 7: CONFIDENCE CONTROL SYSTEM (post-classification)
+        # ---------------------------------------------------------------
+        conf_ctrl = apply_confidence_controls(
+            ai_confidence_percent=confidence,
+            issue_type=issue_type,
+            severity=severity,
+            description=description or "",
+        )
+        confidence = conf_ctrl["ai_confidence_percent"]
+        severity = conf_ctrl["severity"]
+        # priority recalculation after confidence control
+        priority = "High" if severity == "High" or confidence > 90 else ("Low" if confidence < 70 else "Medium")
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to classify issue: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to classify issue: {str(e)}")
@@ -884,6 +922,41 @@ async def create_issue(
         detected_type = str(issue_overview.get("type", "")).lower()
         confidence_val = issue_overview.get("confidence", 0)
         
+        # ---------------------------------------------------------------
+        # TASK 6: FIRE DETECTION OVERRIDE on report-level ai_evaluation
+        # ---------------------------------------------------------------
+        fire_override_report = apply_fire_detection_override(
+            description=description or "",
+            issue_detected=is_issue_detected if is_issue_detected is not None else True,
+            issue_type=detected_type,
+            severity=str(issue_overview.get("severity", severity)),
+            ai_confidence_percent=float(confidence_val) if confidence_val else confidence,
+        )
+        if fire_override_report["fire_override_applied"]:
+            ai_eval["issue_detected"] = fire_override_report["issue_detected"]
+            is_issue_detected = fire_override_report["issue_detected"]
+            issue_overview["severity"] = fire_override_report["severity"]
+            issue_overview["confidence"] = fire_override_report["ai_confidence_percent"]
+            confidence_val = fire_override_report["ai_confidence_percent"]
+            report["ai_evaluation"] = ai_eval
+            report["issue_overview"] = issue_overview
+
+        # ---------------------------------------------------------------
+        # TASK 7: CONFIDENCE CONTROL on report-level confidence
+        # ---------------------------------------------------------------
+        conf_ctrl_report = apply_confidence_controls(
+            ai_confidence_percent=float(confidence_val) if confidence_val else 0.0,
+            issue_type=detected_type or issue_type,
+            severity=str(issue_overview.get("severity", severity)),
+            description=description or "",
+        )
+        issue_overview["confidence"] = conf_ctrl_report["ai_confidence_percent"]
+        issue_overview["severity"] = conf_ctrl_report["severity"]
+        confidence_val = conf_ctrl_report["ai_confidence_percent"]
+        if conf_ctrl_report["low_confidence"]:
+            report["low_confidence"] = True
+        report["issue_overview"] = issue_overview
+
         # Conditions for rejection:
         # A. Explicitly detected as fake (confidence usually forced to ~5)
         if "fake" in str(ai_eval.get("image_analysis", "")).lower() or \
@@ -904,6 +977,28 @@ async def create_issue(
              # Allow "Other" if confidence is decent, but reject "None"
              if detected_type in ["none", ""]:
                  raise HTTPException(status_code=400, detail="Analysis failed: No valid infrastructure issue detected in this image.")
+
+        # ---------------------------------------------------------------
+        # TASK 2: SAFE HANDLING OF "NO ISSUE DETECTED"
+        # ---------------------------------------------------------------
+        no_issue_conditions = (
+            is_issue_detected is False
+            or confidence_val < 40
+            or str(issue_type).lower() == "unknown"
+        )
+        if no_issue_conditions:
+            logger.info(f"⚠️ Task 2: No-issue conditions met for {issue_id}. "
+                        f"issue_detected={is_issue_detected}, conf={confidence_val}, type={issue_type}")
+            # Enforce safe defaults
+            report.setdefault("template_fields", {})["priority"] = "Low"
+            issue_overview["severity"] = "Low"
+            report["issue_overview"] = issue_overview
+            report["recommended_actions"] = []
+            severity = "Low"
+            priority = "Low"
+            # Mark status for manual review (will be applied in DB later)
+            # The flag is used downstream to prevent dispatch
+            report["_manual_review_required"] = True
 
         recommended_actions = report.get("recommended_actions", [])
         if "recommended_actions" not in report:
@@ -1097,8 +1192,13 @@ async def create_issue(
         )
 
         issue_status = "pending"
+
+        # TASK 2: If _manual_review_required flag is set, override to manual_review
+        if report.get("_manual_review_required"):
+            issue_status = "manual_review_required"
+            logger.info(f"⚠️ Issue {issue_id} set to MANUAL_REVIEW_REQUIRED (Task 2 override)")
         # If action is explicitly reject, screen out.
-        if decision.action == "reject":
+        elif decision.action == "reject":
             issue_status = "screened_out"
             logger.warning(f"⚠️ Issue {issue_id} SCREENED OUT by dispatch guard")
         # If action is 'route_to_review_team', we keep it pending (or move to a specific 'needs_review' status if supported)
@@ -1139,36 +1239,40 @@ async def create_issue(
     except Exception:
         pass
     
-    try:
-        user_authority = [{"name": "User", "email": user_email or "eaiser@momntumai.com", "type": "general"}]
-        email_success = await send_authority_email(
-            issue_id=issue_id,
-            authorities=user_authority,
-            issue_type=issue_type,
-            final_address=final_address,
-            zip_code=zip_code or "N/A",
-            timestamp_formatted=timestamp_formatted,
-            report=report,
-            confidence=confidence,
-            category=category,
-            timezone_name=timezone_name,
-            latitude=latitude,
-            longitude=longitude,
-            image_content=image_content,
-            is_user_review=True
-        )
-        db = await get_db()
-        db.issues.update_one(
-            {"_id": issue_id},
-            {
-                "$set": {
-                    "email_status": "sent" if email_success else "failed",
-                    "email_errors": [] if email_success else ["Failed to send initial review email"]
+    # TASK 2: Do NOT auto-send authority emails if manual review is required
+    if not report.get("_manual_review_required"):
+        try:
+            user_authority = [{"name": "User", "email": user_email or "eaiser@momntumai.com", "type": "general"}]
+            email_success = await send_authority_email(
+                issue_id=issue_id,
+                authorities=user_authority,
+                issue_type=issue_type,
+                final_address=final_address,
+                zip_code=zip_code or "N/A",
+                timestamp_formatted=timestamp_formatted,
+                report=report,
+                confidence=confidence,
+                category=category,
+                timezone_name=timezone_name,
+                latitude=latitude,
+                longitude=longitude,
+                image_content=image_content,
+                is_user_review=True
+            )
+            db = await get_db()
+            db.issues.update_one(
+                {"_id": issue_id},
+                {
+                    "$set": {
+                        "email_status": "sent" if email_success else "failed",
+                        "email_errors": [] if email_success else ["Failed to send initial review email"]
+                    }
                 }
-            }
-        )
-    except Exception as e:
-        logger.error(f"Failed to send initial review email for issue {issue_id}: {str(e)}", exc_info=True)
+            )
+        except Exception as e:
+            logger.error(f"Failed to send initial review email for issue {issue_id}: {str(e)}", exc_info=True)
+    else:
+        logger.info(f"📧 Skipping authority email dispatch for issue {issue_id} (manual_review_required)")
     
     return IssueResponse(
         id=issue_id,
@@ -1189,8 +1293,21 @@ async def create_issue(
     )
 
 @router.post("/issues/{issue_id}/submit", response_model=IssueResponse)
-async def submit_issue(issue_id: str, request: SubmitRequest):
-    logger.debug(f"Processing submit request for issue {issue_id}")
+async def submit_issue(
+    issue_id: str,
+    request: SubmitRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    # ---------------------------------------------------------------
+    # TASK 3: AUTHENTICATION ENFORCEMENT
+    # ---------------------------------------------------------------
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required to submit report.",
+        )
+
+    logger.debug(f"Processing submit request for issue {issue_id} by user {current_user.get('sub', 'unknown')}")
     try:
         db = await get_db()
         fs = await get_fs()
