@@ -122,6 +122,7 @@ class OptimizedMongoDBService:
                 IndexModel([('timestamp', DESCENDING)], name='timestamp_desc'),
                 IndexModel([('report_id', ASCENDING)], name='report_id'),
                 IndexModel([('category', ASCENDING), ('priority', ASCENDING)], name='category_priority'),
+                IndexModel([('admin_review.timestamp', DESCENDING)], name='admin_review_timestamp'),
                 IndexModel([('address', TEXT), ('issue_type', TEXT)], name='address_issue_type_text'),
             ],
             'users': [
@@ -166,7 +167,7 @@ class OptimizedMongoDBService:
                     serverSelectionTimeoutMS=45000,
                     connectTimeoutMS=45000,
                     socketTimeoutMS=45000,
-                    maxPoolSize=20,                  # Reduced for stability
+                    maxPoolSize=100,                 # Optimization for concurrent users
                     minPoolSize=0,                   # Reduced to 0 to avoid startup hang
                     maxIdleTimeMS=30000,
                     waitQueueTimeoutMS=10000,
@@ -180,7 +181,7 @@ class OptimizedMongoDBService:
                     serverSelectionTimeoutMS=45000,
                     connectTimeoutMS=45000,
                     socketTimeoutMS=45000,
-                    maxPoolSize=20,                  # Reduced for stability
+                    maxPoolSize=100,                 # Optimization for concurrent users
                     minPoolSize=0,                   # Reduced to 0 to avoid startup hang
                     maxIdleTimeMS=45000,
                     waitQueueTimeoutMS=10000,

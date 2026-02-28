@@ -17,7 +17,7 @@ SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-should-be-in-env-file-and-
 REFRESH_SECRET_KEY = os.getenv("REFRESH_SECRET_KEY", SECRET_KEY + "-refresh-token-secret")
 logger.info(f"🔰 Security Config: ALGORITHM=HS256, SECRET_KEY={'SET (' + SECRET_KEY[:4] + '...)' if SECRET_KEY else 'NOT SET'}")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 15  # 15 minutes (production-grade)
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days (extended for development convenience)
 REFRESH_TOKEN_EXPIRE_DAYS = 7  # 7 days for refresh tokens
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

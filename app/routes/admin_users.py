@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 
 from services.mongodb_service import get_db
-from core.auth import get_admin_user
+from core.auth import get_admin_user, require_permission
 from bson import ObjectId
 
 router = APIRouter(
@@ -41,7 +41,7 @@ async def list_users(
     limit: int = 100,
     filter_risk: Optional[str] = None, # 'high_risk'
     search: Optional[str] = None,
-    admin: dict = Depends(get_admin_user)
+    admin: dict = Depends(require_permission("view_users"))
 ):
     """
     List all registered users with their reputation stats.
@@ -113,7 +113,7 @@ async def list_users(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/delete/{user_id}")
-async def delete_user(user_id: str, admin: dict = Depends(get_admin_user)):
+async def delete_user(user_id: str, admin: dict = Depends(require_permission("manage_users"))):
     """
     Permanently delete a user account and their associated data.
     """
@@ -211,7 +211,7 @@ async def delete_user(user_id: str, admin: dict = Depends(get_admin_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/toggle-status")
-async def toggle_user_status(action: UserStatusUpdate, admin: dict = Depends(get_admin_user)):
+async def toggle_user_status(action: UserStatusUpdate, admin: dict = Depends(require_permission("manage_users"))):
     """
     Block or Unblock a user.
     """

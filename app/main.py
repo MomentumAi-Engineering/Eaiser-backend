@@ -86,6 +86,16 @@ except ImportError:
     from app.routes.admin_review import router as admin_review_router
 
 try:
+    from routes.admin_assignment import router as admin_assignment_router
+except ImportError:
+    from app.routes.admin_assignment import router as admin_assignment_router
+
+try:
+    from routes.admin_settings import router as admin_settings_router
+except ImportError:
+    from app.routes.admin_settings import router as admin_settings_router
+
+try:
     from services.mongodb_service import init_db, close_db
 except ImportError:
     from app.services.mongodb_service import init_db, close_db
@@ -196,16 +206,35 @@ class AdminKillSwitchMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         # Check if this is an admin route
         if "/admin/" in path:
-            admin_enabled = os.environ.get("ADMIN_PANEL_ENABLED", "true").lower()
-            if admin_enabled == "false":
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "detail": "Admin panel is temporarily disabled for maintenance.",
-                        "status": "maintenance"
-                    }
-                )
+            # 1. Check ENV (Static override)
+            admin_enabled_env = os.environ.get("ADMIN_PANEL_ENABLED", "true").lower()
+            if admin_enabled_env == "false":
+                return self._maintenance_response()
+                
+            # 2. Check DB (Dynamic toggle)
+            try:
+                # We use the service directly to avoid circular dependency issues
+                from services.mongodb_service import get_db
+                db = await get_db()
+                settings = await db["settings"].find_one({"key": "maintenance_mode"})
+                if settings and settings.get("value") is True:
+                    # Exception: Allow login and settings routes so SA can turn it off
+                    if not any(x in path for x in ["/login", "/2fa", "/maintenance-toggle", "/maintenance-status"]):
+                        return self._maintenance_response()
+            except Exception as e:
+                # Fallback to allowing if DB check fails
+                logger.error(f"Maintenance check failed: {e}")
+                
         return await call_next(request)
+
+    def _maintenance_response(self):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Admin panel is temporarily disabled for maintenance.",
+                "status": "maintenance"
+            }
+        )
 
 app.add_middleware(AdminKillSwitchMiddleware)
 
@@ -395,6 +424,8 @@ app.include_router(issues_router, prefix="/api")
 app.include_router(reports_router, prefix="/api/reports")
 app.include_router(ai_router, prefix="/api")
 app.include_router(admin_review_router, prefix="/api")  # Mounted at /api/admin/review
+app.include_router(admin_assignment_router, prefix="/api") # Mounted at /api/admin/assignment
+app.include_router(admin_settings_router, prefix="/api") # Mounted at /api/admin/settings
 
 # Import and include Auth Router
 try:

@@ -25,7 +25,7 @@ from models.security_models import PasswordChangeRequest, TwoFactorSetup, TwoFac
 # Configure logging
 logger = logging.getLogger(__name__)
 
-from core.auth import get_admin_user
+from core.auth import get_admin_user, require_permission
 
 router = APIRouter(
     prefix="/admin/review", 
@@ -356,16 +356,19 @@ async def admin_logout(response: Response):
     return response
 
 @router.post("/create", response_model=dict)
-async def create_admin(new_admin: AdminCreate, current_admin: dict = Depends(get_admin_user)):
+async def create_admin(new_admin: AdminCreate, current_admin: dict = Depends(require_permission("create_team_member"))):
     """
-    Create a new admin user. Only accessible by super_admin.
+    Create a new admin user.
+    - Team Members are created by Super Admins or Admins.
+    - Admins/Super Admins are created ONLY by Super Admins.
     Sends welcome email with login credentials.
     """
-    # Check if current admin is super_admin
-    if current_admin.get("role") != "super_admin":
+    # Permission logic: 
+    # To create an 'admin' or 'super_admin', you need the 'create_admin' permission.
+    if new_admin.role in ["admin", "super_admin"] and not has_permission(current_admin.get("role"), "create_admin"):
         raise HTTPException(
             status_code=403, 
-            detail="Only super admins can create new admin users"
+            detail=f"Only super admins can create {new_admin.role} accounts"
         )
     
     mongo_service = await get_optimized_mongodb_service()
@@ -450,7 +453,7 @@ async def create_admin(new_admin: AdminCreate, current_admin: dict = Depends(get
         raise HTTPException(status_code=500, detail="Database error")
 
 @router.get("/list", response_model=List[dict])
-async def get_admins(current_admin: dict = Depends(get_admin_user)):
+async def get_admins(current_admin: dict = Depends(require_permission("view_team"))):
     """
     List all admin users.
     """
@@ -521,6 +524,357 @@ async def get_pending_reviews_debug():
         return {"error": str(e)}
 
 
+@router.get("/analytics/dashboard")
+async def get_dashboard_analytics(admin: dict = Depends(get_admin_user)):
+    """
+    REAL analytics dashboard data computed from MongoDB.
+    Returns: counts, trends, avg resolution time, weekly data, hotspot locations.
+    """
+    try:
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            raise HTTPException(status_code=503, detail="Database unavailable")
+        
+        collection = await mongo_service.get_collection("issues")
+        now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # --- OPTIMIZED: Use $facet to compute EVERYTHING in ONE database scan ---
+        pending_query = {"status": {"$in": ["pending", "needs_review", "pending_review", "screened_out"]}}
+        approved_query = {"status": {"$in": ["approved", "submitted"]}}
+        rejected_query = {"status": {"$in": ["rejected", "declined"]}}
+        resolved_query = {"status": {"$in": ["resolved", "completed"]}}
+
+        pipeline = [
+            {
+                "$facet": {
+                    "counts": [
+                        {
+                            "$group": {
+                                "_id": None,
+                                "total": {"$sum": 1},
+                                "pending": {"$sum": {"$cond": [{"$in": ["$status", ["pending", "needs_review", "pending_review", "screened_out"]]}, 1, 0]}},
+                                "approved": {"$sum": {"$cond": [{"$in": ["$status", ["approved", "submitted"]]}, 1, 0]}},
+                                "rejected": {"$sum": {"$cond": [{"$in": ["$status", ["rejected", "declined"]]}, 1, 0]}},
+                                "resolved": {"$sum": {"$cond": [{"$in": ["$status", ["resolved", "completed"]]}, 1, 0]}},
+                                "high_conf": {"$sum": {"$cond": [{"$gt": [{"$toDouble": {"$ifNull": ["$confidence", "$report.issue_overview.confidence_percent"]}}, 80]}, 1, 0]}},
+                                "approved_today": {"$sum": {"$cond": [
+                                    {"$and": [
+                                        {"$in": ["$status", ["approved", "submitted"]]},
+                                        {"$gte": ["$admin_review.timestamp", today_start]}
+                                    ]}, 1, 0
+                                ]}}
+                            }
+                        }
+                    ],
+                    "issue_types": [
+                        {"$group": {"_id": "$issue_type", "count": {"$sum": 1}}},
+                        {"$sort": {"count": -1}},
+                        {"$limit": 8}
+                    ],
+                    "hotspots": [
+                        {"$match": {"address": {"$exists": True, "$ne": ""}}},
+                        {"$group": {
+                            "_id": {"$trim": {"input": {"$arrayElemAt": [{"$split": ["$address", ","]}, -2]}}},
+                            "count": {"$sum": 1},
+                            "lat": {"$first": "$latitude"},
+                            "lng": {"$first": "$longitude"}
+                        }},
+                        {"$match": {"_id": {"$ne": None}}},
+                        {"$sort": {"count": -1}},
+                        {"$limit": 5}
+                    ]
+                }
+            }
+        ]
+        
+        facet_results = await collection.aggregate(pipeline).to_list(1)
+        res = facet_results[0] if facet_results else {}
+        counts = res.get("counts", [{}])[0]
+        
+        total_count = counts.get("total", 0)
+        pending_count = counts.get("pending", 0)
+        approved_count = counts.get("approved", 0)
+        rejected_count = counts.get("rejected", 0)
+        resolved_count = counts.get("resolved", 0)
+        approved_today = counts.get("approved_today", 0)
+        high_confidence_count = counts.get("high_conf", 0)
+        
+        # Fallback for approved_today since timestamp might be string or Date
+        if approved_today == 0 and approved_count > 0:
+             # re-check specifically with string ISO format if aggregate check (as Date) might have missed it
+             approved_today = await collection.count_documents({
+                 "status": {"$in": ["approved", "submitted"]},
+                 "admin_review.timestamp": {"$gte": today_start.isoformat()}
+             })
+
+        # --- Resolution Time & Weekly Trends (Specific optimized pipelines) ---
+        avg_resolution_hours = 0
+        try:
+            resolution_pipeline = [
+                {"$match": {
+                    "status": {"$in": ["approved", "submitted", "resolved", "completed"]},
+                    "admin_review.timestamp": {"$exists": True},
+                    "timestamp": {"$exists": True}
+                }},
+                {"$addFields": {
+                    "review_date": {
+                        "$cond": {
+                            "if": {"$eq": [{"$type": "$admin_review.timestamp"}, "string"]},
+                            "then": {"$toDate": "$admin_review.timestamp"},
+                            "else": "$admin_review.timestamp"
+                        }
+                    },
+                    "submit_date": {
+                        "$cond": {
+                            "if": {"$eq": [{"$type": "$timestamp"}, "string"]},
+                            "then": {"$toDate": "$timestamp"},
+                            "else": "$timestamp"
+                        }
+                    }
+                }},
+                {"$addFields": {
+                    "resolution_hours": {
+                        "$divide": [
+                            {"$subtract": ["$review_date", "$submit_date"]},
+                            3600000  # ms to hours
+                        ]
+                    }
+                }},
+                {"$match": {"resolution_hours": {"$gt": 0}}},
+                {"$group": {
+                    "_id": None,
+                    "avg_hours": {"$avg": "$resolution_hours"},
+                    "count": {"$sum": 1}
+                }}
+            ]
+            res_result = await collection.aggregate(resolution_pipeline).to_list(1)
+            avg_resolution_hours = round(res_result[0]["avg_hours"], 1) if res_result and res_result[0].get("avg_hours") else 0
+        except Exception as e:
+            logger.warning(f"Resolution time calc failed: {e}")
+            avg_resolution_hours = 0
+        
+        # --- 3. Weekly Trend Data (last 7 days actual + next 3 days predicted) ---
+        weekly_data = []
+        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        
+        for i in range(6, -1, -1):
+            day_start = (now - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            
+            # Try with both Date and string timestamp formats
+            day_count = 0
+            try:
+                # Try Date format first
+                day_count = await collection.count_documents({
+                    "timestamp": {"$gte": day_start, "$lt": day_end}
+                })
+            except Exception:
+                pass
+            
+            if day_count == 0:
+                # Try string format (ISO format comparison)
+                try:
+                    day_count = await collection.count_documents({
+                        "timestamp": {"$gte": day_start.isoformat(), "$lt": day_end.isoformat()}
+                    })
+                except Exception:
+                    pass
+            
+            weekday_name = day_names[day_start.weekday()]
+            weekly_data.append({
+                "name": weekday_name,
+                "actual": day_count,
+                "predicted": None
+            })
+        
+        # Simple prediction: average of last 7 days ± small variance
+        avg_daily = sum(d["actual"] for d in weekly_data) / max(len(weekly_data), 1)
+        import random
+        for i in range(1, 4):
+            future_day = now + timedelta(days=i)
+            predicted = max(0, round(avg_daily + random.uniform(-2, 2)))
+            weekly_data.append({
+                "name": day_names[future_day.weekday()],
+                "actual": None,
+                "predicted": predicted
+            })
+        
+        # Trend percentage (this week vs projected)
+        last_week_total = sum(d["actual"] or 0 for d in weekly_data[:7])
+        projected_total = last_week_total + sum(d["predicted"] or 0 for d in weekly_data[7:])
+        trend_pct = round(((projected_total - last_week_total) / max(last_week_total, 1)) * 100)
+        
+        # --- 4. Issue Type & Hotspots (already resolved in facet) ---
+        issue_types = [{"type": t["_id"] or "unknown", "count": t["count"]} for t in res.get("issue_types", [])]
+        hotspots = [{
+                "location": h["_id"] or "Unknown",
+                "count": h["count"],
+                "lat": h.get("lat"),
+                "lng": h.get("lng")
+        } for h in res.get("hotspots", [])]
+        
+        # --- 6. System Health ---
+        one_hour_ago = now - timedelta(hours=1)
+        try:
+            recent_submissions = await collection.count_documents({"timestamp": {"$gte": one_hour_ago}})
+            if recent_submissions == 0:
+                recent_submissions = await collection.count_documents({"timestamp": {"$gte": one_hour_ago.isoformat()}})
+        except Exception:
+            recent_submissions = 0
+        system_load = min(100, round((recent_submissions / max(total_count, 1)) * 1000))  # Rough metric
+        
+        return {
+            "counts": {
+                "total": total_count,
+                "pending": pending_count,
+                "approved": approved_count,
+                "approved_today": approved_today,
+                "rejected": rejected_count,
+                "resolved": resolved_count,
+                "high_confidence": high_confidence_count
+            },
+            "avg_resolution_hours": avg_resolution_hours,
+            "chart_data": weekly_data,
+            "trend_percentage": trend_pct,
+            "trend_direction": "up" if trend_pct > 0 else "down",
+            "issue_types": issue_types,
+            "hotspots": hotspots,
+            "system_load": system_load,
+            "recent_submissions_1h": recent_submissions,
+            "generated_at": now.isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Analytics dashboard error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Analytics error: {str(e)}")
+
+
+@router.get("/analytics/warroom")
+async def get_warroom_data(
+    search: Optional[str] = None,
+    issue_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    admin: dict = Depends(get_admin_user)
+):
+    """
+    Advanced War Room data: all issues with coordinates + filters + hotspot analysis.
+    """
+    try:
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            raise HTTPException(status_code=503, detail="Database unavailable")
+        
+        collection = await mongo_service.get_collection("issues")
+        
+        # Build filter
+        match_filter = {
+            "$or": [
+                {"latitude": {"$exists": True, "$ne": 0}},
+                {"report.report.latitude": {"$exists": True, "$ne": 0}}
+            ]
+        }
+        
+        if search:
+            match_filter["$and"] = match_filter.get("$and", [])
+            match_filter["$and"].append({
+                "$or": [
+                    {"address": {"$regex": search, "$options": "i"}},
+                    {"issue_type": {"$regex": search, "$options": "i"}},
+                    {"description": {"$regex": search, "$options": "i"}}
+                ]
+            })
+        
+        if issue_type and issue_type != "all":
+            match_filter["issue_type"] = issue_type
+        
+        if severity and severity != "all":
+            match_filter["severity"] = severity
+        
+        pipeline = [
+            {"$match": match_filter},
+            {"$sort": {"timestamp": -1}},
+            {"$limit": 200},
+            {"$project": {
+                "_id": 1,
+                "issue_id": {"$toString": "$_id"},
+                "issue_type": 1,
+                "status": 1,
+                "severity": 1,
+                "address": 1,
+                "latitude": 1,
+                "longitude": 1,
+                "confidence_score": {"$ifNull": ["$confidence", 0]},
+                "timestamp": 1,
+                "flagged_at": 1,
+                "description": 1,
+                "reporter_email": {"$ifNull": ["$reporter_email", "$user_email"]},
+                "image_url": {"$concat": ["/api/issues/", {"$toString": "$_id"}, "/image"]},
+                "report_lat": "$report.report.latitude",
+                "report_lng": "$report.report.longitude"
+            }}
+        ]
+        
+        issues = await collection.aggregate(pipeline).to_list(200)
+        
+        # Normalize coordinates
+        for issue in issues:
+            if "_id" in issue:
+                issue["_id"] = str(issue["_id"])
+            if not issue.get("latitude") and issue.get("report_lat"):
+                issue["latitude"] = issue["report_lat"]
+                issue["longitude"] = issue.get("report_lng")
+            issue.pop("report_lat", None)
+            issue.pop("report_lng", None)
+        
+        # Compute hotspots (group by proximity)
+        hotspot_pipeline = [
+            {"$match": {"latitude": {"$exists": True, "$ne": 0, "$ne": None}}},
+            {"$group": {
+                "_id": {"$concat": [
+                    {"$toString": {"$round": ["$latitude", 2]}},
+                    ",",
+                    {"$toString": {"$round": ["$longitude", 2]}}
+                ]},
+                "count": {"$sum": 1},
+                "lat": {"$avg": "$latitude"},
+                "lng": {"$avg": "$longitude"},
+                "top_type": {"$first": "$issue_type"},
+                "address": {"$first": "$address"}
+            }},
+            {"$match": {"count": {"$gte": 2}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 20}
+        ]
+        
+        hotspots = await collection.aggregate(hotspot_pipeline).to_list(20)
+        for h in hotspots:
+            h["_id"] = str(h["_id"])
+        
+        # Stats summary
+        total_on_map = len(issues)
+        high_severity = len([i for i in issues if i.get("severity") == "high" or (i.get("confidence_score") or 0) > 80])
+        
+        return {
+            "issues": issues,
+            "hotspots": hotspots,
+            "stats": {
+                "total_on_map": total_on_map,
+                "high_severity": high_severity,
+                "pending": len([i for i in issues if i.get("status") in ["pending", "needs_review", "pending_review"]]),
+                "resolved": len([i for i in issues if i.get("status") in ["approved", "submitted", "resolved"]])
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"War Room data error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/pending", response_model=List[dict])
 async def get_pending_reviews(
     skip: int = 0,
@@ -541,60 +895,28 @@ async def get_pending_reviews(
 
         # Aggregation Pipeline for efficient filtering
         # Logic:
-        # 1. Status 'needs_review'
-        # 2. OR Status 'screened_out' / 'reject'
-        # 3. OR Status 'pending' with low confidence or fake keywords
+        # 1. Team member: Only assigned issues
+        # 2. Status 'needs_review' etc.
         
+        match_query = {
+            "status": {
+                "$in": ["pending", "needs_review", "pending_review", "screened_out", "dispatch_decision"]
+            }
+        }
+        # Filter exclusions
+        match_query["status"]["$nin"] = ["approved", "submitted", "declined", "rejected", "completed", "resolved"]
+        
+        # TEAM MEMBER FILTER: Only see assigned issues
+        if admin.get("role") == "team_member":
+            match_query["assigned_to"] = admin.get("email")
+
         pipeline = [
             {
-                "$match": {
-                    "status": {
-                        "$nin": ["approved", "submitted", "declined", "rejected", "completed", "resolved"]
-                    }
-                }
+                "$match": match_query
             },
             {
-                "$addFields": {
-                    # Standardize confidence to a number globally
-                    "effective_confidence": {
-                        "$min": [
-                             { "$ifNull": [ { "$toDouble": "$confidence" }, 100 ] },
-                             { "$ifNull": [ { "$toDouble": "$report.issue_overview.confidence" }, 100 ] },
-                             { "$ifNull": [ { "$toDouble": "$report.template_fields.confidence" }, 100 ] }
-                        ]
-                    },
-                     # Check keywords in DB (Basic regex check)
-                    "is_fake_keyword": {
-                        "$regexMatch": {
-                            "input": { "$concat": [ { "$ifNull": ["$description", ""] }, " ", { "$ifNull": ["$report.issue_overview.summary_explanation", ""] } ] },
-                            "regex": "fake|cartoon|ai generate",
-                            "options": "i"
-                        }
-                    }
-                }
+                "$sort": { "timestamp": -1 }
             },
-            {
-                "$match": {
-                    "$or": [
-                        { "status": "needs_review" },
-                        { "status": "screened_out" },
-                        { "dispatch_decision": "reject" },
-                        {
-                            "$and": [
-                                { "status": "pending" },
-                                {
-                                    "$or": [
-                                        { "effective_confidence": { "$lt": 70 } },
-                                        { "is_fake_keyword": True },
-                                        { "issue_type": "unknown" }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                }
-            },
-            { "$sort": { "timestamp": -1 } },
             { "$skip": skip },
             { "$limit": limit },
             {
@@ -869,7 +1191,7 @@ async def get_resolved_reviews(
         return []
 
 @router.post("/approve")
-async def approve_issue(action: ReviewAction, admin: dict = Depends(get_admin_user)):
+async def approve_issue(action: ReviewAction, admin: dict = Depends(require_permission("approve_assigned"))):
     """
     Approve a flagged issue.
     - Updates status to 'pending' (or 'approved')
@@ -887,6 +1209,13 @@ async def approve_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
 
         if not issue:
             raise HTTPException(status_code=404, detail="Issue not found")
+
+        # PERMISSION CHECK: Team member can only act on assigned issues
+        if admin.get("role") == "team_member" and issue.get("assigned_to") != admin.get("email"):
+            raise HTTPException(
+                status_code=403, 
+                detail="You can only approve issues assigned to you"
+            )
 
         # 2. Update status to 'pending' (ready for authority)
         # 2. Update status to 'submitted' (ready for authority)
@@ -948,10 +1277,13 @@ async def approve_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
 
 
 
-        # 3. Trigger Authority Email (since it was skipped earlier)
-        # We re-fetch to get updated state if needed, or use 'issue' dict
-        # The report is in issue['report']
-        if issue.get("report"):
+        # 3. Trigger Authority Email (RESTRICTED ACTION)
+        # Check if the current admin has permission to send to authority
+        can_send = has_permission(admin.get("role"), "send_to_authority")
+        
+        email_sent_info = "Triggered" if can_send else "Skipped (No Permission)"
+        
+        if issue.get("report") and can_send:
             # Send standard formatted email (same as normal submission)
             try:
                 # Need to fetch image content for attachment
@@ -1020,7 +1352,7 @@ async def approve_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/decline")
-async def decline_issue(action: ReviewAction, admin: dict = Depends(get_admin_user)):
+async def decline_issue(action: ReviewAction, admin: dict = Depends(require_permission("decline_assigned"))):
     """
     Decline a flagged issue.
     - Updates status to 'rejected'
@@ -1031,7 +1363,17 @@ async def decline_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
         if not mongo_service:
             raise HTTPException(status_code=503, detail="Database service unavailable")
 
-        # Update status
+        # PERMISSION CHECK
+        issue = await mongo_service.get_issue_by_id(action.issue_id)
+        if not issue:
+            raise HTTPException(status_code=404, detail="Issue not found")
+            
+        if admin.get("role") == "team_member" and issue.get("assigned_to") != admin.get("email"):
+             raise HTTPException(
+                status_code=403, 
+                detail="You can only decline issues assigned to you"
+            )
+
         # Update status
         success = await mongo_service.update_one_optimized(
             collection_name='issues',
@@ -1087,7 +1429,7 @@ async def decline_issue(action: ReviewAction, admin: dict = Depends(get_admin_us
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/set-status")
-async def set_issue_status(action: UpdateStatusRequest, admin: dict = Depends(get_admin_user)):
+async def set_issue_status(action: UpdateStatusRequest, admin: dict = Depends(require_permission("edit_report"))):
     """
     Set an intermediate status for a report (e.g., 'no_action_required').
     """
@@ -1139,7 +1481,7 @@ async def update_issue_report(
     summary: Optional[str] = Body(None),
     issue_type: Optional[str] = Body(None),
     confidence: Optional[float] = Body(None),
-    admin: dict = Depends(get_admin_user)
+    admin: dict = Depends(require_permission("edit_report"))
 ):
     """
     Update the report details of an issue (summary, type, confidence).
@@ -1263,7 +1605,7 @@ async def deactivate_user(action: UserAction, admin: dict = Depends(get_admin_us
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/delete/{admin_id}")
-async def delete_admin(admin_id: str, current_admin: dict = Depends(get_admin_user)):
+async def delete_admin(admin_id: str, current_admin: dict = Depends(require_permission("manage_team"))):
     """
     Delete an admin user.
     """
@@ -1279,7 +1621,11 @@ async def delete_admin(admin_id: str, current_admin: dict = Depends(get_admin_us
         collection = await mongo_service.get_collection("admins", read_only=False)
         
         # Permission Check: Check target admin role
-        target_admin = await collection.find_one({"_id": ObjectId(admin_id)})
+        obj_id = parse_id(admin_id)
+        if not obj_id:
+             raise HTTPException(status_code=400, detail="Invalid Admin ID format")
+             
+        target_admin = await collection.find_one({"_id": obj_id})
         if not target_admin:
              raise HTTPException(status_code=404, detail="Admin not found")
 
@@ -1292,7 +1638,7 @@ async def delete_admin(admin_id: str, current_admin: dict = Depends(get_admin_us
                 detail="Only a Super Admin can delete another Super Admin"
             )
 
-        result = await collection.delete_one({"_id": ObjectId(admin_id)})
+        result = await collection.delete_one({"_id": obj_id})
         
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Admin not found")
@@ -1305,7 +1651,7 @@ async def delete_admin(admin_id: str, current_admin: dict = Depends(get_admin_us
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.put("/deactivate-admin/{admin_id}")
-async def deactivate_admin_account(admin_id: str, current_admin: dict = Depends(get_admin_user)):
+async def deactivate_admin_account(admin_id: str, current_admin: dict = Depends(require_permission("manage_team"))):
     """
     Deactivate an admin user.
     Rules:
@@ -1322,7 +1668,12 @@ async def deactivate_admin_account(admin_id: str, current_admin: dict = Depends(
              raise HTTPException(status_code=400, detail="Cannot deactivate your own account.")
 
         collection = await mongo_service.get_collection("admins", read_only=False)
-        target_admin = await collection.find_one({"_id": ObjectId(admin_id)})
+        
+        obj_id = parse_id(admin_id)
+        if not obj_id:
+             raise HTTPException(status_code=400, detail="Invalid Admin ID format")
+             
+        target_admin = await collection.find_one({"_id": obj_id})
         
         if not target_admin:
             raise HTTPException(status_code=404, detail="Admin not found")
@@ -1339,7 +1690,7 @@ async def deactivate_admin_account(admin_id: str, current_admin: dict = Depends(
             
         # Update status
         result = await collection.update_one(
-            {"_id": ObjectId(admin_id)},
+            {"_id": obj_id},
             {"$set": {"is_active": False}}
         )
         
@@ -1353,7 +1704,7 @@ async def deactivate_admin_account(admin_id: str, current_admin: dict = Depends(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.put("/reactivate-admin/{admin_id}")
-async def reactivate_admin_account(admin_id: str, current_admin: dict = Depends(get_admin_user)):
+async def reactivate_admin_account(admin_id: str, current_admin: dict = Depends(require_permission("manage_team"))):
     """
     Reactivate an admin user.
     """
@@ -1366,8 +1717,12 @@ async def reactivate_admin_account(admin_id: str, current_admin: dict = Depends(
 
     try:
         collection = await mongo_service.get_collection("admins", read_only=False)
+        obj_id = parse_id(admin_id)
+        if not obj_id:
+             raise HTTPException(status_code=400, detail="Invalid Admin ID format")
+             
         result = await collection.update_one(
-            {"_id": ObjectId(admin_id)},
+            {"_id": obj_id},
             {"$set": {"is_active": True}}
         )
         
@@ -1382,6 +1737,32 @@ async def reactivate_admin_account(admin_id: str, current_admin: dict = Depends(
 # ISSUE ASSIGNMENT ENDPOINTS
 # ============================================
 
+def parse_id(id_val):
+    """Robust conversion of various ID formats. Supports ObjectId and String/UUID IDs."""
+    if not id_val:
+        return None
+    if isinstance(id_val, ObjectId):
+        return id_val
+    if isinstance(id_val, dict):
+        # Handle {$oid: "..."} format
+        id_val = id_val.get("$oid") or id_val.get("id") or id_val.get("_id")
+    
+    if not isinstance(id_val, str):
+        id_val = str(id_val)
+        
+    # 1. Try ObjectId (24-char hex)
+    try:
+        if len(id_val) == 24 and all(c in "0123456789abcdefABCDEF" for c in id_val):
+            return ObjectId(id_val)
+    except:
+        pass
+
+    # 2. Fallback to String (for UUIDs or other string-based IDs)
+    if id_val.strip():
+        return id_val
+        
+    return None
+
 @router.post("/assign-issue")
 async def assign_issue_to_admin(
     issue_id: str = Body(...),
@@ -1392,10 +1773,10 @@ async def assign_issue_to_admin(
     Assign an issue to a specific admin. Only super_admin can assign.
     """
     # Check permissions
-    if current_admin.get("role") != "super_admin":
+    if current_admin.get("role") not in ["super_admin", "admin"]:
         raise HTTPException(
             status_code=403,
-            detail="Only super admins can assign issues"
+            detail="Only admins and super admins can assign issues"
         )
     
     try:
@@ -1422,15 +1803,19 @@ async def assign_issue_to_admin(
             )
         
         # Update admin's assigned_issues list
+        obj_id = parse_id(issue_id)
+        if not obj_id:
+             raise HTTPException(status_code=400, detail="Invalid Issue ID format")
+
         await admins_collection.update_one(
             {"email": admin_email},
-            {"$addToSet": {"assigned_issues": issue_id}}
+            {"$addToSet": {"assigned_issues": str(obj_id)}}
         )
         
         # Update issue with assigned_to field
         issues_collection = await mongo_service.get_collection("issues")
         await issues_collection.update_one(
-            {"_id": issue_id},
+            {"_id": obj_id},
             {
                 "$set": {
                     "assigned_to": admin_email,
@@ -1533,21 +1918,33 @@ async def bulk_assign_issues(request: BulkAssignRequest, current_admin: dict = D
     collection = await mongo_service.get_collection("issues")
     
     # Validate Issue IDs
-    try:
-        object_ids = [ObjectId(id) for id in request.issue_ids]
-    except:
-        raise HTTPException(status_code=400, detail="Invalid Issue ID format")
+    object_ids = []
+    for id_val in request.issue_ids:
+        oid = parse_id(id_val)
+        if not oid:
+             raise HTTPException(status_code=400, detail=f"Invalid Issue ID format: {id_val}")
+        object_ids.append(oid)
 
-    # Update
+    # Update Issues
     result = await collection.update_many(
         {"_id": {"$in": object_ids}},
         {"$set": {
             "assigned_to": request.admin_email, 
             "updated_at": datetime.utcnow(),
-            # Should we change status? Maybe 'pending' -> 'pending'?
-            # Usually assignment doesn't change status, just ownership.
+            "assigned_by": current_admin.get("email"),
+            "assigned_at": datetime.utcnow()
         }}
     )
+    
+    # Also update admin record for consistency
+    if result.modified_count > 0:
+        admins_collection = await mongo_service.get_collection("admins")
+        # Store as strings for consistency in the list
+        str_ids = [str(oid) for oid in object_ids]
+        await admins_collection.update_one(
+            {"email": request.admin_email},
+            {"$addToSet": {"assigned_issues": {"$each": str_ids}}}
+        )
     
     logger.info(f"Bulk assigned {result.modified_count} issues to {request.admin_email} by {current_admin['email']}")
     

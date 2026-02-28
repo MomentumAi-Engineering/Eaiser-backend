@@ -19,7 +19,7 @@ from services.report_generation_service import (
     create_report_generator
 )
 from core.database import get_db_dependency as get_database, get_redis_dependency as get_redis
-from core.auth import get_current_user
+from core.auth import get_current_user, require_permission
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ async def get_report_generator() -> HighPerformanceReportGenerator:
 async def generate_report_fast(
     request: ReportRequest,
     generator: HighPerformanceReportGenerator = Depends(get_report_generator),
-    current_user: dict = Depends(get_current_user)
+    current_admin: dict = Depends(require_permission("view_stats"))
 ):
     """
     🚀 Generate report with maximum speed optimization
@@ -129,7 +129,7 @@ async def generate_report_fast(
         # Generate report with speed optimization
         result = await generator.generate_report_fast(config)
         
-        logger.info(f"✅ Generated {request.report_type.value} report for user {current_user.get('user_id')} in {result['generation_time']:.3f}s")
+        logger.info(f"✅ Generated {request.report_type.value} report for user {current_admin.get('user_id')} in {result['generation_time']:.3f}s")
         
         return ReportResponse(
             success=True,
@@ -152,7 +152,7 @@ async def generate_report_async(
     request: ReportRequest,
     background_tasks: BackgroundTasks,
     generator: HighPerformanceReportGenerator = Depends(get_report_generator),
-    current_user: dict = Depends(get_current_user)
+    current_admin: dict = Depends(require_permission("view_stats"))
 ):
     """
     ⚡ Generate report asynchronously with queue processing
@@ -179,7 +179,7 @@ async def generate_report_async(
         # Queue report for async processing
         result = await generator.generate_report_async(config)
         
-        logger.info(f"📋 Queued {request.report_type.value} report for user {current_user.get('user_id')}")
+        logger.info(f"📋 Queued {request.report_type.value} report for user {current_admin.get('user_id')}")
         
         return {
             "success": True,
@@ -199,7 +199,7 @@ async def generate_report_async(
 async def generate_bulk_reports(
     request: BulkReportRequest,
     generator: HighPerformanceReportGenerator = Depends(get_report_generator),
-    current_user: dict = Depends(get_current_user)
+    current_admin: dict = Depends(require_permission("view_stats"))
 ):
     """
     📊 Generate multiple reports in parallel
@@ -354,7 +354,7 @@ async def download_report(
 @router.get("/metrics")
 async def get_generation_metrics(
     generator: HighPerformanceReportGenerator = Depends(get_report_generator),
-    current_user: dict = Depends(get_current_user)
+    current_admin: dict = Depends(require_permission("view_stats"))
 ):
     """
     📈 Get report generation performance metrics

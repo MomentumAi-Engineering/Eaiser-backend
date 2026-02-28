@@ -4,6 +4,7 @@ from jose import JWTError, jwt
 import logging
 from utils.security import SECRET_KEY, ALGORITHM
 from services.mongodb_optimized_service import get_optimized_mongodb_service
+from core.permissions import has_permission, PERMISSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -71,3 +72,16 @@ async def get_admin_user(current_user: Dict[str, Any] = Depends(get_current_user
             detail="Admin access required"
         )
     return current_user
+
+def require_permission(permission: str):
+    """
+    Dependency factory to check for specific permission
+    """
+    async def permission_checker(current_user: Dict[str, Any] = Depends(get_admin_user)):
+        if not has_permission(current_user.get("role"), permission):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Permission '{permission}' required for this action"
+            )
+        return current_user
+    return permission_checker

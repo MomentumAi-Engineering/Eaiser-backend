@@ -1,23 +1,26 @@
-"""
-Issue Assignment Endpoint
-"""
+from fastapi import APIRouter, HTTPException, Depends, Query
+from datetime import datetime
+import logging
+from typing import List, Optional
+from core.auth import get_admin_user, require_permission
+from services.mongodb_optimized_service import get_optimized_mongodb_service
+
+router = APIRouter(
+    prefix="/admin/assignment",
+    tags=["Admin Assignment"]
+)
+
+logger = logging.getLogger(__name__)
 
 @router.post("/assign-issue")
 async def assign_issue_to_admin(
     issue_id: str,
     admin_email: str,
-    current_admin: dict = Depends(get_admin_user)
+    current_admin: dict = Depends(require_permission("assign_issue"))
 ):
     """
-    Assign an issue to a specific admin. Only super_admin can assign.
+    Assign an issue to a specific admin. Only Super Admins and Admins can assign.
     """
-    # Check permissions
-    if current_admin.get("role") != "super_admin":
-        raise HTTPException(
-            status_code=403,
-            detail="Only super admins can assign issues"
-        )
-    
     try:
         mongo_service = await get_optimized_mongodb_service()
         if not mongo_service:
@@ -35,11 +38,9 @@ async def assign_issue_to_admin(
         
         # Check if admin has permission to handle issues
         permissions = target_admin.get("permissions", {})
-        if not permissions.get("can_approve") and not permissions.get("can_decline"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Admin {admin_email} (role: {target_admin.get('role')}) cannot handle issues"
-            )
+        # Note: We align target permissions check with target role capabilities
+        # Team Members should have 'can_approve' or 'can_decline' or 'approve_assigned' etc.
+        # But for assignment, we just check if they are a valid admin user.
         
         # Update admin's assigned_issues list
         await admins_collection.update_one(

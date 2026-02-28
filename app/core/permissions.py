@@ -1,111 +1,55 @@
-"""
-Role-Based Access Control Middleware
-"""
-from fastapi import HTTPException, Depends
-from typing import List, Callable
-from core.auth import get_admin_user
-import logging
 
-logger = logging.getLogger(__name__)
+# Role-Based Access Control Matrix
+# Matches frontend src/utils/permissions.js
 
-class PermissionChecker:
-    """
-    Permission checker based on route access matrix
-    """
+PERMISSIONS = {
+    # Admin & Team Management
+    "create_admin": ["super_admin"],
+    "create_team_member": ["super_admin", "admin"],
+    "manage_team": ["super_admin"],
+    "manage_users": ["super_admin"],
+
+    # Issue Actions
+    "assign_issue": ["super_admin", "admin"],
+    "view_all_issues": ["super_admin", "admin"],
+    "view_assigned_issues": ["super_admin", "admin", "team_member"],
+    "approve_all": ["super_admin", "admin"],
+    "approve_assigned": ["super_admin", "admin", "team_member"],
+    "decline_all": ["super_admin", "admin"],
+    "decline_assigned": ["super_admin", "admin", "team_member"],
+    "send_to_authority": ["super_admin", "admin"],
+    "edit_report": ["super_admin", "admin"],
+
+    # Pages / Sections
+    "view_dashboard": ["super_admin", "admin", "team_member", "viewer"],
+    "view_warroom": ["super_admin", "admin"],
+    "view_reviews": ["super_admin", "admin", "team_member"],
+    "view_users": ["super_admin"],
+    "view_team": ["super_admin", "admin"],
+    "view_analytics": ["super_admin", "admin", "viewer"],
+    "view_audit": ["super_admin", "admin"],
+    "view_mapping": ["super_admin", "admin"],
+    "view_authorities": ["super_admin", "admin"],
+    "view_settings": ["super_admin", "admin", "team_member", "viewer"],
+
+    # Settings Tabs
+    "settings_profile": ["super_admin", "admin", "team_member", "viewer"],
+    "settings_notifications": ["super_admin", "admin", "team_member"],
+    "settings_security": ["super_admin", "admin", "team_member"],
+    "settings_system": ["super_admin"],
+
+    # System
+    "change_system_settings": ["super_admin"],
+    "maintenance_mode": ["super_admin"],
+    "change_password": ["super_admin", "admin", "team_member", "viewer"],
+    "enable_2fa": ["super_admin", "admin", "team_member"],
     
-    # Route Access Matrix
-    PERMISSIONS = {
-        "create_admin": ["super_admin"],
-        "create_team_member": ["super_admin", "admin"],
-        "assign_issue": ["super_admin", "admin"],
-        "view_all_issues": ["super_admin", "admin"],
-        "view_assigned_issues": ["super_admin", "admin", "team_member"],
-        "approve_assigned": ["super_admin", "admin", "team_member"],
-        "decline_assigned": ["super_admin", "admin", "team_member"],
-        "view_stats": ["super_admin", "admin", "viewer"],
-        "manage_team": ["super_admin"]
-    }
-    
-    @staticmethod
-    def check_permission(required_permission: str):
-        """
-        Decorator to check if admin has required permission
-        """
-        def permission_decorator(func: Callable):
-            async def wrapper(*args, current_admin: dict = None, **kwargs):
-                if current_admin is None:
-                    # Try to get from kwargs
-                    current_admin = kwargs.get('current_admin')
-                
-                if not current_admin:
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Authentication required"
-                    )
-                
-                admin_role = current_admin.get("role", "viewer")
-                allowed_roles = PermissionChecker.PERMISSIONS.get(required_permission, [])
-                
-                if admin_role not in allowed_roles:
-                    logger.warning(
-                        f"Permission denied: {current_admin.get('email')} "
-                        f"(role: {admin_role}) attempted {required_permission}"
-                    )
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"Access denied. Required role: {', '.join(allowed_roles)}"
-                    )
-                
-                logger.info(
-                    f"✅ Permission granted: {current_admin.get('email')} "
-                    f"-> {required_permission}"
-                )
-                
-                return await func(*args, current_admin=current_admin, **kwargs)
-            
-            return wrapper
-        return permission_decorator
-    
-    @staticmethod
-    def has_permission(admin_role: str, permission: str) -> bool:
-        """
-        Check if a role has a specific permission
-        """
-        allowed_roles = PermissionChecker.PERMISSIONS.get(permission, [])
-        return admin_role in allowed_roles
+    # Legacy
+    "view_stats": ["super_admin", "admin", "viewer"],
+}
 
-
-def require_permission(permission: str):
-    """
-    Dependency to require specific permission
-    """
-    async def permission_dependency(current_admin: dict = Depends(get_admin_user)):
-        admin_role = current_admin.get("role", "viewer")
-        
-        if not PermissionChecker.has_permission(admin_role, permission):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Insufficient permissions. Required: {permission}"
-            )
-        
-        return current_admin
-    
-    return permission_dependency
-
-
-def require_role(allowed_roles: List[str]):
-    """
-    Dependency to require specific role(s)
-    """
-    async def role_dependency(current_admin: dict = Depends(get_admin_user)):
-        admin_role = current_admin.get("role", "viewer")
-        
-        if admin_role not in allowed_roles:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Access denied. Required role: {', '.join(allowed_roles)}"
-            )
-        
-        return current_admin
-    
-    return role_dependency
+def has_permission(user_role: str, permission: str) -> bool:
+    if not user_role or not permission:
+        return False
+    allowed_roles = PERMISSIONS.get(permission, [])
+    return user_role in allowed_roles
