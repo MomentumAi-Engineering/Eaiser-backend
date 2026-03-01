@@ -586,28 +586,13 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 )
             report["detailed_analysis"] = detailed_analysis
 
-            # Enforce minimum 6-line summary
             issue_overview = report.get("issue_overview", {})
-            lines = [l for l in (issue_overview.get("summary_explanation", "") or "").split("\n") if l.strip()]
-            if len(lines) < 6:
-                extras = [
-                    f"Location context: {location_str}.",
-                    f"Issue type: {issue_type.title()}, severity: {severity.lower()}, confidence: {confidence:.1f}%.",
-                    f"Category: {category}.",
-                    f"Potential impact: {report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')}.",
-                    f"Initial action: {', '.join(report.get('recommended_actions', [])[:2]) or 'N/A'}.",
-                    f"Tracking reference: {report.get('template_fields', {}).get('oid', '')}."
-                ]
-                for x in extras:
-                    if len(lines) >= 6:
-                        break
-                    lines.append(x)
-                issue_overview["summary_explanation"] = "\n".join(lines)
+            orig_desc = str(issue_overview.get("summary_explanation") or description or issue_type).strip()
 
             # Override type to tree_fallen if strong cues found (avoids mislabel as garbage)
             try:
                 combined_text = (
-                    (issue_overview.get("summary_explanation") or "") + "\n" +
+                    orig_desc + "\n" +
                     (report.get("detailed_analysis", {}).get("root_causes") or "")
                 ).lower()
                 tree_tokens = [
@@ -625,10 +610,36 @@ Keep the report under 200 words, professional, and specific to the issue type an
                         issue_overview["confidence"] = 85
             except Exception:
                 pass
+            # Enforce exact summary format to avoid overfitting AI descriptions
+            # Pick a short 1-line description of the specific issue
+            orig_desc = str(issue_overview.get("summary_explanation") or description or issue_type).strip()
+            ai_eval = report.get("ai_evaluation", {})
+            # Prevent generic frontend strings from overriding the AI analysis
+            if "user reported issue" in orig_desc.lower():
+                _im_analysis = ai_eval.get("image_analysis", "")
+                if _im_analysis and _im_analysis != "No explicit image analysis provided.":
+                    orig_desc = str(_im_analysis).strip()
+                else:
+                    orig_desc = str(issue_overview.get('type', issue_type)).title()
+                
+            entry_issue_desc = orig_desc.split(".")[0].strip()
+            if len(entry_issue_desc) > 120:
+                entry_issue_desc = entry_issue_desc[:117] + "..."
+            if not entry_issue_desc:
+                entry_issue_desc = issue_overview.get('type', issue_type).title()
+            
+            lower_desc = entry_issue_desc.lower()
+            if lower_desc.startswith("possible "): entry_issue_desc = entry_issue_desc[9:]
+            elif lower_desc.startswith("identified "): entry_issue_desc = entry_issue_desc[11:]
+            elif lower_desc.startswith("a potential "): entry_issue_desc = entry_issue_desc[12:]
+            elif lower_desc.startswith("potential "): entry_issue_desc = entry_issue_desc[10:]
+            elif lower_desc.startswith("a "): entry_issue_desc = entry_issue_desc[2:]
+            
+            exact_summary = f"Possible {entry_issue_desc} has been reported at {location_str}; priority {priority}, confidence {confidence}."
+            issue_overview["summary_explanation"] = exact_summary
+            issue_overview["summary"] = exact_summary
 
-            # Ensure alias fields reflect final summary
-            if "summary" not in issue_overview or issue_overview.get("summary") != issue_overview.get("summary_explanation"):
-                issue_overview["summary"] = issue_overview.get("summary_explanation", "")
+            # Ensure alias fields reflect final summary (Format enforced)
             report["issue_overview"] = issue_overview
 
             logger.info(f"Report generated for issue {issue_id} with issue_type {issue_type}")
@@ -688,15 +699,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
             "severity": severity.lower(),
             "confidence": confidence,
             "category": category,
-            "summary_explanation": (
-                f"Issue Report: {issue_type.title()} at {location_str}." "\n"
-                f"Description: {description}" "\n\n"
-                f"Details: A {issue_type} has been reported with {severity.lower()} severity. "
-                f"The issue was identified based on the provided image and description." "\n"
-                f"Confidence Level: {confidence:.1f}% "
-                f"(Status: {priority} Priority). " "\n"
-                f"Please verify the situation on-site."
-            )
+            "summary_explanation": f"Possible {issue_type.title()} has been reported at {location_str}; priority {priority}, confidence {confidence:.1f}%."
         },
         "detailed_analysis": {
             "root_causes": "Wear and tear or heavy traffic." if issue_type == "pothole" else "Undetermined; requires inspection.",
@@ -729,28 +732,35 @@ Keep the report under 200 words, professional, and specific to the issue type an
     if decline_reason:
         report["issue_overview"]["summary_explanation"] += f"\nDecline reason: {decline_reason}."
 
-    # Alias fields and minimum-lines enforcement in fallback
+    # Enforce exact summary format in fallback response
     issue_overview = report.get("issue_overview", {})
     if "type" not in issue_overview:
         issue_overview["type"] = issue_overview.get("issue_type", issue_type.title())
-    if "summary" not in issue_overview:
-        issue_overview["summary"] = issue_overview.get("summary_explanation", "")
-    lines = [l for l in issue_overview.get("summary_explanation", "").split("\n") if l.strip()]
-    if len(lines) < 6:
-        extras = [
-            f"Location context: {location_str}.",
-            f"Issue type: {issue_type.title()}, severity: {severity.lower()}, confidence: {confidence:.1f}%.",
-            f"Category: {category}.",
-            f"Potential impact: {report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')}.",
-            f"Initial action: {', '.join(report.get('recommended_actions', [])[:2]) or 'N/A'}.",
-            f"Tracking reference: {report.get('template_fields', {}).get('oid', '')}."
-        ]
-        for x in extras:
-            if len(lines) >= 6:
-                break
-            lines.append(x)
-        issue_overview["summary_explanation"] = "\n".join(lines)
-        issue_overview["summary"] = issue_overview["summary_explanation"]
+        
+    orig_desc = str(issue_overview.get("summary_explanation") or description or issue_type).strip()
+    ai_eval = report.get("ai_evaluation", {})
+    if "user reported issue" in orig_desc.lower():
+        _im_analysis = ai_eval.get("image_analysis", "")
+        if _im_analysis and _im_analysis != "No explicit image analysis provided.":
+            orig_desc = str(_im_analysis).strip()
+        else:
+            orig_desc = str(issue_overview.get('type', issue_type)).title()
+
+    entry_issue_desc = orig_desc.split(".")[0].strip()
+    if len(entry_issue_desc) > 120:
+        entry_issue_desc = entry_issue_desc[:117] + "..."
+    if not entry_issue_desc:
+        entry_issue_desc = issue_overview.get('type', issue_type).title()
+    lower_desc = entry_issue_desc.lower()
+    if lower_desc.startswith("possible "): entry_issue_desc = entry_issue_desc[9:]
+    elif lower_desc.startswith("identified "): entry_issue_desc = entry_issue_desc[11:]
+    elif lower_desc.startswith("a potential "): entry_issue_desc = entry_issue_desc[12:]
+    elif lower_desc.startswith("potential "): entry_issue_desc = entry_issue_desc[10:]
+    elif lower_desc.startswith("a "): entry_issue_desc = entry_issue_desc[2:]
+        
+    exact_summary = f"Possible {entry_issue_desc} has been reported at {location_str}; priority {priority}, confidence {confidence}."
+    issue_overview["summary_explanation"] = exact_summary
+    issue_overview["summary"] = exact_summary
     report["issue_overview"] = issue_overview
 
     md = report.get("detailed_analysis", {})

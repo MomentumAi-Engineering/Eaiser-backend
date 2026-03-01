@@ -648,10 +648,6 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             if not issue_overview.get("summary_explanation"):
                 issue_overview["summary_explanation"] = f"Identified {issue_type} based on visual analysis."
             
-            # Remove legacy "extras" injection that caused repetition
-            # Just trust the AI's output from the updated prompt
-            expl = overview["summary_explanation"]
-            overview["summary"] = (expl.split("\n")[0].strip() if "\n" in expl else expl) or f"{overview['type']} reported at {display_address}."
             report["issue_overview"] = overview
             # Normalize ai_evaluation fields with sensible defaults
             if ai_eval:
@@ -665,7 +661,7 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                     ai_eval["ai_confidence_percent"] = ai_conf_val
                 if not detected_type:
                     ai_eval["detected_issue_type"] = overview.get("type")
-                if not ai_analysis:
+                if not ai_eval.get("image_analysis"):
                     ai_eval["image_analysis"] = "No explicit image analysis provided."
                 ai_eval["rationale"] = ai_eval.get("rationale") or "Rationale not provided."
                 report["ai_evaluation"] = ai_eval
@@ -839,9 +835,38 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             overview["confidence"] = new_conf
             ai_eval["ai_confidence_percent"] = new_conf
             ai_eval["issue_detected"] = issue_detected
+            
+            # Pick a short 1-line description of the specific issue
+            orig_desc = str(overview.get("summary_explanation") or description or issue_type).strip()
+            # Prevent generic frontend strings from overriding the AI analysis
+            if "user reported issue" in orig_desc.lower():
+                _im_analysis = ai_eval.get("image_analysis", "")
+                if _im_analysis and _im_analysis != "No explicit image analysis provided.":
+                    orig_desc = str(_im_analysis).strip()
+                else:
+                    orig_desc = str(overview.get('type', issue_type)).title()
+                
+            entry_issue_desc = orig_desc.split(".")[0].strip()
+            if len(entry_issue_desc) > 120:
+                entry_issue_desc = entry_issue_desc[:117] + "..."
+            if not entry_issue_desc:
+                entry_issue_desc = overview.get('type', issue_type).title()
+            
+            lower_desc = entry_issue_desc.lower()
+            if lower_desc.startswith("possible "): entry_issue_desc = entry_issue_desc[9:]
+            elif lower_desc.startswith("identified "): entry_issue_desc = entry_issue_desc[11:]
+            elif lower_desc.startswith("a potential "): entry_issue_desc = entry_issue_desc[12:]
+            elif lower_desc.startswith("potential "): entry_issue_desc = entry_issue_desc[10:]
+            elif lower_desc.startswith("a "): entry_issue_desc = entry_issue_desc[2:]
+            
+            exact_summary = f"Possible {entry_issue_desc} has been reported at {location_str}; priority {priority}, confidence {new_conf}."
+            overview["summary_explanation"] = exact_summary
+            overview["summary"] = exact_summary
+            
             report["issue_overview"] = overview
             report["ai_evaluation"] = ai_eval
-        except Exception:
+        except Exception as e:
+            logger.error(f"Post-adjust error: {e}")
             pass
 
         # RE-FETCH AUTHORITIES IF ISSUE TYPE CHANGED
@@ -892,16 +917,7 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
         city_val, state_val = _extract_city_state(display_address)
         short_desc = overview.get("summary") or description or "no clear visual description"
 
-        summary_builder = ReportSummaryBuilder()
-        summary_text = summary_builder.build({
-            "Issue_Type": overview.get("type") or issue_type,
-            "City": city_val,
-            "State": state_val,
-            "Zip_Code": zip_code or "N/A",
-            "Short_Visual_Description": short_desc,
-            "Priority_Label": priority,
-            "Risk_Tags": risk_tags,
-        })
+        summary_text = overview.get("summary_explanation", "")
 
         # Attach concise summary to report for downstream consumers
         report["summary"] = summary_text
@@ -1025,17 +1041,25 @@ Automated report generated via EAiSER AI by MomntumAI
             pass
         _image_analysis = f"Visual audit identifies markers consistent with {str(_detected_type).replace('_', ' ').lower()}. Surface-level analysis confirms infrastructure deviation requiring further inspection."
 
+        _issue_desc_fallback = description.strip() if description else ""
+        if "user reported issue" in _issue_desc_fallback.lower() or not _issue_desc_fallback:
+            _issue_desc_fallback = f"{str(_detected_type).replace('_', ' ').lower()}"
+        _issue_desc_fallback = _issue_desc_fallback.split(".")[0].strip()
+        if len(_issue_desc_fallback) > 120:
+            _issue_desc_fallback = _issue_desc_fallback[:117] + "..."
+        if _issue_desc_fallback.lower().startswith("a potential "):
+            _issue_desc_fallback = _issue_desc_fallback[12:]
+        elif _issue_desc_fallback.lower().startswith("possible "):
+            _issue_desc_fallback = _issue_desc_fallback[9:]
+        elif _issue_desc_fallback.lower().startswith("a "):
+            _issue_desc_fallback = _issue_desc_fallback[2:]
+
         fallback_report = {
             "issue_overview": {
                 "type": _detected_type,
                 "category": category.title(),
                 "severity": severity,
-                "summary_explanation": (
-                    f"A potential {str(_detected_type).replace('_', ' ').lower()} has been identified at {location_str}. "
-                    f"This situation is currently being assessed for its impact on public accessibility and infrastructure integrity. "
-                    f"Preliminary analysis suggests this could lead to significant path obstruction or hazardous conditions if not addressed promptly. "
-                    f"The EAiSER system has flagged this with {_ai_confidence_percent}% confidence to ensure rapid municipal response and public safety."
-                ),
+                "summary_explanation": f"Possible {_issue_desc_fallback} has been reported at {location_str}; priority {priority}, confidence {_ai_confidence_percent}.",
                 "confidence": _ai_confidence_percent
             },
             "ai_evaluation": {
