@@ -84,7 +84,7 @@ class AdminLoginMonitor:
         """
         try:
             collection = await AdminLoginMonitor._get_collection()
-            if not collection:
+            if collection is None:
                 return
 
             log_entry = {
@@ -124,7 +124,7 @@ class AdminLoginMonitor:
         """Block an IP address for BLOCK_DURATION_MINUTES."""
         try:
             collection = await AdminLoginMonitor._get_blocked_ips_collection()
-            if not collection:
+            if collection is None:
                 return
 
             blocked_until = datetime.utcnow() + timedelta(
@@ -154,7 +154,7 @@ class AdminLoginMonitor:
         """
         try:
             collection = await AdminLoginMonitor._get_blocked_ips_collection()
-            if not collection:
+            if collection is None:
                 return {"blocked": False}
 
             record = await collection.find_one({"ip": ip})
@@ -183,7 +183,7 @@ class AdminLoginMonitor:
         """Create TTL and compound indexes for efficient querying."""
         try:
             logs_collection = await AdminLoginMonitor._get_collection()
-            if logs_collection:
+            if logs_collection is not None:
                 # Compound index for IP + success + timestamp queries
                 await logs_collection.create_index(
                     [("ip", 1), ("success", 1), ("timestamp", -1)],
@@ -198,7 +198,7 @@ class AdminLoginMonitor:
                 logger.info("✅ admin_login_logs indexes created")
 
             blocked_collection = await AdminLoginMonitor._get_blocked_ips_collection()
-            if blocked_collection:
+            if blocked_collection is not None:
                 # TTL index: auto-delete expired blocks
                 await blocked_collection.create_index(
                     "blocked_until",
