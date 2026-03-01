@@ -4,6 +4,7 @@ import logging
 from typing import List, Tuple, Optional, Dict, Any
 import base64
 import asyncio
+from datetime import datetime
 from fastapi import HTTPException
 import requests
 
@@ -297,32 +298,158 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
 # --------------------------------------------------------------------
 async def notify_user_status_change(user_email: str, issue_id: str, status: str, notes: Optional[str] = None) -> bool:
     """
-    Notify the user that their report status has changed (Approved/Rejected).
+    Notify the user that their report status has changed (Approved/Rejected) using new templates.
     """
     try:
-        subject = f"Update on your Report #{issue_id}"
+        from services.mongodb_optimized_service import get_optimized_mongodb_service
+        mongo = await get_optimized_mongodb_service()
+        issue = await mongo.get_issue_by_id(issue_id) if mongo else {}
         
-        status_color = "green" if status == "approved" else "red"
-        status_display = "APPROVED" if status == "approved" else "DECLINED"
+        # User name fallback
+        user_name = "User"
+        if issue and issue.get("reporter_name"):
+            user_name = issue.get("reporter_name")
+        elif user_email:
+            user_name = user_email.split("@")[0].capitalize()
+
+        # Issue Name / Description
+        issue_type = "Issue"
+        if issue and issue.get("issue_type"):
+            issue_type = issue.get("issue_type").replace("_", " ").title()
+        elif issue and issue.get("category"):
+            issue_type = issue.get("category").replace("_", " ").title()
         
-        html_content = f"""
-        <h2>Report Status Update</h2>
-        <p>Your report (ID: <strong>{issue_id}</strong>) has been updated.</p>
-        <p>New Status: <strong style="color: {status_color}">{status_display}</strong></p>
+        # Subject prefix
+        subject = f"Your EAiSER report – {issue_type} - Issue ID: {issue_id}"
+        
+        # Dashboard URL
+        frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
+        if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
+            frontend_url = "http://localhost:5173"
+        dashboard_url = f"{frontend_url}/dashboard"
+
+        # Premium Templates with Momntum AI branding
+        logo_url = "https://www.momntumai.com/wp-content/uploads/2024/02/momntum-logo-white.png" # Example placeholder/typical URL
+        
+        # Base Styles
+        base_html_start = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta charset="UTF-8">
+        <style>
+          body {{ background-color: #f8fafc; font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; color: #1e293b; }}
+          .wrapper {{ padding: 40px 20px; }}
+          .container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }}
+          .header {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 40px 40px; text-align: center; border-bottom: 4px solid #fbbf24; }}
+          .logo {{ max-height: 40px; margin-bottom: 15px; }}
+          .header h1 {{ margin: 0; color: #ffffff; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }}
+          .content {{ padding: 40px; font-size: 16px; line-height: 1.6; color: #475569; }}
+          .greeting {{ font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 20px; }}
+          .highlight-box {{ background: #f1f5f9; border-left: 4px solid #3b82f6; padding: 20px; border-radius: 0 8px 8px 0; margin: 25px 0; }}
+          .highlight-box.approved {{ border-left-color: #22c55e; background: #f0fdf4; }}
+          .highlight-box.declined {{ border-left-color: #ef4444; background: #fef2f2; }}
+          .cta-container {{ text-align: center; margin: 40px 0 20px; }}
+          .cta-btn {{ background: #fbbf24; color: #000000 !important; padding: 16px 36px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px rgba(251, 191, 36, 0.2); transition: all 0.2s; }}
+          .footer {{ text-align: center; padding: 30px; background: #f8fafc; font-size: 13px; color: #94a3b8; border-top: 1px solid #e2e8f0; }}
+        </style>
+        </head>
+        <body>
+          <div class="wrapper">
+            <div class="container">
+              <div class="header">
+                <!-- Using text fallback if logo fails to load -->
+                <div style="color: #fbbf24; font-size: 28px; font-weight: 900; letter-spacing: 1px; margin-bottom: 10px;">Momntum<span style="color: #ffffff;">Ai</span></div>
+                <h1>EAiSER Report Update</h1>
+              </div>
+              <div class="content">
+                <div class="greeting">Hi {user_name},</div>
         """
         
-        if notes:
-            html_content += f"<p><strong>Admin Notes:</strong> {notes}</p>"
+        base_html_end = f"""
+                <p>If you have any questions or additional information, please reply to this email and our support team will follow up as soon as possible.</p>
+                
+                <p style="margin-top: 30px; font-weight: 600; color: #1e293b;">
+                  Best regards,<br>
+                  The EAiSER Team
+                </p>
+                
+                <div class="cta-container">
+                  <a href="{dashboard_url}" class="cta-btn">Back to Dashboard</a>
+                </div>
+              </div>
+              <div class="footer">
+                © {datetime.utcnow().year} Momntum Ai. Empowering Communities.
+              </div>
+            </div>
+          </div>
+        </body>
+        </html>
+        """
+
+        if status == "approved":
+            # Extract authorities
+            report = issue.get("report") or {}
+            auths_data = report.get("responsible_authorities_or_parties") or report.get("available_authorities", [])
+            auth_names = []
+            for a in auths_data:
+                if isinstance(a, dict) and a.get("name"):
+                    auth_names.append(a.get("name"))
+                elif isinstance(a, str):
+                    auth_names.append(a)
             
-        html_content += "<p>Thank you for using EAiSER Ai.</p>"
-        
-        text_content = f"Your report {issue_id} has been {status_display}.\n"
-        if notes:
-            text_content += f"Notes: {notes}\n"
+            # Format authorities list e.g., "Authority X and Authority Y" or "the relevant authorities"
+            if auth_names:
+                if len(auth_names) > 1:
+                    auth_display = ", ".join(auth_names[:-1]) + f" and {auth_names[-1]}"
+                else:
+                    auth_display = auth_names[0]
+            else:
+                auth_display = "the relevant authorities"
+
+            html_content = base_html_start + f"""
+                <p>We have completed the review of your report.</p>
+                
+                <div class="highlight-box approved">
+                  <strong>Issue ID:</strong> {issue_id}<br><br>
+                  Based on the information shared, we have successfully provided the details to <strong>{auth_display}</strong> for further action.
+                </div>
+            """ + base_html_end
             
+            text_content = (
+                f"Hi {user_name},\n\n"
+                f"We have completed the review of your EAiSER report (Issue ID: {issue_id}).\n\n"
+                f"Based on the information shared, we have provided the details to {auth_display}.\n\n"
+                "If you have any questions or additional information, please reply to this email and our support team will follow up as soon as possible.\n\n"
+                "Best regards,\n"
+                "The EAiSER Team\n\n"
+                f"Back to Dashboard: {dashboard_url}"
+            )
+            subject += "."  # The prompt has a dot at the end of the approved subject
+        else:
+            # Declined / Rejected
+            html_content = base_html_start + f"""
+                <p>We have completed the review of your report.</p>
+                
+                <div class="highlight-box">
+                  <strong>Issue ID:</strong> {issue_id}<br><br>
+                  At this time, we have not identified any issues that require notification to authorities. 
+                </div>
+            """ + base_html_end
+            
+            text_content = (
+                f"Hi {user_name},\n\n"
+                f"We have completed the review of your EAiSER report (Issue ID: {issue_id}).\n\n"
+                "We have not identified any issues that require notification to authorities at this time.\n\n"
+                "If you have any questions or further details to share, please reply to this email and our support team will follow up as soon as possible.\n\n"
+                "Best regards,\n"
+                "The EAiSER Team\n\n"
+                f"Back to Dashboard: {dashboard_url}"
+            )
+
         return await send_email(user_email, subject, html_content, text_content)
     except Exception as e:
-        logger.error(f"Failed to notify user {user_email}: {e}")
+        logger.error(f"Failed to notify user {user_email}: {e}", exc_info=True)
         return False
 
 

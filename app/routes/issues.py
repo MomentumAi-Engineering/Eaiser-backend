@@ -1470,6 +1470,7 @@ async def submit_issue(
                     "$set": {
                         "report": report,
                         "status": "needs_review",
+                        "issue_type": current_issue_type,
                         "recommended_actions": recommended_actions,
                         "authority_email": [auth["email"] for auth in request.selected_authorities],
                         "authority_name": [auth["name"] for auth in request.selected_authorities],
@@ -1531,8 +1532,9 @@ async def submit_issue(
             {
                 "$set": {
                     "report": report,
-                    "authority_email": [auth["email"] for auth in selected_authorities],
-                    "authority_name": [auth["name"] for auth in selected_authorities],
+                    "issue_type": current_issue_type,
+                    "authority_email": [auth["email"] for auth in selected_authorities or []],
+                    "authority_name": [auth["name"] for auth in selected_authorities or []],
                     "email_status": "sent" if email_success else "failed",
                     "email_errors": email_errors,
                     "status": "submitted",

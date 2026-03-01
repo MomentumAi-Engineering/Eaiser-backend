@@ -68,10 +68,14 @@ If the image is unrelated to civic infrastructure, such as:
 - Indoor rooms or furniture
 - Food, animals indoors (pets), personal objects
 - App screenshots or documents
+- Medical emergencies, injured people, stretchers, ambulances, or police activity WITHOUT visible civic property/infrastructure damage.
+- Watermarked or stock photos (e.g. "istockphoto" or visible stock watermarks).
 
 Then:
 - issue_detected = false
 - detected_issue_type = "None"
+- ai_confidence_percent < 25
+- severity = "low"
 
 ==================================================
 FIRE CLASSIFICATION (NON-NEGOTIABLE)

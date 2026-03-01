@@ -654,7 +654,7 @@ class OptimizedMongoDBService:
             logger.error(f"❌ Failed to get issue {issue_id}: {str(e)}")
             raise e
     
-    async def get_issues_optimized(self, filter_query: Dict[str, Any], skip: int = 0, limit: int = 20) -> List[Dict[str, Any]]:
+    async def get_issues_optimized(self, filter_query: Dict[str, Any], skip: int = 0, limit: int = 20, projection: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         Get multiple issues with optimized query and pagination.
         
@@ -662,6 +662,7 @@ class OptimizedMongoDBService:
             filter_query: MongoDB filter query
             skip: Number of documents to skip
             limit: Maximum number of documents to return
+            projection: Optional dictionary specifying fields to include/exclude
             
         Returns:
             List[Dict]: List of issue data
@@ -676,7 +677,18 @@ class OptimizedMongoDBService:
                 LIST_TIMEOUT_S = max(1.0, LIST_TIMEOUT_MS / 1000.0)
 
                 # Build optimized query cursor
-                cursor = collection.find(filter_query)
+                if projection is None:
+                    # By default, exclude extremely large fields that hang the response
+                    projection = {
+                        "image_data": 0,
+                        "base64_image": 0,
+                        "vector_embedding": 0,
+                        "original_image": 0,
+                        "compressed_image": 0,
+                        "logs": 0
+                    }
+                    
+                cursor = collection.find(filter_query, projection)
                 cursor = cursor.max_time_ms(5000).batch_size(500)  # Defensive query options
                 
                 # Apply sorting by timestamp (newest first)

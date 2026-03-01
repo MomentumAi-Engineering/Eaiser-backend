@@ -26,6 +26,7 @@ from models.security_models import PasswordChangeRequest, TwoFactorSetup, TwoFac
 logger = logging.getLogger(__name__)
 
 from core.auth import get_admin_user, require_permission
+from core.permissions import has_permission
 
 router = APIRouter(
     prefix="/admin/review", 

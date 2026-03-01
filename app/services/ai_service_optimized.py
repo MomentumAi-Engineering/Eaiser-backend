@@ -831,6 +831,15 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                  new_conf = min(new_conf, 40)
                  ai_eval["issue_detected"] = False
                  overview["type"] = "Other"
+                 
+            # Additional safety: Explicit penalty for non-civic / medical / stock photos that leaked
+            combo_desc = (str(overview.get("summary_explanation", "")) + str(ai_eval.get("image_analysis", ""))).lower()
+            medical_fake_words = ["medical personnel", "stretcher", "ambulance", "stock photo", "istock", "watermark", "istockphoto"]
+            if any(w in combo_desc for w in medical_fake_words):
+                 if "collision" not in combo_desc and "crash" not in combo_desc and "infrastructure" not in combo_desc:
+                     new_conf = min(new_conf, 15)
+                     ai_eval["issue_detected"] = False
+                     overview["type"] = "None"
                 
             overview["confidence"] = new_conf
             ai_eval["ai_confidence_percent"] = new_conf

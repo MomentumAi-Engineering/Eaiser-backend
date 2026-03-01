@@ -3,6 +3,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
 import logging
+import asyncio
 
 from services.mongodb_service import get_db
 from core.auth import get_admin_user, require_permission

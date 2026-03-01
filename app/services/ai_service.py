@@ -610,6 +610,17 @@ Keep the report under 200 words, professional, and specific to the issue type an
                         issue_overview["confidence"] = 85
             except Exception:
                 pass
+                
+            # Additional safety: Explicit penalty for non-civic / medical / stock photos that leaked
+            _im_analysis_check = str(report.get("ai_evaluation", {}).get("image_analysis", "")).lower()
+            combo_desc = (str(issue_overview.get("summary_explanation", "")) + _im_analysis_check).lower()
+            medical_fake_words = ["medical personnel", "stretcher", "ambulance", "stock photo", "istock", "watermark", "istockphoto"]
+            if any(w in combo_desc for w in medical_fake_words):
+                 if "collision" not in combo_desc and "crash" not in combo_desc and "infrastructure" not in combo_desc:
+                     issue_overview["confidence"] = 15
+                     issue_overview["type"] = "None"
+                     if "ai_evaluation" in report:
+                         report["ai_evaluation"]["issue_detected"] = False
             # Enforce exact summary format to avoid overfitting AI descriptions
             # Pick a short 1-line description of the specific issue
             orig_desc = str(issue_overview.get("summary_explanation") or description or issue_type).strip()
