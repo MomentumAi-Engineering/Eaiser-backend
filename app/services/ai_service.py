@@ -182,8 +182,8 @@ Analyze the image and description: "{description}".
 
 STEP 1: REALITY CHECK (CRITICAL)
 - Is this a REAL, PHOTO-REALISTIC photo taken by a camera?
-- Look for: Cartoon shaders, cel-shading, perfect smooth textures, AI artifacts, video game HUDs, drawings, or digital art.
-- If the image is AI-GENERATED, A VIDEO GAME, A CARTOON, SCREENSHOT, or FAKE:
+- Look for: Cartoon shaders, cel-shading, anime style, perfect smooth textures, AI artifacts, video game HUDs, drawings, digital art, Photoshop edits, or unnatural image manipulations.
+- If the image is AI-GENERATED, A VIDEO GAME, A CARTOON, ANIME, SCREENSHOT, MODIFIED, or FAKE:
   - Set "is_real": false
   - Set "confidence": 0
   - Set "issue_type": "unknown"
@@ -234,22 +234,17 @@ Return JSON:
             severity = parsed.get("severity", "Medium").title()
             
             try:
-                conf_val = parsed.get("confidence", 70.0)
-                confidence = float(conf_val)
+                conf_raw = parsed.get("confidence", 70.0)
+                if isinstance(conf_raw, str):
+                    # Remove % and other junk
+                    conf_raw = re.sub(r'[^0-9.]', '', conf_raw)
+                confidence = float(conf_raw)
             except (ValueError, TypeError):
                 confidence = 70.0
 
             if not is_real:
-                logger.warning("AI detected FAKE/GENERATED image. Forcing confidence to 0.")
-                confidence = 0.0
-                issue_type = "unknown"
-                severity = "Low"
-
-            # 1. Fake/Cartoon Filter
-            if not is_real:
-                logger.warning("AI detected FAKE/GENERATED image. Forcing confidence to 0.")
-                confidence = 0.0
-                issue_type = "unknown"
+                logger.warning("AI detected FAKE/GENERATED image. Forcing explicit rejection.")
+                raise ValueError("FAKE_IMAGE_DETECTED")
 
             # 2. "None" / "Normal" Filter
             if issue_type in ["none", "normal", "safe", "other", "unknown"]:
@@ -331,7 +326,7 @@ Return JSON:
                 confidence = min(confidence, 40.0)
             elif has_hazard and confidence > 10:
                 confidence = max(confidence, 88.0)
-                
+
             # Clamp for non-specific types (Final Guardrail)
             if issue_type in ("unknown", "other", "none"):
                 confidence = min(confidence, 65.0)
@@ -379,6 +374,11 @@ Return JSON:
 
             logger.info(f"Issue classified as {issue_type} with severity {severity} (confidence: {confidence}, category: {category}, priority: {priority})")
             return issue_type, severity, confidence, category, priority
+        except ValueError as ve:
+            if str(ve) == "FAKE_IMAGE_DETECTED":
+                raise ve
+            logger.warning(f"Attempt {attempt + 1} failed to classify issue: {str(ve)}")
+            return "unknown", "Medium", 50.0, "public", "Medium"
         except Exception as e:
             logger.warning(f"Attempt {attempt + 1} failed to classify issue: {str(e)}")
             # Immediate fallback to avoid multiple retries

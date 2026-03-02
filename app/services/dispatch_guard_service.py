@@ -20,7 +20,7 @@ class RiskScorer:
     def score(self, payload: Dict[str, Any]) -> float:
         # Base score from severity
         severity = (payload.get("severity") or "medium").lower()
-        base = {"low": 35, "medium": 55, "high": 75, "urgent": 85}.get(severity, 55)
+        base = {"low": 45, "medium": 65, "high": 85, "urgent": 95}.get(severity, 65)
 
         # Public safety risk boost
         psr = (payload.get("public_safety_risk") or "").lower()
@@ -95,51 +95,25 @@ class AuthorityDispatchGuard:
         policy_conflict = bool(payload.get("policy_conflict"))
         reporter_trust = float(payload.get("reporter_trust_score") or 50)
 
-        # Decision logic based on User Requirements:
-        # 1. Reject Case: Very low confidence or extreme fraud (spam/fakes)
-        if fraud >= self.fraud_reject_threshold and confidence < 30:
-             action = "reject"
-             reasons.append("Critical fraud risk detected with extremely low confidence.")
-             steps.append("Auto-screen out; do not notify.")
+        # Decision logic based on User Requirements (Strictly Implemented):
+        # reports with confidence >= 75 should be dispatched directly.
+        # However, we still review if it's a "policy_conflict" (e.g. controlled fire)
         
-        # 2. Review Team Case: 
-        # - Confidence <= 75%
-        # - AI is confused or category is "other", "none", "unknown"
-        # - Potential policy conflict or duplicates
-        elif (
-            confidence < self.auto_dispatch_threshold 
-            or policy_conflict 
-            or duplicates
-            or issue_type in ["unknown", "other", "none", "general", "bonfire", "controlled_fire", "festival", "ceremony"]
-        ):
-            action = "route_to_review_team"
-            if confidence < self.auto_dispatch_threshold:
-                reasons.append(f"Confidence ({confidence}%) is below the direct authority notification threshold of {self.auto_dispatch_threshold}%.")
-            if issue_type in ["unknown", "other", "none", "general"]:
-                reasons.append(f"Issue category '{issue_type}' is ambiguous or unrecognized by our AI.")
-            if policy_conflict:
-                reasons.append("Environmental context suggests a potential false positive or policy-compliant activity.")
-            if duplicates:
-                reasons.append("Potential duplicate report detected in this area.")
-            
-            reasons.append("Report routed to EAiSER Admin Team for human verification before authority dispatch.")
-            steps.append("EAiSER team must verify context and severity manually.")
-            
-        # 3. Auto Dispatch Case: Confidence > 75% + High Severity + Valid Metadata
-        elif (
-            confidence >= self.auto_dispatch_threshold
-            and metadata_ok
-            and not duplicates
-        ):
+        is_high_confidence = confidence >= self.auto_dispatch_threshold
+        
+        print(f"DEBUG [DispatchGuard]: Issue={issue_type}, Conf={confidence}%, Threshold={self.auto_dispatch_threshold}, Conflict={policy_conflict}")
+
+        if is_high_confidence and not policy_conflict:
             action = "auto_dispatch"
             reasons.append(f"High confidence ({confidence}%) report verified for direct authority notification.")
             steps.append("Directly dispatch alert to relevant municipal authorities via EAiSER Secure Portal.")
-            
-        # 4. Default Fallback
         else:
             action = "route_to_review_team"
-            reasons.append("Defaulting to review team for additional safety verification.")
-            steps.append("Manual review required.")
+            if policy_conflict:
+                reasons.append(f"Policy conflict detected (e.g., controlled activity). Manual review required regardless of confidence ({confidence}%).")
+            else:
+                reasons.append(f"Confidence ({confidence}%) is below {self.auto_dispatch_threshold}% threshold. Manual review required.")
+            steps.append("EAiSER team must verify context and severity manually.")
 
         return DispatchDecision(
             action=action,

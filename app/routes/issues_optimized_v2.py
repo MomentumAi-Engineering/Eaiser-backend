@@ -330,20 +330,26 @@ async def process_issue_background(
             priority = cached_classification["priority"]
             logger.info(f"Using cached AI classification for issue {issue_id}")
         elif image_content:
-            ai_start = time.time()
-            issue_type, severity, confidence, category, priority = await classify_issue(image_content, description or "")
-            ai_time = time.time() - ai_start
-            performance_metrics.record_ai_processing(ai_time)
-            
-            # Cache AI classification result
-            classification_data = {
-                "issue_type": issue_type,
-                "severity": severity,
-                "confidence": confidence,
-                "category": category,
-                "priority": priority
-            }
-            await set_cached_data(cache_key, classification_data, ttl=3600)  # Cache for 1 hour
+            try:
+                ai_start = time.time()
+                issue_type, severity, confidence, category, priority = await classify_issue(image_content, description or "")
+                ai_time = time.time() - ai_start
+                performance_metrics.record_ai_processing(ai_time)
+                
+                # Cache AI classification result
+                classification_data = {
+                    "issue_type": issue_type,
+                    "severity": severity,
+                    "confidence": confidence,
+                    "category": category,
+                    "priority": priority
+                }
+                await set_cached_data(cache_key, classification_data, ttl=3600)  # Cache for 1 hour
+            except ValueError as ve:
+                if str(ve) == "FAKE_IMAGE_DETECTED":
+                    from fastapi import HTTPException
+                    raise HTTPException(status_code=400, detail="Our AI detected that this image may be cartoon-like, AI-generated, or manipulated. Please upload a real, unaltered photo of the issue.")
+                raise ve
         else:
             # Manual Report Fallback
             confidence = 0
@@ -505,10 +511,23 @@ async def process_issue_background(
             if final_severity:
                 severity = final_severity
                 
-            # Update confidence
-            final_conf = overview.get("confidence")
-            if final_conf is not None:
-                confidence = float(final_conf)
+            # Update confidence (Take maximum of step 1 and step 2 to be robust)
+            final_conf_raw = overview.get("confidence")
+            if final_conf_raw is not None:
+                try:
+                    if isinstance(final_conf_raw, str):
+                        final_conf_raw = re.sub(r'[^0-9.]', '', final_conf_raw)
+                    final_conf_float = float(final_conf_raw)
+                    confidence = max(float(confidence or 0), final_conf_float)
+                except (ValueError, TypeError):
+                    logger.warning(f"Could not parse finalized confidence '{final_conf_raw}'")
+            
+            # Sync confidence back into report objects so they don't show 0% in UI
+            if report:
+                if "issue_overview" in report:
+                    report["issue_overview"]["confidence"] = confidence
+                if "template_fields" in report:
+                    report["template_fields"]["confidence"] = confidence
                 
             # Update category
             final_category = overview.get("category")
@@ -721,6 +740,9 @@ async def process_issue_background(
             logger.info(f"Issue {issue_id} processed successfully in background")
             return issue_doc
         
+    except HTTPException as he:
+        # Re-raise HTTPExceptions so the router can return the correct status code/detail
+        raise he
     except Exception as e:
         logger.error(f"Background processing failed for issue {issue_id}: {e}", exc_info=True)
         performance_metrics.record_request(time.time() - start_time, error=True)
@@ -1427,35 +1449,39 @@ async def submit_issue_optimized(
                 report["issue_overview"]["summary_explanation"] = user_summary
                 if "unified_report" in report: report["unified_report"]["summary_text"] = user_summary
         
-        # 5. Guard Logic (Confidence & Category check)
-        conf_val = 0.0
-        conf_candidates = [
-            (request.edited_report or {}).get('issue_overview', {}).get('confidence'),
-            report.get("template_fields", {}).get("confidence"),
-            report.get("unified_report", {}).get("confidence"),
-            report.get("issue_overview", {}).get("confidence")
-        ]
-        
-        valid_scores = []
-        for c in conf_candidates:
-            if c is None: continue
-            try:
-                s = str(c).strip().replace('%', '')
-                v = float(s)
-                if v <= 1.0: v = v * 100.0
-                v = max(0.0, min(100.0, v))
-                valid_scores.append(v)
-            except: continue
-        
-        if valid_scores:
-            conf_val = valid_scores[0]
-            
+        # 5. Guard Logic (Confidence & Category check) - Strictly following 75% rule
+        # Use the synced confidence from DB if available, otherwise check report fields
+        conf_val = float(issue.get("confidence") or 0.0)
+        if conf_val < 1.0:
+            conf_candidates = [
+                (request.edited_report or {}).get('issue_overview', {}).get('confidence'),
+                report.get("template_fields", {}).get("confidence"),
+                report.get("issue_overview", {}).get("confidence"),
+                report.get("unified_report", {}).get("confidence")
+            ]
+            for c in conf_candidates:
+                if c is None: continue
+                try:
+                    s = str(c).strip().replace('%', '')
+                    v = float(s)
+                    if v > 1.0: v = v # already percent
+                    elif v > 0: v = v * 100.0 # 0.95 -> 95
+                    conf_val = max(conf_val, v)
+                except: continue
+
         issue_type = (report.get("issue_type") or issue.get("issue_type", "unknown")).lower()
-        restricted_categories = ["other", "none", "unknown", "fake", "ai_generated", "cartoon"]
         
-        is_restricted = any(r in issue_type for r in restricted_categories) or ("fire" in issue_type and "uncontrolled" not in issue_type)
+        # These are truly restricted (fake/generated)
+        restricted_categories = ["fake", "ai_generated", "cartoon", "anime", "manipulated", "photoshopped"]
+        is_restricted = any(r in issue_type for r in restricted_categories)
         
-        needs_review = is_restricted or conf_val <= 75
+        # Policy conflict: e.g., controlled fire
+        policy_conflict = issue.get("policy_conflict", False)
+        
+        # Strictly follow the 75% rule requested by the user
+        # If confidence >= 75, NOT restricted, and NOT a policy conflict -> direct dispatch
+        is_high_confidence = conf_val >= 75.0
+        needs_review = (not is_high_confidence) or is_restricted or policy_conflict
         
         if needs_review:
             # Move to needs_review status
