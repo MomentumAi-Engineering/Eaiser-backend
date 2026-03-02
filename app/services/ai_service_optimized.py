@@ -748,19 +748,36 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                 # If both vehicle and animal are present, check for specific collision/injury context.
                 is_animal_involved = has_animal and any(w in combined for w in ["hit","struck","under","carcass","roadkill","lying","dead","collision","crash"])
                 
-                if has_vehicle and is_animal_involved:
-                    overview["type"] = "animal_accident"
-                    new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
-                elif has_vehicle:
-                    overview["type"] = "car_accident"
-                    new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
-                elif has_animal:
-                    overview["type"] = "dead_animal"
-                    new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
+                # REFINEMENT: Don't override if AI already found a specific valid type (pothole, road_damage, etc.)
+                # unless a vehicle is EXPLICITLY detected in the combined text.
+                current_ai_type = (overview.get("type") or "").lower()
+                specific_types = ["pothole", "road_damage", "tree_fallen", "animal_hazard", "animal_accident", "dead_animal", "street_sign_damage"]
+                
+                if current_ai_type in specific_types and not has_vehicle:
+                    logger.info(f"Maintaining specific AI type '{current_ai_type}' - skipping car_accident override (no vehicle detected).")
+                    new_conf = conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)
+                    issue_detected = True
                 else:
-                    overview["type"] = "car_accident"
-                    new_conf = max(80, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 75)))
-                issue_detected = True
+                    if has_vehicle and is_animal_involved:
+                        overview["type"] = "animal_accident"
+                        new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
+                    elif has_vehicle:
+                        overview["type"] = "car_accident"
+                        new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
+                    elif has_animal:
+                        overview["type"] = "dead_animal"
+                        new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
+                    else:
+                        # Fallback case: accident keyword found but no clear vehicle/animal
+                        # If AI already has a type, keep it. Otherwise default to Other.
+                        if current_ai_type in ["None", "none", "unknown", "other", ""]:
+                            overview["type"] = "car_accident"
+                            new_conf = max(80, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 75)))
+                        else:
+                            logger.info(f"Accident keyword detected but keeping original type '{current_ai_type}'")
+                            new_conf = conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 75)
+                    issue_detected = True
+                    logger.info(f"Heuristic accident check finalized type to: {overview.get('type')}")
             elif has_abandoned and has_vehicle:
                 overview["type"] = "abandoned_vehicle"
                 new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
@@ -777,6 +794,7 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                     overview["type"] = "tree_fallen"
                     new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
                     issue_detected = True
+                    logger.info("Heuristic tree check prioritized tree_fallen.")
             if 'new_conf' not in locals():
                 new_conf = conf_val if conf_val is not None else ai_eval.get("ai_confidence_percent") or 60
             new_conf = int(max(0, min(100, new_conf)))

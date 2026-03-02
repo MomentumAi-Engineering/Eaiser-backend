@@ -572,10 +572,12 @@ async def process_issue_background(
                 
                 if any(keyword in combined_text for keyword in controlled_fire_keywords):
                     # Only flag as policy conflict if NO clear danger words are present
-                    danger_words = ["out of control", "emergency", "wildfire", "house fire", "building fire", "structure fire", "explosion"]
+                    danger_words = ["out of control", "emergency", "wildfire", "house fire", "building fire", "structure fire", "explosion", "accident", "crash", "damage", "pothole"]
                     if not any(danger in combined_text for danger in danger_words):
                         policy_conflict = True
-                        logger.info(f"Policy conflict detected for issue {issue_id}: Controlled fire keywords found.")
+                        logger.info(f"Policy conflict detected for issue {issue_id}: Controlled activity keywords found.")
+                    else:
+                        logger.info(f"Potential conflict suppressed for {issue_id} due to danger keywords.")
             except Exception as e:
                 logger.warning(f"Failed to check policy conflict for issue {issue_id}: {e}")
 
@@ -708,6 +710,7 @@ async def process_issue_background(
                 "user_email": user_email,
                 "authority_data": authority_data,
                 "confidence": confidence,
+                "policy_conflict": policy_conflict,
                 "timestamp": datetime.utcnow(),
                 "processing_time_ms": (time.time() - start_time) * 1000,
                 "image_hash": image_hash,
@@ -1481,6 +1484,9 @@ async def submit_issue_optimized(
         # Strictly follow the 75% rule requested by the user
         # If confidence >= 75, NOT restricted, and NOT a policy conflict -> direct dispatch
         is_high_confidence = conf_val >= 75.0
+        
+        logger.info(f"Submit Decision for {issue_id}: Conf={conf_val}%, HighConf={is_high_confidence}, Restricted={is_restricted}, Conflict={policy_conflict}")
+        
         needs_review = (not is_high_confidence) or is_restricted or policy_conflict
         
         if needs_review:
