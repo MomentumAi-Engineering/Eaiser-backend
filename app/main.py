@@ -182,17 +182,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
         # Referrer policy
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        # Content Security Policy (strict defaults)
+        # Content Security Policy (refined for Google Auth/FedCM)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' https://accounts.google.com https://apis.google.com; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; "
             "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data: https:; "
-            "connect-src 'self' https://eaiser.ai https://admin.eaiser.ai https://*.eaiser.ai; "
+            "img-src 'self' data: https: https://*.googleusercontent.com; "
+            "connect-src 'self' https://eaiser.ai https://admin.eaiser.ai https://*.eaiser.ai "
+            "https://accounts.google.com https://*.googleapis.com; "
+            "frame-src 'self' https://accounts.google.com; "
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
-            "form-action 'self'"
+            "form-action 'self' https://accounts.google.com"
         )
         # Required for Google Sign-In popups and One Tap
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
