@@ -159,6 +159,12 @@ class IssueResponse(BaseModel):
     cached: Optional[bool] = False
     is_guest: bool = False
     is_submitted: bool = False
+    # New fields for guest persistence
+    address: Optional[str] = None
+    zip_code: Optional[str] = None
+    latitude: Optional[float] = 0.0
+    longitude: Optional[float] = 0.0
+    image_content: Optional[str] = None
 
 class IssueStatusUpdate(BaseModel):
     status: str
@@ -604,14 +610,13 @@ async def process_issue_background(
             guard = AuthorityDispatchGuard()
             decision = guard.evaluate(guard_payload)
             
-            # Determine initial status based on guard decision
-            final_status = "pending"
-            if decision.action == "auto_dispatch":
-                final_status = "dispatched"
-            elif decision.action in ("route_to_review_team", "hold_for_review"):
-                final_status = "needs_review"
-            elif decision.action == "reject":
-                final_status = "rejected"
+            # Determine initial status: Always start as 'draft' until user officially clicks 'Submit'
+            # Hindish: Pehle report 'draft' status me rahegi jab tak user 'Submit' nahi kar deta.
+            final_status = "draft"
+            
+            # Record what the guard would HAVE DONE if it were an auto-dispatch flow
+            # This allows downstream logic to know the AI's original preference.
+            original_guard_action = decision.action
             
             # Attach decision to report for downstream UI/ops
             try:
@@ -628,20 +633,21 @@ async def process_issue_background(
         except Exception as e:
             logger.warning(f"Dispatch guard evaluation failed for issue {issue_id}: {e}")
             decision = None
-            final_status = "pending"
+            final_status = "draft"
 
-        
         # Determine if it's already considered "submitted"
-        # Auto-dispatched items are submitted immediately
-        is_submitted_initially = (final_status == "dispatched")
+        # 🛡️ FIX: No report is submitted initially anymore, must wait for user approval.
+        is_submitted_initially = False 
 
         # === NEW: Dispatch EAiSER formatted alert emails in background ===
         try:
             # Use the AI-generated formatted_report if present
             # Non-blocking: create background task so DB store is not delayed
             
-            # Only send email if action is specifically 'auto_dispatch'
-            if report and (decision and decision.action == "auto_dispatch"):
+            # Only send email if action is specifically 'auto_dispatch' AND we are in an auto-submit context
+            # 🛡️ FIX: Disabled auto-dispatch during initial generation to prevent premature routing.
+            # Reports only route after the user clicks 'Submit' in the UI.
+            if False: # Forced to False to prevent automatic routing for now
                 try:
                     # fire-and-forget background send (safe)
                     asyncio.create_task(send_formatted_ai_alert(report, background=True))
@@ -650,8 +656,8 @@ async def process_issue_background(
                     logger.warning(f"Failed to create email dispatch task for issue {issue_id}: {e}")
             else:
                 # Hold, Reject, or Route to Review Team: do not email authority automatically
-                if decision:
-                    logger.info(f"Email dispatch skipped for issue {issue_id} due to guard action: {decision.action}")
+                action_name = decision.action if decision else "unknown"
+                logger.info(f"Email dispatch skipped for INITIAL generation phase for {issue_id}. Guard action: {action_name}")
         except Exception as e:
             logger.warning(f"Unexpected error while preparing to send EAiSER email for {issue_id}: {e}")
         
@@ -869,7 +875,11 @@ async def create_issue_optimized(
                 "issue_id": issue_id,
                 "status": issue_doc.get("status", "pending"),
                 "timestamp_formatted": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
-                "report": issue_doc.get("report")
+                "report": issue_doc.get("report"),
+                "confidence": issue_doc.get("confidence", 0.0),
+                "image_content": base64.b64encode(image_content).decode('utf-8') if image_content else None,
+                "address": issue_doc.get("address"),
+                "zip_code": issue_doc.get("zip_code")
             },
             authority_data=issue_doc.get("authority_data"),
             processing_time_ms=processing_time,
@@ -878,7 +888,12 @@ async def create_issue_optimized(
             severity=issue_doc.get("severity", severity),
             image_url=f"/api/issues/{issue_id}/image" if issue_doc.get("image_hash") != f"manual_{issue_id}" else None,
             is_guest=is_guest_user,
-            is_submitted=issue_doc.get("is_submitted", False)
+            is_submitted=issue_doc.get("is_submitted", False),
+            address=issue_doc.get("address"),
+            zip_code=issue_doc.get("zip_code"),
+            latitude=issue_doc.get("latitude"),
+            longitude=issue_doc.get("longitude"),
+            image_content=base64.b64encode(image_content).decode('utf-8') if image_content else None
         )
         
 
@@ -1413,7 +1428,7 @@ async def submit_issue_optimized(
             
         # 2. Check current status
         current_status = issue.get("status", "pending")
-        if current_status not in ["pending", "needs_review", "screened_out"]:
+        if current_status not in ["pending", "needs_review", "screened_out", "draft"]:
              # If it's already submitted, we might allow re-submit if needed, but usually block
              logger.warning(f"Issue {issue_id} has status '{current_status}'. Proceeding anyway for user convenience.")
         
@@ -1488,6 +1503,16 @@ async def submit_issue_optimized(
         logger.info(f"Submit Decision for {issue_id}: Conf={conf_val}%, HighConf={is_high_confidence}, Restricted={is_restricted}, Conflict={policy_conflict}")
         
         needs_review = (not is_high_confidence) or is_restricted or policy_conflict
+        
+        # 🔑 GUEST REPORT ADOPTION: If the issue was created by a guest (user_email=None),
+        # assign it to the currently logged-in user. This makes it visible in their dashboard.
+        submitting_user_email = current_user.get("sub")
+        existing_user_email = issue.get("user_email")
+        if not existing_user_email and submitting_user_email:
+            logger.info(f"📧 Adopting guest report {issue_id} → assigning to user: {submitting_user_email}")
+            await mongodb_service.update_issue_status(issue_id, {"user_email": submitting_user_email})
+            # Update local copy so cache invalidation below works correctly
+            issue["user_email"] = submitting_user_email
         
         if needs_review:
             # Move to needs_review status

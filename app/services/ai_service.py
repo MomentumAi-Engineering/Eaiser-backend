@@ -191,16 +191,21 @@ STEP 1: REALITY CHECK (CRITICAL)
 STEP 2: ISSUE IDENTIFICATION
 - Does the image show a VALID Public Infrastructure Issue?
 - Issue Types: {valid_issue_types}
+- **ROAD DAMAGE ERRORS (CRITICAL)**: 
+  - If the image shows potholes, cracks, or broken asphalt, use "pothole" or "road_damage".
+  - **DANGER**: Do NOT classify potholes or road work as "car_accident" just because there are orange cones, barriers, or high-viz vests. 
+  - ONLY use "car_accident" if you see an actual collison, a damaged car, wreckage, or a car crash. 
+  - Traffic cones often mean road maintenance or potholes, not an accident.
 - If the image shows a "normal" scene (e.g., a clean road, a happy dog, a normal building, a selfie):
-  - Set "issue_type": "none"
-  - Set "confidence": 0 to 60 (Low)
+- Set "issue_type": "none"
+- Set "confidence": 0 to 60 (Low)
 - If the image shows "Fire":
   - controlled fire (bonfire, candle, bbq, festival, diya) -> "issue_type": "controlled_fire", "confidence": 30
   - hazard fire (wildfire, building fire, accident) -> "issue_type": "fire", "confidence": 90+
 
 Return JSON:
 {{
-  "issue_type": "{valid_issue_types}",
+  "issue_type": "one of {valid_issue_types}",
   "severity": "high|medium|low",
   "confidence": number (0 to 100),
   "is_real": boolean
@@ -266,10 +271,10 @@ Return JSON:
                     confidence = min(confidence, 70.0)
 
             # Cross-validate with description (prioritize fallen tree first)
-            description_lower = description.lower()
+            description_lower = (description + " " + response.text).lower()
             issue_keywords = {
                 "fire": ["fire", "smoke", "flame", "burn", "blaze"],
-                "pothole": ["pothole", "road damage", "crack", "hole", "ft wide", "deep", "swerve"],
+                "pothole": ["pothole", "road damage", "crack in road", "asphalt damage", "broken road", "deep hole"],
                 # Do not include generic 'debris' (overlaps with fallen tree scenes)
                 "garbage": ["trash", "litter", "garbage", "waste"],
                 "property_damage": ["damage", "broken", "destruction"],
@@ -288,6 +293,13 @@ Return JSON:
             # (If AI said "none", we trust it more, unless description is VERY specific)
             
             if is_real and confidence > 10:
+                # 🛠️ SPECIFIC FIX: If summary or description mentions Pothole, override Car Accident
+                if any(tok in description_lower for tok in issue_keywords["pothole"]):
+                    if issue_type in ["car_accident", "accident", "unknown", "other"]:
+                        logger.info(f"Heuristic detected POTHOLE markers. Overriding {issue_type} to pothole.")
+                        issue_type = "pothole"
+                        confidence = max(confidence, 85.0)
+
                 # High-priority fallen tree override
                 if any(tok in description_lower for tok in issue_keywords["tree_fallen"]):
                     issue_type = "tree_fallen"

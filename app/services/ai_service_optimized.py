@@ -699,17 +699,22 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             is_minor = any(w in combined for w in minor_words)
             is_fake = any(w in combined for w in fake_words)
             
-            animal_tokens = ["animal","deer","boar","hog","dog","cow","cat","wildlife","goat","pig","carcass","roadkill"]
+            # Stricter animal tokens (removed generic 'animal' to prevent hallucinations)
+            animal_tokens = ["deer","boar","hog","dog","cow","cat","wildlife","goat","pig","carcass","roadkill","cattle","monkey","stray"]
             accident_tokens = ["accident","collision","crash","hit","struck","run over","under car","under vehicle","smashed","wrecked","overturned","pileup","mangled","damaged vehicle","wreckage","body damage"]
             abandoned_tokens = ["abandoned","junk","parked for long","covered in dust","flat tires","broken windows","unattended car","old car","rusty vehicle","scrap","clamped","stationary for weeks","derelict","abandoned car"]
             people_tokens = ["people", "crowd", "spectators", "gathering", "watching", "standing", "men", "women", "children", "group"]
-            vehicle_tokens = ["car", "vehicle", "truck", "bike", "bicycle", "van", "bus", "auto", "collision", "damaged car", "wrecked", "suv"]
+            vehicle_tokens = ["car", "vehicle", "truck", "bike", "bicycle", "van", "bus", "auto", "damaged car", "wrecked", "suv"]
             
-            has_animal = any(w in combined or w in (overview.get("type") or "").lower() for w in animal_tokens)
-            has_accident = any(w in combined for w in accident_tokens)
+            # Only trigger has_animal if a specific animal is mentioned or if "animal" is NOT just a "possible" guess
+            has_specific_animal = any(w in combined for w in animal_tokens)
+            has_generic_animal = "animal" in combined and "possible animal" not in combined and "likely animal" not in combined
+            has_animal = has_specific_animal or has_generic_animal or (overview.get("type") or "").lower() in ["dead_animal", "animal_accident"]
+            has_accident = any(w in combined for w in ["wreckage","totaled car","smashed into","flipped car","vehicle crash","car crash"]) or (any(w in combined for w in ["accident","collision","crash"]) and any(w in combined for w in ["damaged", "smashed", "hit"]))
             has_abandoned = any(w in combined for w in abandoned_tokens)
             has_people = any(w in combined for w in people_tokens)
             has_vehicle = any(w in combined or w in (overview.get("type") or "").lower() for w in vehicle_tokens)
+            is_serious_collision = any(w in combined and f"no {w}" not in combined for w in ["damaged vehicle", "wreckage", "car crash", "collision scene"])
 
             # Prevent false positive animal detection if context is negative (e.g. "no animal", "without animal")
             negative_animal_phrases = ["no animal", "no dead animal", "no stray", "without animal", "not an animal", "no wildlife"]
@@ -743,25 +748,35 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                     ai_eval["image_analysis"] = "Detected controlled fire/bonfire/festival; classified as non-emergency."
             elif is_minor and not has_danger:
                 new_conf = max(75, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 70)))
-            elif has_accident and not any(w in combined for w in ["fire","flame","burning"]):
+            elif (has_accident or is_serious_collision) and not any(w in combined for w in ["fire","flame","burning"]):
                 # User Priority: Only use animal_accident if an animal is clearly visible and involved.
                 # If both vehicle and animal are present, check for specific collision/injury context.
                 is_animal_involved = has_animal and any(w in combined for w in ["hit","struck","under","carcass","roadkill","lying","dead","collision","crash"])
                 
-                # REFINEMENT: Don't override if AI already found a specific valid type (pothole, road_damage, etc.)
-                # unless a vehicle is EXPLICITLY detected in the combined text.
-                current_ai_type = (overview.get("type") or "").lower()
-                specific_types = ["pothole", "road_damage", "tree_fallen", "animal_hazard", "animal_accident", "dead_animal", "street_sign_damage"]
+                # REFINEMENT: Don't override if AI already found a specific valid infrastructure type
+                # unless there's EXPLICIT evidence of a serious collision.
+                current_ai_type = str(overview.get("type") or "").lower()
+                infra_types = [
+                    "pothole", "road_damage", "tree_fallen", "dead_animal", 
+                    "street_sign_damage", "garbage", "trash", "structural_damage",
+                    "severe road degradation", "degradation", "cracks"
+                ]
                 
-                if current_ai_type in specific_types and not has_vehicle:
-                    logger.info(f"Maintaining specific AI type '{current_ai_type}' - skipping car_accident override (no vehicle detected).")
+                # 🛠️ CRITICAL FIX: If Pothole markers are present, DO NOT override to car_accident 
+                # unless severe wreckage is explicitly detected and it's not a negative mention.
+                has_pothole_markers = any(w in combined for w in ["pothole", "road damage", "degradation", "asphalt damage"])
+                
+                if (current_ai_type in infra_types or has_pothole_markers) and not is_serious_collision:
+                    logger.info(f"Maintaining specific type '{current_ai_type}' (Pothole markers={has_pothole_markers}) - ignoring accident heuristic.")
                     new_conf = conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)
                     issue_detected = True
                 else:
-                    if has_vehicle and is_animal_involved:
+                    # REFINEMENT: Prioritize car_accident over animal_accident if it's serious wreckage
+                    # unless a specific animal species is actually confirmed in the text.
+                    if has_vehicle and is_animal_involved and (has_specific_animal or not is_serious_collision):
                         overview["type"] = "animal_accident"
                         new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
-                    elif has_vehicle:
+                    elif has_vehicle and (has_accident or is_serious_collision):
                         overview["type"] = "car_accident"
                         new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
                     elif has_animal:
@@ -769,7 +784,7 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                         new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
                     else:
                         # Fallback case: accident keyword found but no clear vehicle/animal
-                        # If AI already has a type, keep it. Otherwise default to Other.
+                        # If AI already has a type, keep it.
                         if current_ai_type in ["None", "none", "unknown", "other", ""]:
                             overview["type"] = "car_accident"
                             new_conf = max(80, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 75)))

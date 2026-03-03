@@ -173,7 +173,26 @@ async def login(user_data: UserLogin):
             ]
         })
         
-        if not user or "hashed_password" not in user or not verify_password(user_data.password, user["hashed_password"]):
+        if not user:
+            logger.warning(f"❌ Login failed: User '{identifier}' not found.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect credentials", # Keep generic for security
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Check if Google account
+        if "hashed_password" not in user:
+             provider = user.get("auth_provider", "Google")
+             logger.info(f"💡 User '{identifier}' found but uses {provider}. Guiding to Google Login.")
+             raise HTTPException(
+                 status_code=status.HTTP_401_UNAUTHORIZED,
+                 detail=f"This account uses {provider.capitalize()} login. Please click 'Sign in with Google'.",
+                 headers={"WWW-Authenticate": "Bearer"},
+             )
+
+        if not verify_password(user_data.password, user["hashed_password"]):
+            logger.warning(f"❌ Login failed: Incorrect password for '{identifier}'.")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect credentials",

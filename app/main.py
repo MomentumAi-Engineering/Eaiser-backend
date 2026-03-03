@@ -260,6 +260,13 @@ async def log_requests(request: Request, call_next):
     try:
         response = await call_next(request)
         if should_log and response.status_code >= 400:
+            if response.status_code == 401 and "/api/auth/login" in path:
+                try:
+                    # Capture body if possible (only for debugging)
+                    # Note: request.body() can only be called once, so we might need more complex handling
+                    # but for now let's just log that it was a 401 on login
+                    logger.warning(f"❌ AUTH FAILURE: 401 for {path}")
+                except: pass
             logger.warning(f"⚠️ {response.status_code} for {request.method} {path}")
         return response
     except Exception as e:
