@@ -44,6 +44,7 @@ from services.email_service import send_email, send_formatted_ai_alert
 from services.geocode_service import reverse_geocode, geocode_zip_code
 from services.report_generation_service import build_unified_issue_json
 from services.rate_limiter_service import AdvancedRateLimiter, RateLimitTier
+from core.database import get_database
 
 # Utilities
 from utils.location import get_authority, get_authority_by_zip_code
@@ -1432,10 +1433,17 @@ async def submit_issue_optimized(
              # If it's already submitted, we might allow re-submit if needed, but usually block
              logger.warning(f"Issue {issue_id} has status '{current_status}'. Proceeding anyway for user convenience.")
         
-        # 3. Validate authorities
+        # 3. Validate / auto-assign authorities
         selected_authorities = request.selected_authorities
         if not selected_authorities:
-            raise HTTPException(status_code=400, detail="At least one authority must be selected")
+            # No mapped authority — auto-route to Admin Review Team
+            # Admin will classify via Mapping Review panel
+            logger.info(f"⚠️ No authorities for {issue_id} (type: {issue.get('issue_type')}). Routing to Admin Review Team.")
+            selected_authorities = [{
+                "name": "EAiSER Admin Review Team",
+                "email": "eaiser@momntumai.com",
+                "type": "admin_review"
+            }]
             
         # 4. Prepare report (merge edits)
         report = issue.get("report") or {}
@@ -1503,6 +1511,49 @@ async def submit_issue_optimized(
         logger.info(f"Submit Decision for {issue_id}: Conf={conf_val}%, HighConf={is_high_confidence}, Restricted={is_restricted}, Conflict={policy_conflict}")
         
         needs_review = (not is_high_confidence) or is_restricted or policy_conflict
+        
+        # 🔑 ADMIN REVIEW ROUTING: If routed to Admin Review Team (no mapped authority),
+        # always force needs_review=True AND insert into authority_mapping_review queue
+        # so admin can see it in Mapping Review → Unmapped Review tab.
+        is_admin_review_only = (
+            len(selected_authorities) == 1 and
+            selected_authorities[0].get("type") == "admin_review"
+        )
+        if is_admin_review_only:
+            needs_review = True  # Force to needs_review regardless of confidence
+            # Insert into authority_mapping_review collection for admin queue
+            try:
+                db = await get_database()
+                
+                # Build a clean description for the review entry
+                review_description = (
+                    report.get("issue_overview", {}).get("summary_explanation") or
+                    report.get("unified_report", {}).get("summary_text") or
+                    ""
+                )
+                # Truncate to 300 chars for display
+                if len(review_description) > 300:
+                    review_description = review_description[:297] + "..."
+                
+                review_entry = {
+                    "id": str(uuid.uuid4()),
+                    "issue_id": issue_id,
+                    "issue_type": issue_type,
+                    "submitted_description": review_description,
+                    "current_routed_to": "admin_review",
+                    "address": issue.get("address", ""),
+                    "zip_code": issue.get("zip_code", ""),
+                    "confidence": conf_val,
+                    "flagged_at": datetime.utcnow().isoformat(),
+                    "resolved": False,
+                    "user_email": issue.get("user_email", ""),
+                    "image_id": issue.get("image_id")
+                }
+                await db.authority_mapping_review.insert_one(review_entry)
+                logger.info(f"📋 Inserted {issue_id} into authority_mapping_review queue (type: {issue_type})")
+            except Exception as e:
+                logger.warning(f"Could not insert into mapping_review queue: {e}")
+
         
         # 🔑 GUEST REPORT ADOPTION: If the issue was created by a guest (user_email=None),
         # assign it to the currently logged-in user. This makes it visible in their dashboard.

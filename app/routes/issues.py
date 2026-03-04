@@ -393,11 +393,12 @@ async def send_authority_email(
     <style>
         body {{
             font-family: 'Segoe UI', Arial, sans-serif;
-            line-height: 1.6;
+            line-height: 1.7;
             color: #333333;
             background-color: #f4f7f6;
             margin: 0;
             padding: 20px;
+            font-size: 16px;
         }}
         .email-container {{
             max-width: 650px;
@@ -416,7 +417,7 @@ async def send_authority_email(
         }}
         .header h1 {{
             margin: 0;
-            font-size: 24px;
+            font-size: 28px;
             letter-spacing: 1px;
             color: #f6c521;
         }}
@@ -424,7 +425,7 @@ async def send_authority_email(
             display: inline-block;
             padding: 4px 12px;
             border-radius: 20px;
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 700;
             text-transform: uppercase;
             color: white;
@@ -435,12 +436,12 @@ async def send_authority_email(
             padding: 30px;
         }}
         .section-header {{
-            font-size: 18px;
+            font-size: 22px;
             font-weight: 700;
             color: #2c3e50;
             border-bottom: 2px solid #f1f1f1;
-            padding-bottom: 8px;
-            margin-bottom: 20px;
+            padding-bottom: 10px;
+            margin-bottom: 22px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }}
@@ -454,22 +455,25 @@ async def send_authority_email(
             margin-bottom: 15px;
         }}
         .label {{
-            font-size: 12px;
+            font-size: 14px;
             color: #7f8c8d;
             font-weight: 600;
             text-transform: uppercase;
             display: block;
+            margin-bottom: 3px;
         }}
         .value {{
-            font-size: 15px;
+            font-size: 18px;
             color: #2d3436;
             font-weight: 500;
         }}
         .description-box {{
             background-color: #f8fafc;
             border-left: 4px solid #f6c521;
-            padding: 15px;
+            padding: 18px 20px;
             font-style: italic;
+            font-size: 17px;
+            line-height: 1.7;
             margin-bottom: 25px;
         }}
         .evidence-image {{
@@ -489,28 +493,29 @@ async def send_authority_email(
             padding-left: 20px;
             margin: 0;
             color: #475569;
+            font-size: 17px;
         }}
         .routing-list li {{
-            margin-bottom: 8px;
+            margin-bottom: 10px;
         }}
         .footer {{
             background-color: #f8fafc;
-            padding: 20px;
+            padding: 25px;
             text-align: center;
-            font-size: 12px;
+            font-size: 13px;
             color: #94a3b8;
             border-top: 1px solid #e2e8f0;
         }}
         .map-btn {{
             display: inline-block;
-            padding: 10px 20px;
+            padding: 12px 24px;
             background-color: #1a202c;
             color: white !important;
             text-decoration: none;
             border-radius: 6px;
             font-weight: 600;
-            font-size: 14px;
-            margin-top: 10px;
+            font-size: 16px;
+            margin-top: 12px;
         }}
     </style>
 </head>
@@ -519,7 +524,7 @@ async def send_authority_email(
         <div class="header">
             <h1>EAiSER CIVIC</h1>
             <div class="status-badge">{display_priority} Priority</div>
-            <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.8;">Automated Incident Routing System</p>
+            <p style="margin: 5px 0 0 0; font-size: 16px; opacity: 0.8;">Automated Incident Routing System</p>
         </div>
 
         <div class="content-section">
@@ -561,13 +566,13 @@ async def send_authority_email(
             </table>
 
             <div class="section-header" style="margin-top: 40px;">2. Photographic Evidence</div>
-            <p style="font-size: 13px; color: #666; margin-bottom: 5px;">Primary visual evidence from the scene:</p>
+            <p style="font-size: 15px; color: #666; margin-bottom: 8px;">Primary visual evidence from the scene:</p>
             <img src="cid:issue_image" alt="Incident Evidence" class="evidence-image">
 
             <div class="section-header" style="margin-top: 40px;">3. Incident Routing</div>
             <div class="analysis-card">
-                <p style="margin: 0 0 15px 0; font-size: 14px; color: #334155; font-weight: 500;">This incident has been securely routed to the following departments for appropriate action:</p>
-                <ul class="routing-list" style="font-size: 15px;">
+                <p style="margin: 0 0 15px 0; font-size: 16px; color: #334155; font-weight: 500;">This incident has been securely routed to the following departments for appropriate action:</p>
+                <ul class="routing-list" style="font-size: 17px;">
                     {routing_html}
                 </ul>
             </div>
@@ -1027,7 +1032,7 @@ async def create_issue(
              ai_json_context["case_id"] = issue_id
              ai_json_context["confidence"] = confidence
 
-        authority_result = await resolve_authorities(issue_type, zip_code, ai_json_context)
+        authority_result = await resolve_authorities(issue_type, zip_code, ai_json_context, issue_id)
         
         resolved_auths = authority_result["authorities"]
         

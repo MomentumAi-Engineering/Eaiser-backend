@@ -80,7 +80,7 @@ def load_mappings(base_path: Optional[str] = None):
     except Exception as e:
         logger.error(f"❌ Failed to load zip_code_authorities.json: {e}")
 
-async def resolve_authorities(issue_type: str, zip_code: str, ai_json: Dict[str, Any]) -> Dict[str, Any]:
+async def resolve_authorities(issue_type: str, zip_code: str, ai_json: Dict[str, Any], issue_id: Optional[str] = None) -> Dict[str, Any]:
     """
     3-tier authority resolution:
     1. Try exact issue type mapping
@@ -119,7 +119,9 @@ async def resolve_authorities(issue_type: str, zip_code: str, ai_json: Dict[str,
         # Create admin review entry logic
         mapping_review_entry = {
             "id": str(uuid.uuid4()),
-            "case_id": ai_json.get("case_id"),
+            "issue_id": issue_id,
+            "case_id": ai_json.get("case_id") or issue_id,
+            "zip_code": zip_code,  # Correctly save zip_code for admin review routing
             "issue_type": issue_type,
             "submitted_description": ai_json.get("summary_explanation", ai_json.get("description", "")),
             "ai_confidence": ai_json.get("confidence", 0),
@@ -200,6 +202,20 @@ async def update_department_mapping(issue_type: str, departments: List[str], adm
 def get_all_authorities():
     """Return the entire zip code authorities map."""
     return ZIP_CODE_AUTHORITIES
+
+def get_authority_by_department(zip_code: str, department: str) -> List[Dict[str, Any]]:
+    """
+    Get authorities for a specific department within a zip code.
+    Fallback to 'default' zip if not found.
+    """
+    zip_str = str(zip_code) if zip_code else ""
+    auth_data = ZIP_CODE_AUTHORITIES.get(zip_str)
+    
+    if not auth_data:
+        # Fallback to default zip if requested zip not found
+        auth_data = ZIP_CODE_AUTHORITIES.get("default", {})
+        
+    return auth_data.get(department, [])
 
 async def update_zip_authority(zip_code: str, data: Dict[str, Any], admin_email: str = "system"):
     """Update or add a zip code entry."""

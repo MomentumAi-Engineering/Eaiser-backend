@@ -284,7 +284,18 @@ async def google_login(login_data: GoogleLogin):
             raise HTTPException(status_code=400, detail="Invalid Google Token")
 
         email = id_info.get("email")
-        name = id_info.get("name")
+        name = id_info.get("name", "")
+        given_name = id_info.get("given_name", "")
+        family_name = id_info.get("family_name", "")
+        
+        # Split name into first/last if Google didn't provide given_name
+        if not given_name and name:
+            parts = name.split(" ", 1)
+            given_name = parts[0]
+            family_name = parts[1] if len(parts) > 1 else ""
+        
+        # Generate a username from email
+        base_username = email.split("@")[0].lower() if email else "user"
         
         db = await get_db()
         user = await db["users"].find_one({"email": email})
@@ -293,15 +304,34 @@ async def google_login(login_data: GoogleLogin):
             # Create user if logging in for first time via Google
             user_payload = {
                 "name": name,
+                "first_name": given_name,
+                "last_name": family_name,
+                "username": base_username,
                 "email": email,
                 "role": "user",
                 "is_active": True,
                 "auth_provider": "google",
+                "avatar": id_info.get("picture"),
+                "email_verified": id_info.get("email_verified", False),
                 "created_at": datetime.utcnow()
             }
             result = await db["users"].insert_one(user_payload)
             user_id = str(result.inserted_id)
-            user = {**user_payload, "_id": user_id} # Construct user object for response
+            user = {**user_payload, "_id": user_id}
+        else:
+            # For existing Google users: backfill missing first_name/last_name/username
+            backfill = {}
+            if not user.get("first_name") and given_name:
+                backfill["first_name"] = given_name
+            if not user.get("last_name") and family_name:
+                backfill["last_name"] = family_name
+            if not user.get("username") and base_username:
+                backfill["username"] = base_username
+            if not user.get("avatar") and id_info.get("picture"):
+                backfill["avatar"] = id_info.get("picture")
+            if backfill:
+                await db["users"].update_one({"email": email}, {"$set": backfill})
+                user.update(backfill)
             
             # Send Welcome Email for new Google User
             try:
@@ -310,13 +340,12 @@ async def google_login(login_data: GoogleLogin):
             except Exception as email_error:
                 logger.error(f"Failed to send welcome email to Google user: {email_error}")
 
-        else:
-            if not user.get("is_active", True):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Account is deactivated. Please contact support."
-                )
-            user_id = str(user["_id"])
+        if not user.get("is_active", True):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is deactivated. Please contact support."
+            )
+        user_id = str(user["_id"])
 
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
@@ -438,11 +467,23 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
+        # Fallback: parse 'name' field for Google users who lack first/last
+        first_name = user.get("first_name", "")
+        last_name = user.get("last_name", "")
+        if not first_name and not last_name and user.get("name"):
+            parts = user["name"].split(" ", 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ""
+        
+        username = user.get("username", "")
+        if not username and user.get("email"):
+            username = user["email"].split("@")[0].lower()
+        
         return {
             "id": str(user["_id"]),
-            "first_name": user.get("first_name", ""),
-            "last_name": user.get("last_name", ""),
-            "username": user.get("username", ""),
+            "first_name": first_name,
+            "last_name": last_name,
+            "username": username,
             "email": user.get("email"),
             "role": user.get("role", "user"),
             "avatar": user.get("avatar"),

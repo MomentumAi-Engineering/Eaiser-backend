@@ -2279,53 +2279,192 @@ class ResolveMappingRequest(BaseModel):
     issue_type: str
     mapped_departments: List[str]
 
+class RejectMappingRequest(BaseModel):
+    reason: Optional[str] = "Issue could not be verified or does not meet reporting criteria."
+
 @router.post("/mapping-review/{review_id}/resolve")
 async def resolve_mapping(review_id: str, request: ResolveMappingRequest, admin: dict = Depends(get_admin_user)):
     """
-    Admin resolves an unmapped issue by:
-    1. Updating the specific review entry
-    2. Updating the global mapping file
+    Admin approves an unmapped issue:
+    1. Marks the review entry as resolved
+    2. Updates the global department mapping table
+    3. Dispatches the report to the selected authority via email
+    4. Updates the main issue status to 'submitted'
     """
-    from services.authority_service import update_department_mapping
+    from services.authority_service import update_department_mapping, get_authority_by_department
+    from services.mongodb_optimized_service import get_optimized_mongodb_service
     
     try:
         db = await get_database()
         
-        # 1. Update review entry
-        result = await db.authority_mapping_review.update_one(
-            {"id": review_id}, # Note: using "id" (uuid) not "_id" based on creation logic
-            {
-                "$set": {
-                    "resolved": True,
-                    "resolved_mapping": ','.join(request.mapped_departments),
-                    "resolved_by": admin.get("email"),
-                    "resolved_at": datetime.utcnow().isoformat()
-                }
-            }
+        # 1. Fetch the review entry
+        review_entry = await db.authority_mapping_review.find_one({"id": review_id})
+        if not review_entry:
+            raise HTTPException(status_code=404, detail="Review entry not found")
+        
+        issue_id = review_entry.get("issue_id") or review_entry.get("case_id")
+        zip_code = review_entry.get("zip_code", "")
+        
+        # 2. Mark review entry as resolved (approved)
+        await db.authority_mapping_review.update_one(
+            {"id": review_id},
+            {"$set": {
+                "resolved": True,
+                "resolution": "approved",
+                "resolved_mapping": ','.join(request.mapped_departments),
+                "resolved_by": admin.get("email"),
+                "resolved_at": datetime.utcnow().isoformat()
+            }}
         )
         
-        if result.matched_count == 0:
-            # Fallback check if it was stored with _id as uuid? 
-            # In service we used "id": str(uuid.uuid4())
-            raise HTTPException(status_code=404, detail="Review entry not found")
-            
-        # 2. Update mappings
-        # 2. Update mappings
-        success = await update_department_mapping(request.issue_type, request.mapped_departments, admin_email=admin.get("email"))
+        # 3. Update global department mapping table for future auto-routing
+        await update_department_mapping(request.issue_type, request.mapped_departments, admin_email=admin.get("email"))
         
-        if not success:
-             logger.warning("Mapping file update failed, but DB entry resolved.")
+        # 4. Find the actual issue and dispatch to the authority
+        dispatched = False
+        if issue_id:
+            mongodb_service = await get_optimized_mongodb_service()
+            issue = await mongodb_service.get_issue_by_id(issue_id) if mongodb_service else None
+            
+            if issue:
+                # Build authority list from the selected departments + zip code
+                authorities = []
+                for dept in request.mapped_departments:
+                    dept_auths = get_authority_by_department(zip_code, dept)
+                    if dept_auths:
+                        for a in dept_auths:
+                            if not any(x.get("email") == a.get("email") for x in authorities):
+                                authorities.append(a)
+                
+                # Fallback: use department name as the authority
+                if not authorities:
+                    authorities = [{
+                        "name": f"{', '.join(request.mapped_departments).replace('_', ' ').title()} Department",
+                        "email": "eaiser@momntumai.com",
+                        "type": request.mapped_departments[0]
+                    }]
+                
+                # Fetch image for email
+                image_content = b""
+                try:
+                    from bson.objectid import ObjectId
+                    image_id = issue.get("image_id")
+                    if image_id and mongodb_service:
+                        grid_out = await mongodb_service.fs.open_download_stream(ObjectId(image_id))
+                        image_content = await grid_out.read()
+                except Exception:
+                    pass
+                
+                # Dispatch email
+                try:
+                    report = issue.get("report") or {}
+                    conf_val = float(issue.get("confidence") or 0)
+                    email_success = await send_authority_email(
+                        issue_id=issue_id,
+                        authorities=authorities,
+                        issue_type=request.issue_type,
+                        final_address=issue.get("address", "N/A"),
+                        zip_code=zip_code or "N/A",
+                        timestamp_formatted=issue.get("timestamp_formatted") or datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+                        report=report,
+                        confidence=conf_val,
+                        category=issue.get("category", "public"),
+                        timezone_name=issue.get("timezone_name", "UTC"),
+                        latitude=float(issue.get("latitude") or 0),
+                        longitude=float(issue.get("longitude") or 0),
+                        image_content=image_content
+                    )
+                    dispatched = email_success
+                    logger.info(f"✅ Admin-dispatched report {issue_id} → {[a['email'] for a in authorities]} | success={email_success}")
+                except Exception as e:
+                    logger.error(f"Email dispatch failed for {issue_id}: {e}")
+                
+                # Update issue status in DB
+                if mongodb_service:
+                    await mongodb_service.update_issue_status(issue_id, {
+                        "status": "submitted",
+                        "issue_type": request.issue_type,
+                        "is_submitted": True,
+                        "email_status": "sent" if dispatched else "failed",
+                        "authority_email": [a.get("email") for a in authorities],
+                        "authority_name": [a.get("name") for a in authorities],
+                        "admin_approved_by": admin.get("email"),
+                        "admin_approved_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.utcnow()
+                    })
         
         return {
-            'status': 'resolved', 
+            'status': 'approved',
             'issue_type': request.issue_type, 
-            'mapped_to': request.mapped_departments
+            'mapped_to': request.mapped_departments,
+            'dispatched': dispatched,
+            'issue_id': issue_id
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error resolving mapping: {e}")
+        logger.error(f"Error resolving mapping: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mapping-review/{review_id}/reject")
+async def reject_mapping(review_id: str, request: RejectMappingRequest, admin: dict = Depends(get_admin_user)):
+    """
+    Admin rejects/denies an unmapped issue:
+    1. Marks the review entry as resolved (rejected)
+    2. Updates the main issue status to 'screened_out'
+    """
+    from services.mongodb_optimized_service import get_optimized_mongodb_service
+    
+    try:
+        db = await get_database()
+        
+        # 1. Fetch the review entry
+        review_entry = await db.authority_mapping_review.find_one({"id": review_id})
+        if not review_entry:
+            raise HTTPException(status_code=404, detail="Review entry not found")
+        
+        issue_id = review_entry.get("issue_id")
+        
+        # 2. Mark review entry as resolved (rejected)
+        await db.authority_mapping_review.update_one(
+            {"id": review_id},
+            {"$set": {
+                "resolved": True,
+                "resolution": "rejected",
+                "rejection_reason": request.reason,
+                "resolved_by": admin.get("email"),
+                "resolved_at": datetime.utcnow().isoformat()
+            }}
+        )
+        
+        # 3. Update the main issue status to screened_out
+        if issue_id:
+            mongodb_service = await get_optimized_mongodb_service()
+            if mongodb_service:
+                await mongodb_service.update_issue_status(issue_id, {
+                    "status": "screened_out",
+                    "is_submitted": False,
+                    "rejection_reason": request.reason,
+                    "admin_rejected_by": admin.get("email"),
+                    "admin_rejected_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow()
+                })
+        
+        logger.info(f"❌ Admin rejected mapping review {review_id} (issue: {issue_id}) | reason: {request.reason}")
+        
+        return {
+            'status': 'rejected',
+            'issue_id': issue_id,
+            'reason': request.reason
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rejecting mapping: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 # --- AUTHORITY MANAGEMENT ENDPOINTS ---
 
