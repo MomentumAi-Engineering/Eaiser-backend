@@ -836,7 +836,15 @@ class OptimizedMongoDBService:
         try:
             async with self._safe_operation('read'):
                 collection = await self.get_collection('issues', read_only=True)
+                
+                # Robust ID lookup (handles string vs ObjectId)
                 issue = await collection.find_one({"_id": issue_id})
+                if not issue:
+                    try:
+                        from bson.objectid import ObjectId
+                        issue = await collection.find_one({"_id": ObjectId(issue_id)})
+                    except Exception:
+                        pass
                 
                 if not issue or not issue.get('image_id'):
                     return None
@@ -846,7 +854,12 @@ class OptimizedMongoDBService:
                     
                 image_id = issue['image_id']
                 try:
-                    gridout = await self.fs.open_download_stream(ObjectId(image_id))
+                    # image_id itself could be string or ObjectId
+                    try:
+                        from bson.objectid import ObjectId
+                        gridout = await self.fs.open_download_stream(ObjectId(image_id))
+                    except Exception:
+                        gridout = await self.fs.open_download_stream(image_id)
                     return gridout
                 except Exception as e:
                     logger.error(f"❌ Failed to open download stream for image {image_id}: {e}")

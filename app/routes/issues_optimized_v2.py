@@ -959,11 +959,17 @@ async def get_my_issues(
         
         # Format for response and cache
         for issue_data in issues_data:
+            current_id = str(issue_data.get('_id') or issue_data.get('id') or '')
             if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
                 # Ensure it's treated as UTC by appending 'Z'
                 issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
             elif 'timestamp' in issue_data and isinstance(issue_data['timestamp'], datetime):
                  issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
+            
+            # Ensure image_url is present if image_id or hash exists
+            if not issue_data.get('image_url'):
+                if issue_data.get('image_id') or (issue_data.get('image_hash') and issue_data.get('image_hash') != f"manual_{current_id}"):
+                    issue_data['image_url'] = f"/api/issues/{current_id}/image"
 
         # Cache for user (shorter TTL for dashboard responsiveness)
         await set_cached_data(cache_key, issues_data, ttl=30)
@@ -1172,10 +1178,15 @@ async def get_issues_optimized(
             processing_time = (time.time() - start_time) * 1000
             performance_metrics.record_request(time.time() - start_time)
             
-            # Convert datetime objects to strings for JSON serialization
+            # Ensure all cached items have image_url correctly populated
             for issue_data in cached_issues:
+                current_id = str(issue_data.get('_id') or issue_data.get('id') or '')
                 if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
                     issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
+                
+                if not issue_data.get('image_url'):
+                    if issue_data.get('image_id') or (issue_data.get('image_hash') and issue_data.get('image_hash') != f"manual_{current_id}"):
+                        issue_data['image_url'] = f"/api/issues/{current_id}/image"
             
             return [
                 Issue(**{**issue_data, 'processing_time_ms': processing_time})
@@ -1204,19 +1215,23 @@ async def get_issues_optimized(
             limit=limit
         )
         
-        # Cache the result
-        await set_cached_data(cache_key, issues_data, ttl=180)  # Cache for 3 minutes
-        
         processing_time = (time.time() - start_time) * 1000
         performance_metrics.record_request(time.time() - start_time)
         
         # Convert datetime objects to strings for JSON serialization
+        # Format results for response
         for issue_data in issues_data:
+            current_id = str(issue_data.get('_id') or issue_data.get('id') or '')
             if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
                 issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
-            # Populate image_url
-            if issue_data.get('image_id') or issue_data.get('image_hash') != f"manual_{issue_data.get('_id')}":
-                issue_data['image_url'] = f"/api/issues/{issue_data['_id']}/image"
+                
+            # Ensure image_url is present
+            if not issue_data.get('image_url'):
+                 if issue_data.get('image_id') or (issue_data.get('image_hash') and issue_data.get('image_hash') != f"manual_{current_id}"):
+                    issue_data['image_url'] = f"/api/issues/{current_id}/image"
+
+        # Cache the result AFTER formatting
+        await set_cached_data(cache_key, issues_data, ttl=180)
         
         return [
             Issue(**{**issue_data, 'processing_time_ms': processing_time})
@@ -1800,6 +1815,39 @@ async def delete_issue_optimized(
         logger.error(f"Failed to delete issue {issue_id}: {e}", exc_info=True)
         performance_metrics.record_request(time.time() - start_time, error=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete issue: {str(e)}")
+
+@router.get("/issues/{issue_id}/image")
+async def get_issue_image_optimized(
+    issue_id: str,
+    _: None = Depends(rate_limit_dependency)
+):
+    """
+    🖼️ Serve issue evidence image from GridFS
+    """
+    try:
+        mongodb_service = await get_optimized_mongodb_service()
+        if not mongodb_service:
+            raise HTTPException(status_code=503, detail="Database service unavailable")
+        
+        image_stream = await mongodb_service.get_issue_image_stream(issue_id)
+        
+        if not image_stream:
+            # Return a default placeholder or 404
+            raise HTTPException(status_code=404, detail="Image not found for this issue")
+        
+        return StreamingResponse(
+            image_stream,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "Content-Disposition": f"inline; filename=issue_{issue_id}.jpg"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving image for issue {issue_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving image")
 
 # ========================================
 # MONITORING AND HEALTH ENDPOINTS
