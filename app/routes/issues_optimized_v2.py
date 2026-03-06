@@ -1120,31 +1120,7 @@ async def get_issue_optimized(
         performance_metrics.record_request(time.time() - start_time, error=True)
         raise HTTPException(status_code=500, detail=f"Failed to get issue: {str(e)}")
 
-@router.get("/issues/{issue_id}/image")
-async def get_issue_image_optimized(
-    issue_id: str,
-    _: None = Depends(rate_limit_dependency)
-):
-    """
-    🖼️ Stream issue image from GridFS
-    """
-    try:
-        mongodb_service = await get_optimized_mongodb_service()
-        if not mongodb_service:
-            raise HTTPException(status_code=503, detail="Database service unavailable")
-        
-        image_stream = await mongodb_service.get_issue_image_stream(issue_id)
-        
-        if not image_stream:
-            raise HTTPException(status_code=404, detail="Image not found")
-        
-        return StreamingResponse(image_stream, media_type="image/jpeg")
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to stream image for issue {issue_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve image")
+
 
 @router.get("/issues", response_model=List[Issue])
 async def get_issues_optimized(
@@ -1379,44 +1355,7 @@ async def create_bulk_issues(
         raise HTTPException(status_code=500, detail=f"Failed to create bulk issues: {str(e)}")
 
 
-@router.get("/issues/{issue_id}/image")
-@router.get("/issues/image/{issue_id}")
-async def get_issue_image(issue_id: str):
-    """
-    🖼️ Serve issue image from GridFS
-    """
-    try:
-        mongodb_service = await get_optimized_mongodb_service()
-        if not mongodb_service or not mongodb_service.fs:
-            raise HTTPException(status_code=503, detail="Database service unavailable")
-        
-        # 1. First get the issue to find the image_id
-        issue = await mongodb_service.get_issue_by_id(issue_id)
-        if not issue or not issue.get("image_id"):
-            raise HTTPException(status_code=404, detail="Image not found for this issue")
-        
-        from fastapi.responses import StreamingResponse
-        import io
-        
-        # 2. Get the file stream from GridFS
-        # GridFS handles binary data efficiently
-        grid_out = await mongodb_service.fs.open_download_stream(ObjectId(issue["image_id"]))
-        
-        # 3. Stream the file back to the client
-        return StreamingResponse(
-            io.BytesIO(await grid_out.read()),
-            media_type="image/jpeg",
-            headers={
-                "Cache-Control": "public, max-age=86400",  # Cache for 24 hours
-                "Content-Disposition": f"inline; filename={issue_id}.jpg"
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to fetch image for issue {issue_id}: {e}")
-        raise HTTPException(status_code=404, detail="Image not found")
+
 
 @router.post("/issues/{issue_id}/submit", response_model=IssueResponse)
 async def submit_issue_optimized(
@@ -1817,6 +1756,7 @@ async def delete_issue_optimized(
         raise HTTPException(status_code=500, detail=f"Failed to delete issue: {str(e)}")
 
 @router.get("/issues/{issue_id}/image")
+@router.get("/issues/image/{issue_id}")
 async def get_issue_image_optimized(
     issue_id: str,
     _: None = Depends(rate_limit_dependency)
