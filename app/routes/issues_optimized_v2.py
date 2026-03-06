@@ -805,25 +805,11 @@ async def create_issue_optimized(
             token = None
     
     if not token:
-        is_guest_user = True
-        # Guest Limit Enforcement (Max 2 reports per guest)
-        client_ip = request.client.host if request.client else "unknown"
-        redis_service = await get_redis_cluster_service()
-        if redis_service:
-            guest_key = f"guest_report_count:{client_ip}"
-            count_data = await redis_service.redis_client.get(guest_key)
-            count = int(count_data) if count_data else 0
-            
-            if count >= 2:
-                logger.warning(f"🚫 Guest limit reached for IP: {client_ip}")
-                raise HTTPException(
-                    status_code=403, 
-                    detail="Guest report limit reached (2/2). Please login or create an account to continue reporting."
-                )
-            
-            # Increment guest report count (expire in 24 hours)
-            await redis_service.redis_client.setex(guest_key, 86400, count + 1)
-            logger.info(f"👤 Guest report created. New count for {client_ip}: {count + 1}")
+        logger.warning("🚫 Unauthenticated report submission attempt")
+        raise HTTPException(
+            status_code=401, 
+            detail="Authentication required to create a report. Guest reporting is no longer supported."
+        )
 
     try:
         image_content = b""
