@@ -805,11 +805,8 @@ async def create_issue_optimized(
             token = None
     
     if not token:
-        logger.warning("🚫 Unauthenticated report submission attempt")
-        raise HTTPException(
-            status_code=401, 
-            detail="Authentication required to create a report. Guest reporting is no longer supported."
-        )
+        is_guest_user = True
+        logger.info("👤 Guest user generating report (login required to submit)")
 
     try:
         image_content = b""
