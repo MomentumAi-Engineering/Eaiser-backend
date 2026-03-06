@@ -12,9 +12,15 @@ import os
 import logging
 import secrets
 import hashlib
+import random
+import string
 
 # Setup Logging
 logger = logging.getLogger(__name__)
+
+def generate_short_id():
+    """Generate a customer-friendly 7-character alphanumeric ID"""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
 
 router = APIRouter()
 
@@ -247,11 +253,15 @@ async def login(user_data: UserLogin):
             expires_delta=access_token_expires
         )
         
+        # Generate a display-friendly short ID
+        raw_id = str(user["_id"])
+        short_id = raw_id[-7:].upper()
+
         return {
             "access_token": access_token, 
             "token_type": "bearer",
             "user": {
-                "id": str(user["_id"]),
+                "id": short_id,
                 "first_name": user.get("first_name", ""),
                 "last_name": user.get("last_name", ""),
                 "username": user.get("username", ""),
@@ -385,11 +395,15 @@ async def google_login(login_data: GoogleLogin):
             expires_delta=access_token_expires
         )
         
+        # Generate a display-friendly short ID
+        raw_id = str(user["_id"])
+        short_id = raw_id[-7:].upper()
+
         return {
             "access_token": access_token, 
             "token_type": "bearer",
             "user": {
-                "id": user_id,
+                "id": short_id,
                 "name": user.get("name"),
                 "email": user.get("email"),
                 "role": user.get("role", "user")
@@ -592,8 +606,14 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         if not username and user.get("email"):
             username = user["email"].split("@")[0].lower()
         
+        # Generate a display-friendly short ID (e.g., E1B2C3D)
+        # We use a shortened version of the Mongo ID for existing users to maintain consistency
+        raw_id = str(user["_id"])
+        short_id = raw_id[-7:].upper()
+
         return {
-            "id": str(user["_id"]),
+            "id": short_id,
+            "full_id": raw_id, # Keep full ID for internal use if needed
             "first_name": first_name,
             "last_name": last_name,
             "username": username,
