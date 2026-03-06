@@ -882,12 +882,13 @@ async def create_issue_optimized(
         
 
         
-    except HTTPException:
-        raise
     except Exception as e:
+        if hasattr(e, 'status_code'):
+            raise  # Re-raise HTTPException as-is
         logger.error(f"Failed to create issue: {e}", exc_info=True)
         performance_metrics.record_request(time.time() - start_time, error=True)
-        raise HTTPException(status_code=500, detail=f"Failed to create issue: {str(e)}")
+        from fastapi import HTTPException as HTTPExc
+        raise HTTPExc(status_code=500, detail=f"Failed to create issue: {str(e)}")
 
 @router.get("/issues/my-issues", response_model=List[Issue])
 async def get_my_issues(
