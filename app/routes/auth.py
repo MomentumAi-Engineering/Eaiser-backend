@@ -21,6 +21,34 @@ router = APIRouter()
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 logger.info(f"Google Auth Configured with Client ID: {GOOGLE_CLIENT_ID[:10]}..." if GOOGLE_CLIENT_ID else "GOOGLE_CLIENT_ID NOT SET")
 
+from fastapi.responses import JSONResponse
+
+@router.get("/mapkit-token")
+async def get_mapkit_token():
+    try:
+        team_id = os.environ.get("APPLE_TEAM_ID")
+        key_id = os.environ.get("APPLE_MAPKIT_KEY_ID")
+        private_key = os.environ.get("APPLE_MAPKIT_PRIVATE_KEY")
+        
+        if not team_id or not key_id or not private_key:
+            return JSONResponse({"token": None, "error": "Apple MapKit configuration missing"}, status_code=500)
+
+        # Ensure correct formatting for multiline env vars
+        private_key = private_key.replace("\\n", "\n") 
+
+        current_time = int(datetime.utcnow().timestamp())
+        claims = {
+            "iss": team_id,
+            "iat": current_time,
+            "exp": current_time + 1800, # valid for 30 mins
+        }
+        
+        token = jwt.encode(claims, private_key, algorithm="ES256", headers={"kid": key_id})
+        return {"token": token}
+    except Exception as e:
+        logger.error(f"Error generating MapKit token: {str(e)}")
+        return JSONResponse({"token": None, "error": str(e)}, status_code=500)
+
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 from fastapi.security import OAuth2PasswordBearer
