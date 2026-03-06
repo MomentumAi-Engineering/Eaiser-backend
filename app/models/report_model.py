@@ -22,7 +22,10 @@ class RealFlowDetails(BaseModel):
     reportContent: Optional[Dict[str, Any]] = None
 
 class ReportModel(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="_id")
+    id: str = Field(
+        default_factory=lambda: ''.join(__import__('random').choices(__import__('string').ascii_uppercase + __import__('string').digits, k=7)),
+        alias="_id"
+    )
     imageUrl: str
     originalName: Optional[str] = None
     status: str = "pending"  # pending, flagged, declined, waiting_review, submitted, approved

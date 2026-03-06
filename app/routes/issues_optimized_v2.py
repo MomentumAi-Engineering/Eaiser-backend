@@ -21,6 +21,8 @@ import logging
 import time
 import uuid
 import base64
+import random
+import string
 import json
 import re
 import hashlib
@@ -76,6 +78,10 @@ rate_limiter = AdvancedRateLimiter()
 
 # Authentication setup
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+def generate_short_id():
+    """Generate a customer-friendly 7-character alphanumeric ID"""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
@@ -821,7 +827,7 @@ async def create_issue_optimized(
                 raise HTTPException(status_code=400, detail="Image too large (max 10MB)")
         
         # Generate unique issue ID
-        issue_id = str(uuid.uuid4())
+        issue_id = generate_short_id()
         
         # Use authenticated email if available
         final_email = user_info.get("sub") if user_info else user_email
@@ -1300,7 +1306,7 @@ async def create_bulk_issues(
             batch_ids = []
             
             for issue_data in batch:
-                issue_id = str(uuid.uuid4())
+                issue_id = generate_short_id()
                 batch_ids.append(issue_id)
                 
                 # Add to background processing
@@ -1474,7 +1480,7 @@ async def submit_issue_optimized(
                     review_description = review_description[:297] + "..."
                 
                 review_entry = {
-                    "id": str(uuid.uuid4()),
+                    "id": generate_short_id(),
                     "issue_id": issue_id,
                     "issue_type": issue_type,
                     "submitted_description": review_description,

@@ -40,6 +40,13 @@ logging.getLogger("app.services.ai_service").setLevel(logging.WARNING)
 logging.getLogger("app.services.geocode_service").setLevel(logging.WARNING)
 router = APIRouter()
 
+import random
+import string
+
+def generate_short_id():
+    """Generate a customer-friendly 7-character alphanumeric ID"""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
@@ -681,7 +688,7 @@ async def create_issue(
     if image is None:
         logger.info("📝 Processing MANUAL REPORT (No Image Provided)")
         
-        issue_id = str(uuid.uuid4())
+        issue_id = generate_short_id()
         
         # Enforce "Unknown/Manual" state so user must fill it
         final_address = address
@@ -892,7 +899,7 @@ async def create_issue(
             logger.warning(f"Failed to geocode coordinates ({latitude}, {longitude}): {str(e)}", exc_info=True)
             final_address = "Unknown Address"
     
-    issue_id = str(uuid.uuid4())
+    issue_id = generate_short_id()
     try:
         report = await generate_report(
             image_content=image_content,

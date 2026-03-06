@@ -128,8 +128,13 @@ async def generate_report_endpoint(
     Endpoint to generate a full report.
     """
     try:
+        import random, string
+
+        def generate_short_id():
+            return ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
+
         image_content = await image.read()
-        issue_id = str(uuid.uuid4())
+        issue_id = generate_short_id()
         
         report = await generate_report(
             image_content=image_content,

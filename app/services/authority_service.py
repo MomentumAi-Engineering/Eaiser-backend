@@ -1,6 +1,8 @@
 import json
 import os
 import uuid
+import random
+import string
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +10,10 @@ from typing import List, Dict, Any, Optional
 from app.services.mongodb_service import get_db
 
 logger = logging.getLogger(__name__)
+
+def generate_short_id():
+    """Generate a customer-friendly 7-character alphanumeric ID"""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
 
 # Global In-Memory Cache
 ISSUE_DEPARTMENT_MAP = {}
@@ -38,7 +44,7 @@ async def log_audit_event(
             "details": details,
             "admin_email": admin_email,
             "timestamp": datetime.utcnow().isoformat(),
-            "id": str(uuid.uuid4())
+            "id": generate_short_id()
         }
         await db.audit_logs.insert_one(entry)
         logger.info(f"📝 Audit Logged: {action} on {target} by {admin_email}")
@@ -118,7 +124,7 @@ async def resolve_authorities(issue_type: str, zip_code: str, ai_json: Dict[str,
             
         # Create admin review entry logic
         mapping_review_entry = {
-            "id": str(uuid.uuid4()),
+            "id": generate_short_id(),
             "issue_id": issue_id,
             "case_id": ai_json.get("case_id") or issue_id,
             "zip_code": zip_code,  # Correctly save zip_code for admin review routing
