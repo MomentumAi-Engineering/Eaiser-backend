@@ -293,12 +293,14 @@ async def verify_email(request: VerifyEmailRequest):
             }
         )
         
-        # Optional: Send welcome email after verification
-        try:
-            from services.email_service import send_user_welcome_email
-            await send_user_welcome_email(user["email"], user.get("first_name", "User"))
-        except:
-            pass
+        # Optional: Send welcome email after verification if not sent before
+        if not user.get("welcome_email_sent", False):
+            try:
+                from services.email_service import send_user_welcome_email
+                await send_user_welcome_email(user["email"], user.get("first_name", "User"))
+                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
+            except:
+                pass
             
         return {"message": "Email verified successfully. You can now log in."}
     except HTTPException:
@@ -407,10 +409,12 @@ async def google_login(login_data: GoogleLogin):
                 await db["users"].update_one({"email": email}, {"$set": backfill})
                 user.update(backfill)
             
-            # Send Welcome Email for new Google User
+        # Send Welcome Email for new Google User if not sent before
+        if not user.get("welcome_email_sent", False):
             try:
                 from services.email_service import send_user_welcome_email
                 await send_user_welcome_email(email, name)
+                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
             except Exception as email_error:
                 logger.error(f"Failed to send welcome email to Google user: {email_error}")
 
@@ -479,6 +483,16 @@ async def apple_login(login_data: AppleLogin):
         last_name = name_info.get("lastName", "")
         logger.info(f"Extracted Names: first='{first_name}', last='{last_name}'")
 
+        # Decode id_token for email
+        try:
+            token_payload = jwt.get_unverified_claims(id_token_jwt)
+            email = token_payload.get("email")
+            if not email:
+                raise ValueError("Apple token missing email")
+        except Exception as e:
+            logger.error(f"Failed to decode Apple id_token: {e}")
+            raise HTTPException(status_code=400, detail="Invalid Apple Token")
+
         db = await get_db()
         email_lower = email.lower()
         user = await db["users"].find_one({"email": email_lower})
@@ -519,6 +533,15 @@ async def apple_login(login_data: AppleLogin):
                 logger.info(f"📝 Backfilling user data: {backfill}")
                 await db["users"].update_one({"_id": user["_id"]}, {"$set": backfill})
                 user.update(backfill)
+
+        # Send Welcome Email for new Apple User if not sent before
+        if not user.get("welcome_email_sent", False):
+            try:
+                from services.email_service import send_user_welcome_email
+                await send_user_welcome_email(email_lower, user.get("first_name", ""))
+                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
+            except Exception as email_error:
+                logger.error(f"Failed to send welcome email to Apple user: {email_error}")
 
         if not user.get("is_active", True):
             raise HTTPException(
