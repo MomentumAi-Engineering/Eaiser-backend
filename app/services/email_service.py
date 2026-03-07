@@ -1021,9 +1021,9 @@ async def send_password_reset_email(email: str, token: str) -> bool:
     """
     try:
         # Determine Frontend URL
-        frontend_url = os.getenv("FRONTEND_URL")
+        frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
         # Fallback for local dev if not set
-        if not frontend_url:
+        if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
             frontend_url = "http://localhost:5173"
         elif frontend_url.endswith("/"):
             frontend_url = frontend_url[:-1]
