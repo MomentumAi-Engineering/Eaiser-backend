@@ -266,7 +266,8 @@ async def login(user_data: UserLogin):
                 "last_name": user.get("last_name", ""),
                 "username": user.get("username", ""),
                 "email": user.get("email"),
-                "role": user.get("role", "user")
+                "role": user.get("role", "user"),
+                "email_verified": user.get("email_verified", False)
             }
         }
     except HTTPException:
@@ -305,6 +306,37 @@ async def verify_email(request: VerifyEmailRequest):
     except Exception as e:
         logger.error(f"Verification error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.post("/resend-verification")
+async def resend_verification(current_user: dict = Depends(get_current_user)):
+    """Resend verification email to the logged-in user."""
+    try:
+        db = await get_db()
+        user = await db["users"].find_one({"email": current_user["sub"]})
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        if user.get("email_verified", False):
+            return {"message": "Email is already verified."}
+        
+        # Generate new verification token
+        new_token = secrets.token_urlsafe(32)
+        await db["users"].update_one(
+            {"_id": user["_id"]},
+            {"$set": {"verification_token": new_token}}
+        )
+        
+        from services.email_service import send_verification_email
+        await send_verification_email(user["email"], user.get("first_name", "User"), new_token)
+        
+        logger.info(f"📧 Resent verification email to {user['email']}")
+        return {"message": "Verification email sent successfully. Please check your inbox."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resend verification error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to resend verification email")
 
 @router.post("/google", response_model=Token)
 async def google_login(login_data: GoogleLogin):
@@ -715,3 +747,43 @@ async def update_notifications(data: NotificationUpdate, current_user: dict = De
     except Exception as e:
         logger.error(f"Error updating notifications: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+from fastapi import File, UploadFile
+
+@router.post("/upload-avatar")
+async def upload_avatar(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    """Upload profile avatar to Cloudinary and update user document."""
+    try:
+        # Validate file type
+        allowed_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="Only JPEG, PNG, WebP and GIF images are allowed.")
+        
+        # Validate file size (max 2MB)
+        contents = await file.read()
+        if len(contents) > 2 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Image size must be under 2MB.")
+        
+        # Upload to Cloudinary
+        from services.cloudinary_service import upload_file_to_cloudinary
+        result = await upload_file_to_cloudinary(contents=contents, folder="user_avatars")
+        
+        if not result or not result.get("url"):
+            raise HTTPException(status_code=500, detail="Failed to upload image. Please try again.")
+        
+        avatar_url = result["url"]
+        
+        # Update user document
+        db = await get_db()
+        await db["users"].update_one(
+            {"email": current_user["sub"]},
+            {"$set": {"avatar": avatar_url}}
+        )
+        
+        logger.info(f"📸 Avatar uploaded for {current_user['sub']}")
+        return {"message": "Avatar uploaded successfully", "avatar_url": avatar_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Avatar upload error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload avatar")

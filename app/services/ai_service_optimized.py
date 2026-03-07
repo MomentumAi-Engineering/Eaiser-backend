@@ -706,10 +706,12 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             people_tokens = ["people", "crowd", "spectators", "gathering", "watching", "standing", "men", "women", "children", "group"]
             vehicle_tokens = ["car", "vehicle", "truck", "bike", "bicycle", "van", "bus", "auto", "damaged car", "wrecked", "suv"]
             
-            # Only trigger has_animal if a specific animal is mentioned or if "animal" is NOT just a "possible" guess
+            # Only trigger has_animal if a specific animal is mentioned in the TEXT.
+            # DO NOT use the AI's initial type guess (animal_accident/dead_animal) because that
+            # creates circular logic where a wrong initial guess perpetuates itself.
             has_specific_animal = any(w in combined for w in animal_tokens)
-            has_generic_animal = "animal" in combined and "possible animal" not in combined and "likely animal" not in combined
-            has_animal = has_specific_animal or has_generic_animal or (overview.get("type") or "").lower() in ["dead_animal", "animal_accident"]
+            has_generic_animal = "animal" in combined and "possible animal" not in combined and "likely animal" not in combined and "no animal" not in combined
+            has_animal = has_specific_animal or has_generic_animal
             has_accident = any(w in combined for w in ["wreckage","totaled car","smashed into","flipped car","vehicle crash","car crash","crashed into"]) or (any(w in combined for w in ["accident","collision","crash"]) and any(w in combined for w in ["damaged", "smashed", "hit", "front-end"]))
             has_abandoned = any(w in combined for w in abandoned_tokens)
             has_people = any(w in combined for w in people_tokens)

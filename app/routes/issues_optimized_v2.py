@@ -709,6 +709,14 @@ async def process_issue_background(
                 )
             except Exception:
                 unified_report = {}
+                
+            try:
+                ai_type = report.get("issue_overview", {}).get("type")
+                if ai_type and str(ai_type).lower() not in ["none", "unknown", "other", ""]:
+                    issue_type = ai_type
+            except Exception:
+                pass
+
             issue_doc = {
                 "_id": issue_id,
                 "address": final_address,
