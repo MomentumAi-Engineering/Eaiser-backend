@@ -172,6 +172,7 @@ async def signup(user: UserCreate, background_tasks: BackgroundTasks):
             "is_active": True,
             "email_verified": False,
             "verification_token": verification_token,
+            "tos_accepted": True,
             "created_at": datetime.utcnow()
         }
         
@@ -183,6 +184,13 @@ async def signup(user: UserCreate, background_tasks: BackgroundTasks):
             background_tasks.add_task(send_verification_email, email, user.firstName, verification_token)
         except Exception as email_error:
             logger.error(f"Failed to dispatch verification email: {email_error}")
+
+        # Send TOS Email in background
+        try:
+            from services.email_service import send_tos_email
+            background_tasks.add_task(send_tos_email, email, user.firstName)
+        except Exception as tos_error:
+            logger.error(f"Failed to dispatch TOS email for new user: {tos_error}")
 
         return {
             "message": "Account created successfully. Please check your email to verify your account.",
@@ -341,7 +349,7 @@ async def resend_verification(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Failed to resend verification email")
 
 @router.post("/google", response_model=Token)
-async def google_login(login_data: GoogleLogin):
+async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTasks):
     try:
         # Debug incoming credential
         logger.info(f"Received Google Login Request. Credential prefix: {login_data.credential[:10]}...")
@@ -389,11 +397,19 @@ async def google_login(login_data: GoogleLogin):
                 "auth_provider": "google",
                 "avatar": id_info.get("picture"),
                 "email_verified": id_info.get("email_verified", False),
+                "tos_accepted": True,
                 "created_at": datetime.utcnow()
             }
             result = await db["users"].insert_one(user_payload)
             user_id = str(result.inserted_id)
             user = {**user_payload, "_id": user_id}
+
+            # Send TOS email
+            try:
+                from services.email_service import send_tos_email
+                background_tasks.add_task(send_tos_email, email, name)
+            except Exception as tos_error:
+                logger.error(f"Failed to send TOS email to Google user: {tos_error}")
         else:
             # For existing Google users: backfill missing first_name/last_name/username
             backfill = {}
@@ -454,7 +470,7 @@ async def google_login(login_data: GoogleLogin):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.post("/apple", response_model=Token)
-async def apple_login(login_data: AppleLogin):
+async def apple_login(login_data: AppleLogin, background_tasks: BackgroundTasks):
     try:
         # 1. Extensive Logging for Debugging
         logger.info(f"--- Apple Login Request ---")
@@ -510,12 +526,20 @@ async def apple_login(login_data: AppleLogin):
                 "is_active": True,
                 "auth_provider": "apple",
                 "email_verified": True,
+                "tos_accepted": True,
                 "created_at": datetime.utcnow()
             }
             result = await db["users"].insert_one(user_payload)
             user_id = str(result.inserted_id)
             user = {**user_payload, "_id": user_id}
             logger.info(f"🆕 Registered new Apple User: {email_lower}")
+
+            # Send TOS email
+            try:
+                from services.email_service import send_tos_email
+                background_tasks.add_task(send_tos_email, email_lower, first_name)
+            except Exception as tos_error:
+                logger.error(f"Failed to send TOS email to Apple user: {tos_error}")
         else:
             user_id = str(user["_id"])
             logger.info(f"🔓 Existing Apple User found: {email_lower}")

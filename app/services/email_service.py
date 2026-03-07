@@ -1056,3 +1056,44 @@ async def send_password_reset_email(email: str, token: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to send password reset email to {email}: {e}")
         return False
+
+async def send_tos_email(email: str, name: str) -> bool:
+    """Send a copy of the Terms of Service to the user upon acceptance."""
+    try:
+        subject = "Your Copy of EAiSER.Ai Terms of Service"
+        
+        frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
+        if frontend_url.endswith("/"): frontend_url = frontend_url[:-1]
+        
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {{ font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 0; }}
+    .container {{ max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); padding: 40px; text-align: left; border-top: 5px solid #eab308; }}
+    h1 {{ color: #111827; font-size: 24px; margin-bottom: 20px; }}
+    p {{ color: #4b5563; font-size: 16px; line-height: 1.6; margin-bottom: 20px; }}
+    .btn {{ display: inline-block; background-color: #eab308; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; font-size: 16px; margin-top: 10px; }}
+    .footer {{ margin-top: 40px; font-size: 12px; color: #9ca3af; text-align: center; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Terms of Service Acceptance</h1>
+    <p>Hi {name or 'User'},</p>
+    <p>Thank you for creating an account on EAiSER.Ai. This email serves as confirmation that you have agreed to our Terms of Service.</p>
+    <p>We are excited to have you on board!</p>
+    <div class="footer">
+      © {datetime.utcnow().year} EAiSER AI · The Future of Issue Reporting
+    </div>
+  </div>
+</body>
+</html>
+"""
+        text_content = f"Hi {name or 'User'},\n\nThank you for creating an account on EAiSER.Ai. This email serves as confirmation that you have agreed to our Terms of Service.\n\nThanks,\nThe EAiSER AI Team"
+
+        return await send_email(email, subject, html_content, text_content)
+    except Exception as e:
+        logger.error(f"Failed to send TOS email to {email}: {e}")
+        return False
