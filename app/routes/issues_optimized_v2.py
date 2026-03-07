@@ -1581,7 +1581,8 @@ async def submit_issue_optimized(
                     timezone_name=issue.get("timezone_name", "UTC"),
                     latitude=issue.get("latitude", 0.0),
                     longitude=issue.get("longitude", 0.0),
-                    image_content=image_content
+                    image_content=image_content,
+                    image_url=issue.get("image_url")
                 )
                 
                 # Update status based on email success
@@ -1757,10 +1758,19 @@ async def get_issue_image_optimized(
     🖼️ Serve issue evidence image from GridFS
     """
     try:
+        from fastapi.responses import StreamingResponse, RedirectResponse
         mongodb_service = await get_optimized_mongodb_service()
         if not mongodb_service:
             raise HTTPException(status_code=503, detail="Database service unavailable")
         
+        # Check if the document has a Cloudinary image_url
+        issue = await mongodb_service.get_issue_by_id(issue_id)
+        if issue and issue.get("image_url"):
+            # If it's a Cloudinary URL or a static URL
+            if str(issue["image_url"]).startswith("http"):
+                return RedirectResponse(url=issue["image_url"])
+        
+        # Fallback for old GridFS streams
         image_stream = await mongodb_service.get_issue_image_stream(issue_id)
         
         if not image_stream:

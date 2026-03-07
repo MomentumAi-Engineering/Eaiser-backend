@@ -710,16 +710,18 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             has_specific_animal = any(w in combined for w in animal_tokens)
             has_generic_animal = "animal" in combined and "possible animal" not in combined and "likely animal" not in combined
             has_animal = has_specific_animal or has_generic_animal or (overview.get("type") or "").lower() in ["dead_animal", "animal_accident"]
-            has_accident = any(w in combined for w in ["wreckage","totaled car","smashed into","flipped car","vehicle crash","car crash"]) or (any(w in combined for w in ["accident","collision","crash"]) and any(w in combined for w in ["damaged", "smashed", "hit"]))
+            has_accident = any(w in combined for w in ["wreckage","totaled car","smashed into","flipped car","vehicle crash","car crash","crashed into"]) or (any(w in combined for w in ["accident","collision","crash"]) and any(w in combined for w in ["damaged", "smashed", "hit", "front-end"]))
             has_abandoned = any(w in combined for w in abandoned_tokens)
             has_people = any(w in combined for w in people_tokens)
             has_vehicle = any(w in combined or w in (overview.get("type") or "").lower() for w in vehicle_tokens)
-            is_serious_collision = any(w in combined and f"no {w}" not in combined for w in ["damaged vehicle", "wreckage", "car crash", "collision scene"])
+            is_serious_collision = any(w in combined and f"no {w}" not in combined for w in ["damaged vehicle", "wreckage", "car crash", "collision scene", "crashed into", "front-end damage", "front end damage", "severe damage", "totaled"])
 
             # Prevent false positive animal detection if context is negative (e.g. "no animal", "without animal")
             negative_animal_phrases = ["no animal", "no dead animal", "no stray", "without animal", "not an animal", "no wildlife"]
             if any(phrase in combined for phrase in negative_animal_phrases):
                 has_animal = False
+                has_generic_animal = False
+                has_specific_animal = False
 
             issue_detected = bool(ai_eval.get("issue_detected"))
             
@@ -773,13 +775,14 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                 else:
                     # REFINEMENT: Prioritize car_accident over animal_accident if it's serious wreckage
                     # unless a specific animal species is actually confirmed in the text.
-                    if has_vehicle and is_animal_involved and (has_specific_animal or not is_serious_collision):
+                    # Or if there's no actual animal explicitly found and it's a clear crash.
+                    if has_vehicle and is_animal_involved and (has_specific_animal):
                         overview["type"] = "animal_accident"
                         new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
                     elif has_vehicle and (has_accident or is_serious_collision):
                         overview["type"] = "car_accident"
                         new_conf = max(90, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 85)))
-                    elif has_animal:
+                    elif has_specific_animal or has_generic_animal:
                         overview["type"] = "dead_animal"
                         new_conf = max(85, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 80)))
                     else:

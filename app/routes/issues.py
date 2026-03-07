@@ -298,18 +298,25 @@ async def send_authority_email(
     longitude: float,
     image_content: bytes,
     decline_reason: Optional[str] = None,
-    is_user_review: bool = False
+    is_user_review: bool = False,
+    image_url: Optional[str] = None
 ) -> bool:
     if not authorities:
         logger.warning("No authorities provided, using default")
         authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
     
     logo_base64 = get_logo_base64()
-    issue_image_base64 = base64.b64encode(image_content).decode('utf-8')
     embedded_images = []
     if logo_base64:
         embedded_images.append(("momentumai_logo", logo_base64, "image/png"))
-    embedded_images.append(("issue_image", issue_image_base64, "image/jpeg"))
+        
+    img_src = ""
+    if image_url:
+        img_src = image_url
+    elif image_content:
+        issue_image_base64 = base64.b64encode(image_content).decode('utf-8')
+        embedded_images.append(("issue_image", issue_image_base64, "image/jpeg"))
+        img_src = "cid:issue_image"
     
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
@@ -583,7 +590,7 @@ async def send_authority_email(
 
             <div class="section-header" style="margin-top: 40px;">2. Photographic Evidence</div>
             <p style="font-size: 15px; color: #666; margin-bottom: 8px;">Primary visual evidence from the scene:</p>
-            <img src="cid:issue_image" alt="Incident Evidence" class="evidence-image">
+            <img src="{img_src}" alt="Incident Evidence" class="evidence-image" style="max-height: 500px; object-fit: contain;">
 
             <div class="section-header" style="margin-top: 40px;">3. Direct Authority Actions</div>
             <div style="display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap;">

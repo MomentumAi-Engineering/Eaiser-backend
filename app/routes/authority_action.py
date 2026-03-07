@@ -344,26 +344,24 @@ async def user_update_status_feedback(issue_id: str, feedback: UserFeedback, use
         }}
     )
     return {"success": True}
+from services.cloudinary_service import upload_file_to_cloudinary
+
 @router.post("/chat/upload")
 async def upload_chat_media(file: UploadFile = File(...)):
-    """Upload media for chat and return URL"""
+    """Upload media for chat to Cloudinary and return URL"""
     try:
-        # Save file to a public location
-        upload_dir = Path("static/uploads/chat")
-        upload_dir.mkdir(parents=True, exist_ok=True)
+        # Upload directly to the cloud without local processing
+        result = await upload_file_to_cloudinary(file, folder="chat_media")
         
-        file_extension = Path(file.filename).suffix
-        file_name = f"{datetime.utcnow().timestamp()}{file_extension}"
-        file_path = upload_dir / file_name
-        
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        if result and result.get("url"):
+            return {
+                "success": True, 
+                "url": result.get("url"),
+                "type": result.get("type", "image" if file.content_type.startswith("image") else "video")
+            }
+        else:
+            raise Exception("Cloudinary upload failed or returned no URL")
             
-        return {
-            "success": True, 
-            "url": f"/static/uploads/chat/{file_name}",
-            "type": "image" if file.content_type.startswith("image") else "video"
-        }
     except Exception as e:
-        logger.error(f"Chat upload failed: {e}")
+        logger.error(f"Chat Cloudinary upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

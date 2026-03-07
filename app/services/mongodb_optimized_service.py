@@ -789,38 +789,39 @@ class OptimizedMongoDBService:
             str: Inserted document ID
         """
         try:
-            # Store the main issue document
-            issue_id = await self.insert_one_optimized('issues', issue_doc)
+            from services.cloudinary_service import upload_file_to_cloudinary
+            import asyncio
             
-            # Store image in GridFS as a BACKGROUND task to avoid blocking the main API response
-            # and preventing timeouts for large images.
-            if image_content and self.fs:
-                async def _background_image_storage():
+            # Store image in Cloudinary as a BACKGROUND task to avoid blocking the main API response
+            if image_content:
+                async def _background_cloudinary_storage():
                     try:
-                        # Optimized image storage using GridFS
-                        image_id_internal = await self.fs.upload_from_stream(
-                            filename=f"{issue_doc['_id']}.jpg",
-                            source=image_content,
-                            metadata={"issue_id": issue_doc['_id']}
-                        )
-                        
-                        # Update issue document with image_id
-                        await self.update_one_optimized(
-                            'issues',
-                            {"_id": issue_doc['_id']},
-                            {"$set": {
-                                "image_id": str(image_id_internal),
-                                "image_stored": True, 
-                                "image_size": len(image_content)
-                            }}
-                        )
-                        logger.info(f"📸 [Background] Image stored in GridFS for issue {issue_doc['_id']} with ID {image_id_internal}")
+                        # Upload bytes to Cloudinary
+                        result = await upload_file_to_cloudinary(contents=image_content, folder="report_images")
+                        if result and result.get("url"):
+                            # Update issue document with Cloudinary URL
+                            await self.update_one_optimized(
+                                'issues',
+                                {"_id": issue_doc['_id']},
+                                {"$set": {
+                                    "image_url": result.get("url"),
+                                    "image_stored": True, 
+                                    "image_size": len(image_content)
+                                }}
+                            )
+                            logger.info(f"📸 [Background] Image stored in Cloudinary for issue {issue_doc['_id']}")
                     except Exception as bg_e:
-                        logger.warning(f"⚠️ [Background] Failed to store image for issue {issue_doc['_id']}: {bg_e}")
+                        logger.warning(f"⚠️ [Background] Failed to store image to Cloudinary for {issue_doc['_id']}: {bg_e}")
                 
                 # Fire and forget (it will run on the current event loop)
-                asyncio.create_task(_background_image_storage())
-                logger.info(f"⚡ Image upload task for issue {issue_doc['_id']} spawned in background")
+                asyncio.create_task(_background_cloudinary_storage())
+                logger.info(f"⚡ Image upload task to Cloudinary for issue {issue_doc['_id']} spawned in background")
+                
+                # Immediately set a default loading image_url because Cloudinary may take 1-2 sec to process
+                # If you prefer keeping it empty until upload finishes, we leave it out here.
+            
+            # Store the main issue document with or without the image_url
+            issue_id = await self.insert_one_optimized('issues', issue_doc)
             
             logger.info(f"✅ Metadata stored for issue {issue_doc['_id']} via optimized operation")
             return issue_id
