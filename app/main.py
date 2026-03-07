@@ -21,15 +21,20 @@ if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
 from fastapi import FastAPI, HTTPException, Request, Query
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import logging
 import uvicorn
 import json
 from datetime import datetime
+app = FastAPI(title="Eaiser AI Backend")
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Setup logging FIRST before any imports that use it
 logging.basicConfig(
@@ -45,8 +50,6 @@ except ImportError:
     try:
         from app.utils.timing_middleware import TimingMiddleware
     except ImportError:
-        from fastapi import Request
-        from starlette.middleware.base import BaseHTTPMiddleware
         import time
         
         class TimingMiddleware(BaseHTTPMiddleware):
@@ -122,8 +125,7 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("pymongo").setLevel(logging.WARNING)
 logging.getLogger("performance").setLevel(logging.INFO)
 
-# Create FastAPI app
-app = FastAPI(title="Eaiser AI Backend")
+
 
 # Templates (for HTML pages)
 template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
@@ -189,8 +191,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; "
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: https: https://*.googleusercontent.com; "
+            "media-src 'self' data: https: http:; "
             "connect-src 'self' https://eaiser.ai https://admin.eaiser.ai https://*.eaiser.ai "
-            "https://accounts.google.com https://*.googleapis.com; "
+            "https://accounts.google.com https://*.googleapis.com https://eaiser-backend-rf95.onrender.com http://localhost:8005 http://localhost:8000; "
             "frame-src 'self' https://accounts.google.com; "
             "frame-ancestors 'none'; "
             "base-uri 'self'; "

@@ -222,6 +222,8 @@ class Issue(BaseModel):
     authority_name: Optional[List[str]] = None
     image_url: Optional[str] = None
     processing_time_ms: Optional[float] = None
+    messages: List[Dict] = []
+    chat_active: bool = False
     
     class Config:
         validate_assignment = True

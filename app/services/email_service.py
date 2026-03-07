@@ -234,12 +234,12 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
             
             if real_id:
                 # Import here to avoid circular dependency
-                try:
-                    from app.routes.authority_action import create_authority_token
-                except ImportError:
-                    from routes.authority_action import create_authority_token
-                
-                token = create_authority_token(str(real_id))
+                # Get authority name for token
+                authority_name = "Official Authority"
+                if authorities and isinstance(authorities[0], dict):
+                    authority_name = authorities[0].get("name", "Official Authority")
+
+                token = create_authority_token(str(real_id), authority_name=authority_name)
                 
                 # Determine Frontend URL
                 frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
@@ -247,35 +247,61 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
                 if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
                     frontend_url = "http://localhost:5173"
 
-                action_link = f"{frontend_url}/authority-action?token={token}"
+                chat_hub_link = f"{frontend_url}/authority/chat-hub?token={token}"
+                action_portal_link = f"{frontend_url}/authority-action?token={token}"
                 
-                logger.info(f"🔗 Generated Authority Action Link for {real_id}")
+                logger.info(f"🔗 Generated Authority Links for {real_id} ({authority_name})")
 
                 button_html = f"""
                 <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 30px 0;">
-                <div style="text-align: center; background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0;">
-                    <h3 style="margin-top: 0; color: #1e293b;">⚡ Official Action Required</h3>
-                    <p style="color: #64748b; margin-bottom: 20px;">Use the secure link below to update the status of this issue directly.</p>
+                <div style="text-align: center; background-color: #f8fafc; padding: 25px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                    <h3 style="margin-top: 0; color: #1e293b; font-size: 18px;">⚡ Official Investigation Required</h3>
+                    <p style="color: #64748b; margin-bottom: 25px; font-size: 14px;">Use the secure link below to coordinate with the citizen regarding this incident.</p>
                     
-                    <a href="{action_link}" style="background-color: #2563eb; color: white; padding: 16px 32px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);">
-                        View & Manage Issue
-                    </a>
+                    <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;">
+                        <a href="{chat_hub_link}" target="_blank" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);">
+                            💬 Open Secure Chat Hub
+                        </a>
+                    </div>
                     
-                    <p style="margin-top: 15px; font-size: 12px; color: #94a3b8;">
+                    <p style="margin-top: 15px; font-size: 11px; color: #94a3b8; line-height: 1.5;">
+                        <strong>Investigation Note:</strong> You can request additional photos or videos from the reporter via the Chat Hub for verification.<br>
                         Secure Access • No Login Required • Expires in 7 Days
                     </p>
                 </div>
                 """
+
+                # Construct final HTML and Text bodies
+                final_html = f"""
+                <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; line-height: 1.6; border: 1px solid #f1f5f9; border-radius: 16px; overflow: hidden; background-color: white;">
+                    <div style="padding: 25px 30px; border-bottom: 2px solid #3b82f6; background-color: #f8fafc;">
+                        <h2 style="color: #2563eb; margin: 0; font-size: 22px;">🚀 EAiSER Emergency Alert</h2>
+                    </div>
+                    
+                    <div style="padding: 30px; font-size: 15px; color: #334155;">
+                        <div style="line-height: 1.8;">
+                            {formatted_content.replace('\n', '<br>')}
+                        </div>
+
+                        {button_html}
+                    </div>
+
+                    <div style="padding: 20px 30px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 12px; color: #94a3b8;">
+                        © 2026 EAiSER AI • Intelligent Civic Response System<br>
+                        This is an automated operational alert sent to verified authorities.
+                    </div>
+                </div>
+                """
                 
-                formatted_content += button_html
+                final_text = f"{formatted_content}\n\nSecure Chat Hub: {chat_hub_link}"
                 
         except Exception as token_error:
             logger.error(f"⚠️ Failed to generate authority token: {token_error}")
-
+            final_html = formatted_content.replace("\n", "<br>")
+            final_text = formatted_content
 
         async def _send(to_email: str):
-            html = formatted_content.replace("\n", "<br>")
-            return await send_email(to_email, subject, html, formatted_content)
+            return await send_email(to_email, subject, final_html, final_text)
 
         if background:
             for r in recipients:

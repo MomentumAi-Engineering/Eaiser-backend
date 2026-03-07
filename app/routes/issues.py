@@ -313,6 +313,15 @@ async def send_authority_email(
     
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
+    # --- GENERATE TOKENS FOR ACTION LINKS ---
+    from routes.authority_action import create_authority_token
+    import os
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    
+    # Generate a secure token valid for 48 hours for the authority to access chat/portal
+    auth_token = create_authority_token(issue_id)
+    chat_hub_link = f"{frontend_url}/authority/chat-hub?token={auth_token}"
+
     # --- CLEAN + AUTO SHORT DESCRIPTION (2–3 sentences) ---
     import re
 
@@ -576,7 +585,12 @@ async def send_authority_email(
             <p style="font-size: 15px; color: #666; margin-bottom: 8px;">Primary visual evidence from the scene:</p>
             <img src="cid:issue_image" alt="Incident Evidence" class="evidence-image">
 
-            <div class="section-header" style="margin-top: 40px;">3. Incident Routing</div>
+            <div class="section-header" style="margin-top: 40px;">3. Direct Authority Actions</div>
+            <div style="display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap;">
+                <a href="{chat_hub_link}" style="display: inline-block; padding: 14px 28px; background-color: #facc15; color: #000000 !important; text-decoration: none; border-radius: 8px; font-weight: 800; font-size: 16px; box-shadow: 0 4px 15px rgba(234, 179, 8, 0.3); border: 1px solid #eab308;">💬 Open Secure Chat Hub</a>
+            </div>
+
+            <div class="section-header" style="margin-top: 40px;">4. Incident Routing</div>
             <div class="analysis-card">
                 <p style="margin: 0 0 15px 0; font-size: 16px; color: #334155; font-weight: 500;">This incident has been securely routed to the following departments for appropriate action:</p>
                 <ul class="routing-list" style="font-size: 17px;">
