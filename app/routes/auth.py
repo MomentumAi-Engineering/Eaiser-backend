@@ -105,7 +105,7 @@ class GoogleLogin(BaseModel):
     credential: str
 
 class AppleLogin(BaseModel):
-    user: Optional[Dict[str, Any]] = None
+    user: Optional[Any] = None # Can be dict or stringified JSON
     authorization: Dict[str, Any]
 
 class ForgotPasswordRequest(BaseModel):
@@ -420,43 +420,46 @@ async def google_login(login_data: GoogleLogin):
 @router.post("/apple", response_model=Token)
 async def apple_login(login_data: AppleLogin):
     try:
+        # 1. Extensive Logging for Debugging
+        logger.info(f"--- Apple Login Request ---")
         auth_info = login_data.authorization
         id_token_jwt = auth_info.get("id_token")
         
-        if not id_token_jwt:
-            raise HTTPException(status_code=400, detail="Missing Apple ID Token")
-
-        # User info is only provided on the first login by Apple
-        user_info = login_data.user or {}
+        # User info only comes on the very FIRST authorization by user
+        # Apple sometimes sends this as a stringified JSON
+        user_info = login_data.user
+        if isinstance(user_info, str):
+            try:
+                import json
+                user_info = json.loads(user_info)
+                logger.info("Successfully parsed stringified user_info")
+            except Exception as e:
+                logger.error(f"Failed to parse stringified user_info: {e}")
+                user_info = {}
+        elif not user_info:
+            user_info = {}
+            
+        logger.info(f"Final User Info: {user_info}")
+        
+        # 3. Extract Name from user_info (if provided)
         name_info = user_info.get("name", {})
         first_name = name_info.get("firstName", "")
         last_name = name_info.get("lastName", "")
-        email = user_info.get("email")
-
-        # Extract email from JWT claims if not provided in user_info
-        try:
-             # get_unverified_claims is useful for popups where verification is done client-side or implicitly
-             payload = jwt.get_unverified_claims(id_token_jwt)
-             if not email:
-                 email = payload.get("email")
-        except Exception as jwt_err:
-             logger.error(f"Failed to decode Apple Token: {jwt_err}")
-             raise HTTPException(status_code=400, detail="Invalid Apple Token format")
-
-        if not email:
-             raise HTTPException(status_code=400, detail="Email not provided by Apple")
+        logger.info(f"Extracted Names: first='{first_name}', last='{last_name}'")
 
         db = await get_db()
-        user = await db["users"].find_one({"email": email.lower()})
+        email_lower = email.lower()
+        user = await db["users"].find_one({"email": email_lower})
 
+        base_username = email_lower.split("@")[0]
+        
         if not user:
-            # Create new user for first-time Apple login
-            base_username = email.split("@")[0].lower()
+            # Create new user for first-time Apple authentication
             user_payload = {
                 "first_name": first_name,
                 "last_name": last_name,
                 "username": base_username,
-                "email": email.lower(),
+                "email": email_lower,
                 "role": "user",
                 "is_active": True,
                 "auth_provider": "apple",
@@ -466,14 +469,32 @@ async def apple_login(login_data: AppleLogin):
             result = await db["users"].insert_one(user_payload)
             user_id = str(result.inserted_id)
             user = {**user_payload, "_id": user_id}
-            logger.info(f"🆕 Created new user via Apple Login: {email}")
+            logger.info(f"🆕 Registered new Apple User: {email_lower}")
         else:
             user_id = str(user["_id"])
-            # Update provider for existing user if needed
+            logger.info(f"🔓 Existing Apple User found: {email_lower}")
+            
+            # 4. Backfill Logic: Update missing info if Apple provided it this time
+            backfill = {}
+            if not user.get("first_name") and first_name:
+                backfill["first_name"] = first_name
+            if not user.get("last_name") and last_name:
+                backfill["last_name"] = last_name
             if user.get("auth_provider") != "apple":
-                 await db["users"].update_one({"_id": user["_id"]}, {"$set": {"auth_provider": "apple"}})
-            logger.info(f"🔓 Existing user logged in via Apple: {email}")
+                backfill["auth_provider"] = "apple"
+            
+            if backfill:
+                logger.info(f"📝 Backfilling user data: {backfill}")
+                await db["users"].update_one({"_id": user["_id"]}, {"$set": backfill})
+                user.update(backfill)
 
+        if not user.get("is_active", True):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is deactivated. Please contact support."
+            )
+
+        # 5. Token Generation
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": user["email"], "role": user.get("role", "user"), "id": user_id},
