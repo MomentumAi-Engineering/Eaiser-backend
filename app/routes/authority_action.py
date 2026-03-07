@@ -269,8 +269,8 @@ async def authority_send_chat(token: str, chat: ChatMessage, background_tasks: B
                 <p style="color: #4b5563; font-size: 14px;">Please respond directly through your secure citizen dashboard to maintain the official record.</p>
                 
                 <div style="margin-top: 35px; text-align: center;">
-                    <a href="{FRONTEND_URL}/dashboard" style="background: linear-gradient(135deg, #fcd34d 0%, #f59e0b 100%); color: #000000; padding: 14px 28px; text-decoration: none; border-radius: 10px; font-weight: 800; font-size: 15px; display: inline-block; box-shadow: 0 6px 15px -3px rgba(245, 158, 11, 0.4); text-transform: uppercase; letter-spacing: 0.5px;">
-                        Open Secure Dashboard
+                    <a href="{FRONTEND_URL}/chat-hub?issueId={chat.issue_id}" style="background: linear-gradient(135deg, #fcd34d 0%, #f59e0b 100%); color: #000000; padding: 14px 28px; text-decoration: none; border-radius: 10px; font-weight: 800; font-size: 15px; display: inline-block; box-shadow: 0 6px 15px -3px rgba(245, 158, 11, 0.4); text-transform: uppercase; letter-spacing: 0.5px;">
+                        Open Secure Chat
                     </a>
                 </div>
                 
