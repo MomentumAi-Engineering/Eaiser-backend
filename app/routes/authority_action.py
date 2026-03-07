@@ -16,7 +16,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 from utils.security import SECRET_KEY, ALGORITHM
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173") # Default to dev
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://www.eaiser.ai") # Default to live
 
 # Re-use user auth from issues router if needed, or define here
 from routes.issues_optimized_v2 import get_current_user

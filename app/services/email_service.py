@@ -243,9 +243,6 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
                 
                 # Determine Frontend URL
                 frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
-                # Fallback for local dev if not set
-                if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
-                    frontend_url = "http://localhost:5173"
 
                 chat_hub_link = f"{frontend_url}/authority/chat-hub?token={token}"
                 action_portal_link = f"{frontend_url}/authority-action?token={token}"
@@ -350,8 +347,6 @@ async def notify_user_status_change(user_email: str, issue_id: str, status: str,
         
         # Dashboard URL
         frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
-        if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
-            frontend_url = "http://localhost:5173"
         dashboard_url = f"{frontend_url}/dashboard"
 
         # Premium Templates with Momntum AI branding
@@ -727,9 +722,6 @@ async def send_verification_email(user_email: str, user_name: str, token: str) -
     """
     try:
         frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
-        # Fallback for local dev if not set
-        if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
-            frontend_url = "http://localhost:5173"
             
         verification_link = f"{frontend_url}/verify-email?token={token}"
         subject = "Verify your EAiSER AI Account"
@@ -1022,10 +1014,7 @@ async def send_password_reset_email(email: str, token: str) -> bool:
     try:
         # Determine Frontend URL
         frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
-        # Fallback for local dev if not set
-        if not os.getenv("FRONTEND_URL") and os.getenv("ENV") == "development":
-            frontend_url = "http://localhost:5173"
-        elif frontend_url.endswith("/"):
+        if frontend_url.endswith("/"):
             frontend_url = frontend_url[:-1]
 
         reset_link = f"{frontend_url}/reset-password?token={token}"

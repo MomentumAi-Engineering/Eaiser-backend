@@ -323,7 +323,7 @@ async def send_authority_email(
     # --- GENERATE TOKENS FOR ACTION LINKS ---
     from routes.authority_action import create_authority_token
     import os
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
     
     # Generate a secure token valid for 48 hours for the authority to access chat/portal
     auth_token = create_authority_token(issue_id)
