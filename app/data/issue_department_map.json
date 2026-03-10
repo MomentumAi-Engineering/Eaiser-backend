@@ -1,118 +1,44 @@
 {
-  "pothole": [
-    "public_works"
-  ],
-  "road_damage": [
-    "public_works"
-  ],
-  "tree_fallen": [
-    "public_works"
-  ],
-  "car_accident": [
-    "emergency",
-    "police"
-  ],
-  "accident": [
-    "emergency",
-    "police"
-  ],
-  "abandoned_car": [
-    "public_works"
-  ],
-  "fire": [
-    "fire",
-    "police"
-  ],
-  "flooding": [
-    "emergency",
-    "public_works"
-  ],
-  "sidewalk_damage": [
-    "public_works"
-  ],
-  "street_sign_damage": [
-    "transportation"
-  ],
-  "garbage": [
-    "sanitation"
-  ],
-  "animal_accident": [
-    "animal_control",
-    "emergency"
-  ],
-  "trash": [
-    "sanitation"
-  ],
-  "waste": [
-    "sanitation"
-  ],
-  "sewage_overflow": [
-    "sanitation"
-  ],
-  "stray_animals": [
-    "animal_control"
-  ],
-  "dead_animal": [
-    "animal_control"
-  ],
-  "animal_injury": [
-    "animal_control"
-  ],
-  "noise_pollution": [
-    "environment"
-  ],
-  "air_pollution": [
-    "environment"
-  ],
-  "water_pollution": [
-    "environment"
-  ],
-  "water_leakage": [
-    "water_utility"
-  ],
-  "pipe_leak": [
-    "water_utility"
-  ],
-  "no_water_supply": [
-    "water_utility"
-  ],
-  "graffiti": [
-    "code_enforcement"
-  ],
-  "vandalism": [
-    "police"
-  ],
-  "abandoned_vehicle": [
-    "public_works"
-  ],
-  "illegal_construction": [
-    "building_inspection"
-  ],
-  "unsafe_building": [
-    "building_inspection"
-  ],
-  "broken_streetlight": [
-    "public_works"
-  ],
-  "signal_malfunction": [
-    "transportation"
-  ],
-  "traffic_signal_issue": [
-    "transportation"
-  ],
-  "general": [
-    "general"
-  ],
-  "other": [
-    "general"
-  ],
-  "unknown": [
-    "general"
-  ],
-  "property_damage": [
-    "public_works"
-  ],
-  "alien_invasion_test": [
-    "other"
-  ]
+  "fire_hazard": ["fire", "police"],
+  "fire": ["fire", "police"],
+  "car_accident": ["emergency", "police", "transportation"],
+  "accident": ["emergency", "police", "transportation"],
+  "crash": ["emergency", "police", "transportation"],
+  "flooding": ["emergency", "public_works"],
+  "flood": ["emergency", "public_works"],
+  "broken_streetlight": ["public_works"],
+  "streetlight_broken": ["public_works"],
+  "road_damage": ["public_works"],
+  "pothole": ["public_works"],
+  "water_leakage": ["water_utility"],
+  "pipe_leak": ["water_utility"],
+  "fallen_tree": ["public_works"],
+  "tree_fallen": ["public_works"],
+  "garbage_or_trash": ["sanitation"],
+  "garbage": ["sanitation"],
+  "trash": ["sanitation"],
+  "waste": ["sanitation"],
+  "sewage_overflow": ["sanitation"],
+  "dead_animal": ["animal_control", "sanitation"],
+  "abandoned_vehicle": ["public_works", "police"],
+  "abandoned_car": ["public_works", "police"],
+  "structural_damage": ["public_works", "building_inspection"],
+  "sidewalk_damage": ["public_works"],
+  "street_sign_damage": ["transportation"],
+  "stray_animals": ["animal_control"],
+  "animal_accident": ["animal_control", "emergency"],
+  "noise_pollution": ["environment"],
+  "air_pollution": ["environment"],
+  "water_pollution": ["environment"],
+  "no_water_supply": ["water_utility"],
+  "graffiti": ["code_enforcement"],
+  "vandalism": ["police"],
+  "illegal_construction": ["building_inspection"],
+  "unsafe_building": ["building_inspection"],
+  "signal_malfunction": ["transportation"],
+  "traffic_signal_issue": ["transportation"],
+  "property_damage": ["public_works"],
+  "general": ["general"],
+  "other": ["general"],
+  "unknown": ["general"]
 }

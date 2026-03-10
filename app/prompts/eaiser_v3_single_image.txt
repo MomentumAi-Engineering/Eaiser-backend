@@ -46,24 +46,24 @@ Identify all visible issues. Classify each as Known or Unknown.
 KNOWN ISSUE LIST:
 
 Tier 1 — Critical (Immediate danger):
-  - Fire Hazard
-  - Car Accident (Rule: Only if vehicle-to-vehicle collision or vehicle-to-object crash is visible. If a tree falls ON a car, classify as "Fallen Tree" instead).
-  - Flooding
+  - fire_hazard (Label: Fire Hazard)
+  - car_accident (Rule: Only if vehicle-to-vehicle collision or vehicle-to-object crash is visible. If a tree falls ON a car, classify as "fallen_tree" instead).
+  - flooding (Label: Flooding)
 
 Tier 2 — Dangerous Infrastructure:
-  - Broken Streetlight
-  - Road Damage
-  - Pothole
-  - Water Leakage
-  - Fallen Tree (Rule: Includes trees falling on houses, buildings, or power lines)
-  - Structural / Property Damage
+  - broken_streetlight (Label: Broken Streetlight)
+  - road_damage (Label: Road Damage)
+  - pothole (Label: Pothole)
+  - water_leakage (Label: Water Leakage)
+  - fallen_tree (Rule: Includes trees falling on houses, buildings, or power lines)
+  - structural_damage (Label: Structural Damage)
 
 Tier 3 — Public Health:
-  - Garbage / Trash
-  - Dead Animal
+  - garbage_or_trash (Label: Garbage / Trash)
+  - dead_animal (Label: Dead Animal)
 
 Tier 4 — Administrative / Quality of Life:
-  - Abandoned Vehicle
+  - abandoned_vehicle (Label: Abandoned Vehicle)
 
 - Set internal_review_required to true
 
@@ -189,14 +189,14 @@ EXAMPLE 1 — Flooded road with pothole (Scenario C):
   "scene_description": "Standing water is present across a section of roadway with one lane partially obstructed. A large pavement opening is visible near the flooded area.",
   "known_issues": [
     {
-      "issue": "Flooding",
+      "issue": "flooding",
       "tier": 1,
       "confidence": "High",
       "image_source": ["image_1"],
       "cross_image_confirmed": false
     },
     {
-      "issue": "Pothole",
+      "issue": "pothole",
       "tier": 2,
       "confidence": "High",
       "image_source": ["image_1"],
@@ -205,8 +205,8 @@ EXAMPLE 1 — Flooded road with pothole (Scenario C):
   ],
   "unknown_issues": [],
   "ordered_issue_list": [
-    { "rank": 1, "issue": "Flooding", "type": "Known", "tier_or_severity": "Tier 1" },
-    { "rank": 2, "issue": "Pothole", "type": "Known", "tier_or_severity": "Tier 2" }
+    { "rank": 1, "issue": "flooding", "type": "Known", "tier_or_severity": "Tier 1" },
+    { "rank": 2, "issue": "pothole", "type": "Known", "tier_or_severity": "Tier 2" }
   ],
   "discrepancy_flag": false,
   "discrepancy_note": null
