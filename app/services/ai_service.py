@@ -16,6 +16,7 @@ from utils.timezone import get_timezone_name
 from utils.location import get_authority_by_zip_code, get_authority
 from typing import Optional, Dict, Any
 import asyncio
+from services.ai_service_v3 import get_ai_service_v3
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -87,6 +88,47 @@ async def load_json_data(file_name: str) -> dict:
 
 async def classify_issue(image_content: bytes, description: str) -> tuple[str, str, float, str, str]:
     """Classify an infrastructure issue based on image and description."""
+    # EAiSER V3 Integration: Use V3 for higher precision and deterministic output
+    try:
+        v3_service = get_ai_service_v3()
+        v3_result = await v3_service.analyze_single_image(image_content)
+        
+        if v3_result.get("success"):
+            data = v3_result["data"]
+            meta = data.get("report_meta", {})
+            ordered = data.get("ordered_issue_list", [])
+            
+            # Extract key metrics for legacy compatibility
+            primary_issue = "Other"
+            primary_type = "Known"
+            tier_or_severity = "Tier 2"
+            
+            if ordered:
+                primary_issue = ordered[0].get("issue", "Other")
+                primary_type = ordered[0].get("type", "Known")
+                tier_or_severity = ordered[0].get("tier_or_severity", "Tier 2")
+            
+            # Final mappings
+            priority = meta.get("final_priority", "Medium")
+            severity = "High" if priority == "High" else ("Medium" if priority == "Medium" else "Low")
+            
+            # Confidence logic
+            confidence = 85.0
+            known = data.get("known_issues", [])
+            for k in known:
+                if k.get("issue") == primary_issue:
+                    conf_map = {"High": 95.0, "Medium": 75.0, "Low": 45.0}
+                    confidence = conf_map.get(k.get("confidence", "High"), 85.0)
+                    break
+            
+            category = "infrastructure" if "Tier 2" in tier_or_severity else ("public_health" if "Tier 3" in tier_or_severity else "safety")
+            
+            logger.info(f"✅ Classify V3: {primary_issue} ({confidence}%) - {priority}")
+            return primary_issue, severity, confidence, category, priority
+
+    except Exception as e:
+        logger.warning(f"V3 classification failed, using built-in legacy: {e}")
+
     # Fallback heuristic if Gemini is disabled
     if not GEMINI_API_KEY:
         issue_category_map = await load_json_data("issue_category_map.json")
@@ -101,7 +143,10 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             "vandalism": ["graffiti", "vandalism", "deface", "tagging"],
             "structural_damage": ["crack", "collapse", "structural", "foundation"],
             "dead_animal": ["dead animal", "carcass", "roadkill"],
-            "tree_fallen": ["fallen tree","tree fallen","downed tree","tree down","branch fallen","uprooted"]
+            "tree_fallen": ["fallen tree", "tree uprooted", "tree down", "branch down", "tree on house", "tree on roof", "tree on building"],
+            "structural_damage": ["structural", "collapsed", "roof damage", "building damage", "wall damage"],
+            "abandoned_vehicle": ["abandoned car", "junk car", "broken down vehicle", "unclaimed vehicle"],
+            "animated": ["cartoon", "drawing", "anime", "ai generated", "simulated", "fake", "video game"]
         }
         issue_type = "unknown"
         confidence = 50.0
@@ -109,17 +154,6 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             if any(keyword in description_lower for keyword in keywords):
                 issue_type = issue
                 break
-        # Stronger detection for fallen tree scenes (prefer over generic "garbage" or "debris")
-        tree_tokens = [
-            "fallen tree", "tree fallen", "downed tree", "tree down", "uprooted",
-            "tree across", "tree blocking", "tree blocking road", "tree blocking the road",
-            "tree on road", "branches", "branch", "trunk", "logs", "log", "limb", "limbs",
-            "branches across", "debris from tree", "fallen branches", "tree debris"
-        ]
-        if any(tok in description_lower for tok in tree_tokens):
-            issue_type = "tree_fallen"
-            confidence = max(confidence, 88.0)
-            logger.info(f"Description indicates fallen tree; overriding issue_type to tree_fallen with confidence {confidence}")
         animal_tokens = ["dead animal", "carcass", "roadkill"]
         if any(t in description_lower for t in animal_tokens):
             issue_type = "dead_animal"
@@ -136,25 +170,27 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
         has_hazard = any(t in description_lower for t in hazard_tokens)
         has_controlled = any(t in description_lower for t in controlled_tokens)
 
+        is_animated = any(t in description_lower for t in issue_keywords["animated"])
+        
         confidence = 92.0 if issue_type == "pothole" else (85.0 if issue_type != "unknown" else 50.0)
-        if has_controlled and not has_hazard:
+        if is_animated:
+            confidence = 10.0
+            issue_type = "unknown"
+            logger.info(f"Heuristic detected animated/fake content. Confidence set to {confidence}")
+        elif has_controlled and not has_hazard:
             confidence = min(confidence, 40.0)
+            logger.info(f"Heuristic detected controlled fire. Confidence set to {confidence}")
         elif has_hazard:
             confidence = max(confidence, 88.0)
         # Clamp for non-specific types
         if issue_type in ("unknown", "other"):
             confidence = min(confidence, 50.0)
-        high_severity_issues = [
-            "fire", "flood", "flooding", "structural_damage", "car_accident", 
-            "animal_accident", "sewage_overflow", "unsafe_building", 
-            "signal_malfunction", "traffic_signal_issue", "pipe_leak", "no_water_supply"
-        ]
+        high_severity_issues = ["fire", "flood", "flooding", "car_accident", "fire_hazard"]
         high_severity_keywords = ["urgent", "emergency", "critical", "severe", "life threat", "danger"]
-        medium_severity_issues = [
-            "pothole", "road_damage", "tree_fallen", "sidewalk_damage", 
-            "street_sign_damage", "water_leakage", "abandoned_vehicle", 
-            "illegal_construction", "broken_streetlight", "property_damage", "dead_animal"
-        ]
+        
+        medium_severity_issues = ["broken_streetlight", "road_damage", "pothole", "water_leakage", "tree_fallen", "structural_damage"]
+        
+        low_severity_issues = ["garbage", "trash", "dead_animal", "abandoned_vehicle"]
         
         severity = "Low"
         if issue_type in high_severity_issues or any(k in description_lower for k in high_severity_keywords):

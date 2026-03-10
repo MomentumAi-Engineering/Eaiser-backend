@@ -12,6 +12,8 @@ import json
 import os
 from pathlib import Path
 
+from services.ai_service_v3 import get_ai_service_v3
+
 # Setup logging
 logger = logging.getLogger(__name__)
 
@@ -417,34 +419,55 @@ async def generate_report_optimized(
     if cached_report:
         logger.info(f"Using cached AI report for issue {issue_id} (refreshing runtime fields)")
         tf = cached_report.get("template_fields", {})
+        
+        # Update dynamic fields
         tf["oid"] = report_id
         tf["timestamp"] = local_time
-        tf["utc_time"] = utc_time
-        tf["map_link"] = map_link
-        tf["zip_code"] = zip_code if zip_code else "N/A"
         tf["address"] = display_address
-        tf["image_filename"] = tf.get("image_filename") or image_filename
+        tf["zip_code"] = zip_code or "N/A"
+        
         cached_report["template_fields"] = tf
-
-        # Ensure aliases for UI
-        overview = cached_report.get("issue_overview", {})
-        if overview:
-            overview["type"] = overview.get("type") or overview.get("issue_type") or (issue_type.title() if issue_type else "Issue")
-            expl = (overview.get("summary_explanation") or "").strip()
-            overview["summary"] = (expl.split("\n")[0].strip() if "\n" in expl else expl) or f"{overview['type']} reported at {display_address}."
-            cached_report["issue_overview"] = overview
-
-        detailed = cached_report.get("detailed_analysis", {})
-        if detailed and "potential_consequences_if_ignored" in detailed:
-            detailed["potential_impact"] = detailed["potential_consequences_if_ignored"]
-            cached_report["detailed_analysis"] = detailed
-
-        # Refresh the address in additional notes, if present
-        if isinstance(cached_report.get("additional_notes"), str):
-            cached_report["additional_notes"] = re.sub(r"Location: .*?\. ", f"Location: {display_address}. ", cached_report["additional_notes"]) 
-
         return cached_report
 
+    # -------------------------------------------------------------
+    # NEW: EAiSER V3 SINGLE IMAGE FLOW
+    # -------------------------------------------------------------
+    try:
+        logger.info(f"🚀 Using EAiSER V3 Engine for issue {issue_id}")
+        v3_service = get_ai_service_v3()
+        
+        # Prepare overrides for the mapper
+        meta_overrides = {
+            "report_id": report_id,
+            "local_time": local_time,
+            "address": display_address,
+            "image_filename": image_filename
+        }
+        
+        # Analyze using V3 logic
+        v3_result = await v3_service.analyze_single_image(image_content)
+        
+        if v3_result.get("success"):
+            # Map V3 schema back to Legacy schema for Frontend compatibility
+            report = v3_service.map_v3_to_legacy(v3_result, meta_overrides)
+            
+            # Post-processing: Add authorities (External sources)
+            auth_data = await get_authority_data_cached(zip_code, address, issue_type, latitude, longitude, category)
+            report["responsible_authorities_or_parties"] = auth_data.get("responsible_authorities", [])
+            report["available_authorities"] = auth_data.get("available_authorities", [])
+            
+            # Cache the V3 result (mapped to legacy)
+            await set_cached_data(report_cache_key, report, CACHE_TTL['ai_report'])
+            
+            return report
+        else:
+            logger.warning(f"V3 Engine failed, falling back to legacy: {v3_result.get('error')}")
+    except Exception as e:
+        logger.error(f"Error in V3 Engine transition: {e}", exc_info=True)
+
+    # -------------------------------------------------------------
+    # LEGACY FLOW (Fallback)
+    # -------------------------------------------------------------
     # Build location string
     location_str = (
         f"{display_address}. Zip: {zip_code}" if zip_code else display_address
