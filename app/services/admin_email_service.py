@@ -61,29 +61,31 @@ async def send_admin_welcome_email(
 <title>EAiSER Administrative Onboarding</title>
 <style>
   body {{
-    background-color: #f1f5f9;
+    background-color: #f8fafc;
     margin: 0;
     padding: 0;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }}
   .wrapper {{
-    background-color: #f1f5f9;
+    background-color: #f8fafc;
     padding: 40px 20px;
   }}
   .container {{
     max-width: 620px;
     margin: 0 auto;
     background: #ffffff;
-    border-radius: 16px;
+    border-radius: 24px;
     overflow: hidden;
     box-shadow: 0 25px 50px -12px rgba(0,0,0,0.1);
     border: 1px solid #e2e8f0;
   }}
   .header {{
-    background: #1e293b;
-    padding: 40px;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    padding: 45px 40px;
     text-align: center;
     color: #ffffff;
+    position: relative;
   }}
   .header h1 {{
     margin: 0;
@@ -243,7 +245,7 @@ async def send_admin_welcome_email(
       </div>
 
       <div class="footer">
-        © 2025 MomntumAi · EAiSER Intelligence Platform<br/>
+        © 2026 MomntumAi · EAiSER Intelligence Platform<br/>
         This is an automated security transmission. Please do not reply.
       </div>
     </div>

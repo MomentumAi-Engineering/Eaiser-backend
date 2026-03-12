@@ -97,6 +97,8 @@ async def send_email(
         for attachment in raw_attachments:
             # Postmark expects keys: Name, Content, ContentType
             if all(k in attachment for k in ["Name", "Content", "ContentType"]):
+                content_len = len(attachment.get("Content", ""))
+                logger.info(f"📎 Adding raw attachment: {attachment.get('Name')} ({attachment.get('ContentType')}) - Size: {content_len} chars")
                 payload["Attachments"].append(attachment)
                 logger.debug(f"📎 Added raw attachment: {attachment.get('Name')}")
 
@@ -128,7 +130,12 @@ async def send_email(
             if retry and response.status_code != 401:
                 logger.info("🔁 Retrying once after 2 seconds...")
                 await asyncio.sleep(2)
-                return await send_email(to_email, subject, html_content, text_content, attachments, embedded_images, retry=False)
+                return await send_email(
+                    to_email, subject, html_content, text_content, 
+                    attachments, embedded_images, 
+                    reply_to=reply_to, retry=False, 
+                    raw_attachments=raw_attachments
+                )
             return False
 
     except Exception as e:
@@ -261,22 +268,25 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
 
                 # Construct final HTML and Text bodies
                 final_html = f"""
-                <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; line-height: 1.6; border: 1px solid #f1f5f9; border-radius: 16px; overflow: hidden; background-color: white;">
-                    <div style="padding: 25px 30px; border-bottom: 2px solid #3b82f6; background-color: #f8fafc;">
-                        <h2 style="color: #2563eb; margin: 0; font-size: 22px;">🚀 EAiSER Emergency Alert</h2>
+                <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border-radius: 24px; overflow: hidden; background-color: white; border: 1px solid #e2e8f0; box-shadow: 0 20px 50px rgba(0,0,0,0.1);">
+                    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 40px 30px; text-align: center; border-bottom: 4px solid #fbbf24;">
+                        <h2 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px;">🚀 EAiSER <span style="color:#fbbf24;">SMART ALERT</span></h2>
+                        <div style="display: inline-block; padding: 4px 12px; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.2); border-radius: 50px; font-size: 11px; font-weight: 700; color: #fbbf24; margin-top: 15px; text-transform: uppercase; letter-spacing: 1px;">
+                            Official Intelligence Transmission
+                        </div>
                     </div>
                     
-                    <div style="padding: 30px; font-size: 15px; color: #334155;">
-                        <div style="line-height: 1.8;">
+                    <div style="padding: 40px 30px; font-size: 16px; color: #334155; line-height: 1.8;">
+                        <div style="background: #f8fafc; border-radius: 16px; padding: 25px; border: 1px solid #f1f5f9; margin-bottom: 30px;">
                             {formatted_content.replace('\n', '<br>')}
                         </div>
 
                         {button_html}
                     </div>
 
-                    <div style="padding: 20px 30px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 12px; color: #94a3b8;">
-                        © 2026 EAiSER AI • Intelligent Civic Response System<br>
-                        This is an automated operational alert sent to verified authorities.
+                    <div style="padding: 25px 30px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 12px; color: #94a3b8;">
+                        © 2026 EAiSER AI • Intelligent Civic Response Engine<br>
+                        This is a privileged operational alert for verified authorities.
                     </div>
                 </div>
                 """
@@ -512,151 +522,227 @@ async def send_admin_welcome_email(
 <title>Welcome to EAiSER</title>
 <style>
   body {{
-    background-color: #020617; /* Dark slate background */
+    background-color: #f8fafc;
     margin: 0;
     padding: 0;
-    font-family: 'Segoe UI', Arial, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }}
+  .wrapper {{
+    background-color: #f8fafc;
+    padding: 40px 20px;
   }}
   .container {{
     max-width: 620px;
-    margin: 40px auto;
+    margin: 0 auto;
     background: #ffffff;
-    border-radius: 14px;
+    border-radius: 24px;
     overflow: hidden;
-    box-shadow: 0 25px 70px rgba(0,0,0,0.45);
-    animation: slideUp 0.9s ease-out;
-  }}
-  @keyframes slideUp {{
-    from {{ opacity: 0; transform: translateY(25px); }}
-    to {{ opacity: 1; transform: translateY(0); }}
+    box-shadow: 0 25px 50px -12px rgba(0,0,0,0.1);
+    border: 1px solid #e2e8f0;
   }}
   .header {{
-    background: linear-gradient(135deg, #4f46e5, #9333ea);
-    padding: 35px;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    padding: 45px 40px;
     text-align: center;
-    color: #ffffff;
+    position: relative;
+  }}
+  .header-accent {{
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(to right, #fbbf24, #f59e0b);
   }}
   .header h1 {{
     margin: 0;
-    font-size: 30px;
-    font-weight: 700;
+    font-size: 28px;
+    font-weight: 800;
     letter-spacing: -0.5px;
+    color: #ffffff;
+  }}
+  .header h1 span {{
+    color: #fbbf24;
   }}
   .header p {{
     margin: 10px 0 0;
-    font-size: 16px;
-    opacity: 0.9;
+    font-size: 13px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-weight: 600;
   }}
   .content {{
-    padding: 35px;
+    padding: 40px;
     color: #334155;
-    font-size: 15px;
+    font-size: 16px;
     line-height: 1.7;
   }}
-  .card {{
-    background: #f8fafc;
-    border-radius: 10px;
-    padding: 22px;
-    margin: 25px 0;
-    border-left: 4px solid #6366f1;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  .greeting {{
+    font-size: 22px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 8px;
   }}
-  .card h3 {{
-    margin-top: 0;
-    color: #1e293b;
-    font-size: 18px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }}
-  .card code {{
-    background: #e5e7eb;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-family: 'Consolas', monospace;
-    font-size: 15px;
-    font-weight: 600;
-    color: #334155;
+  .access-badge {{
     display: inline-block;
+    padding: 5px 14px;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    color: #b45309;
+    border-radius: 50px;
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 25px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }}
+  .credential-card {{
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 28px;
+    margin: 30px 0;
+  }}
+  .credential-card h3 {{
+    margin: 0 0 18px 0;
+    font-size: 13px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }}
+  .credential-row {{
+    margin-bottom: 15px;
+  }}
+  .label {{
+    font-size: 11px;
+    color: #94a3b8;
+    display: block;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }}
+  .value {{
+    font-size: 16px;
+    color: #1e293b;
+    font-weight: 600;
+  }}
+  .password-box {{
+    background: #ffffff;
+    border: 1px dashed #cbd5e1;
+    padding: 12px 18px;
+    border-radius: 10px;
+    font-family: 'Monaco', 'Consolas', monospace;
+    font-size: 16px;
+    color: #0f172a;
+    font-weight: 700;
+    display: table;
     margin-top: 6px;
     letter-spacing: 1px;
   }}
-  .cta {{
-    text-align: center;
-    margin: 35px 0;
+  .permissions-box {{
+    border-left: 4px solid #fbbf24;
+    padding-left: 20px;
+    margin: 30px 0;
+    background: #fffbeb;
+    padding: 20px;
+    border-radius: 0 12px 12px 0;
   }}
-  .cta a {{
-    background: linear-gradient(135deg, #4f46e5, #9333ea);
-    color: white;
-    padding: 16px 48px;
-    border-radius: 50px;
+  .permissions-box h4 {{
+    margin: 0 0 6px 0;
+    color: #1e293b;
+    font-size: 15px;
+    font-weight: 700;
+  }}
+  .permissions-box p {{
+    margin: 0;
+    font-size: 14px;
+    color: #64748b;
+    line-height: 1.6;
+  }}
+  .cta-block {{
+    text-align: center;
+    margin: 40px 0 15px;
+  }}
+  .cta-button {{
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    color: #ffffff !important;
+    padding: 16px 40px;
+    border-radius: 12px;
     text-decoration: none;
     font-size: 16px;
-    font-weight: 600;
+    font-weight: 700;
     display: inline-block;
-    box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3);
-    transition: all 0.25s ease;
-  }}
-  .cta a:hover {{
-    transform: translateY(-2px);
-    box-shadow: 0 15px 30px rgba(79, 70, 229, 0.5);
+    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.2);
+    letter-spacing: 0.3px;
   }}
   .footer {{
+    padding: 30px 40px;
+    background: #f8fafc;
     text-align: center;
-    font-size: 12px;
-    color: #64748b;
-    background: #f1f5f9;
-    padding: 20px;
     border-top: 1px solid #e2e8f0;
+    font-size: 12px;
+    color: #94a3b8;
+  }}
+  .footer p {{
+    margin: 5px 0;
   }}
 </style>
 </head>
-
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>EAiSER Access</h1>
-      <p>AI-Driven Civic Intelligence Platform</p>
-    </div>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-accent"></div>
+        <h1>EAiSER <span>Console</span></h1>
+        <p>Administrative Access Gateway</p>
+      </div>
 
-    <div class="content">
-      <p>Hello <strong>{admin_name}</strong>,</p>
+      <div class="content">
+        <div class="greeting">System Access Granted</div>
+        <div class="access-badge">Role: {role.replace('_', ' ').title()}</div>
 
-      <p>
-        You have been officially onboarded by <strong>{created_by}</strong> as a
-        <strong>{role.replace('_', ' ').title()}</strong>.
-      </p>
+        <p>Hello <strong>{admin_name}</strong>,</p>
+        <p>You have been officially onboarded to the EAiSER administrative network by <strong>{created_by}</strong>. Your account is now active and ready for deployment.</p>
 
-      <div class="card">
-        <h3>🔐 Login Credentials</h3>
-        <p><strong>Email:</strong> {admin_email}</p>
-        <p><strong>Temporary Password:</strong><br/>
-          <code>{temporary_password}</code>
+        <div class="credential-card">
+          <h3>🔐 Security Credentials</h3>
+          <div class="credential-row">
+            <span class="label">Access Email</span>
+            <span class="value">{admin_email}</span>
+          </div>
+          <div class="credential-row" style="margin-bottom: 0;">
+            <span class="label">Temporary Access Token</span>
+            <div class="password-box">{temporary_password}</div>
+          </div>
+          <p style="margin: 15px 0 0 0; font-size: 12px; color: #ef4444; font-weight: 600;">
+            ⚠️ For security compliance, you must update this password upon initial authentication.
+          </p>
+        </div>
+
+        <div class="permissions-box">
+          <h4>🛡️ Privileged Scope</h4>
+          <p>{permissions_text}</p>
+        </div>
+
+        <div class="cta-block">
+          <a href="{ADMIN_DASHBOARD_URL}" class="cta-button">
+            Launch Admin Console →
+          </a>
+        </div>
+
+        <p style="text-align:center; color:#94a3b8; font-size:14px; margin-top:30px;">
+          Welcome to the team. Let's make a difference.
         </p>
-        <p style="color:#ef4444;font-size:13px; font-weight:500;">
-          ⚠️ For security, please change your password immediately after logging in.
-        </p>
       </div>
 
-      <div class="card">
-        <h3>🛡️ Your Permissions</h3>
-        <p>{permissions_text}</p>
+      <div class="footer">
+        <p>© 2026 MomntumAi · EAiSER Intelligence Platform</p>
+        <p>This is an automated security transmission. Please do not reply.</p>
       </div>
-
-      <div class="cta">
-        <a href="{ADMIN_DASHBOARD_URL}">
-          Launch Admin Dashboard
-        </a>
-      </div>
-      
-      <p style="text-align:center; color:#64748b; margin-top:30px;">
-        Welcome to the team. Let's make a difference.
-      </p>
-    </div>
-
-    <div class="footer">
-      © {created_by} · EAiSER Platform<br/>
-      Secure · Scalable · Intelligent
     </div>
   </div>
 </body>
@@ -725,29 +811,43 @@ async def send_verification_email(user_email: str, user_name: str, token: str) -
 <head>
 <meta charset="UTF-8">
 <style>
-  body {{ background-color: #f8fafc; font-family: 'Inter', sans-serif; margin: 0; padding: 0; }}
-  .container {{ max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; }}
-  .header {{ background: #1e293b; padding: 40px; text-align: center; }}
-  .header h1 {{ margin: 0; color: #fbbf24; font-size: 28px; }}
-  .content {{ padding: 40px; color: #334155; line-height: 1.6; }}
-  .cta {{ text-align: center; margin: 30px 0; }}
-  .cta a {{ background: #fbbf24; color: #000; padding: 16px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; }}
-  .footer {{ text-align: center; padding: 20px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; }}
+  body {{ background-color: #f8fafc; font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }}
+  .wrapper {{ padding: 40px 20px; background-color: #f8fafc; }}
+  .container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 24px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.1); }}
+  .header {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 45px 40px; text-align: center; position: relative; }}
+  .header-accent {{ position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(to right, #fbbf24, #f59e0b); }}
+  .header h1 {{ margin: 0; color: #fbbf24; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }}
+  .header p {{ margin: 10px 0 0; color: #94a3b8; font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; }}
+  .content {{ padding: 40px; color: #334155; line-height: 1.7; font-size: 16px; }}
+  .content h2 {{ color: #0f172a; font-size: 22px; font-weight: 700; margin-top: 0; }}
+  .cta {{ text-align: center; margin: 35px 0; }}
+  .cta a {{ background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); color: #000000 !important; padding: 16px 40px; border-radius: 12px; text-decoration: none; font-weight: 700; font-size: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(251, 191, 36, 0.25); }}
+  .link-fallback {{ font-size: 13px; color: #64748b; word-break: break-all; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; margin-top: 20px; }}
+  .expiry {{ display: inline-block; padding: 6px 14px; background: #fef2f2; color: #dc2626; border-radius: 8px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
+  .footer {{ text-align: center; padding: 30px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; background: #f8fafc; }}
 </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header"><h1>EAiSER AI</h1></div>
-    <div class="content">
-      <h2>Welcome to the Mission, {user_name}!</h2>
-      <p>Please verify your email address to activate your account and start reporting civic issues with AI precision.</p>
-      <div class="cta">
-        <a href="{verification_link}">Verify My Account</a>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-accent"></div>
+        <h1>EAiSER AI</h1>
+        <p>Account Verification</p>
       </div>
-      <p>Or copy this link: <br>{verification_link}</p>
-      <p>This link will expire in 24 hours.</p>
+      <div class="content">
+        <h2>Welcome to the Mission, {user_name}!</h2>
+        <p>Please verify your email address to activate your account and start reporting civic issues with AI precision.</p>
+        <div class="cta">
+          <a href="{verification_link}">Verify My Account →</a>
+        </div>
+        <div class="link-fallback">
+          Or copy this link into your browser:<br/>{verification_link}
+        </div>
+        <p style="text-align: center;"><span class="expiry">⏰ This link will expire in 24 hours.</span></p>
+      </div>
+      <div class="footer">© 2026 EAiSER AI · Automated Civic Intelligence Network</div>
     </div>
-    <div class="footer">© 2025 EAiSER AI · Automated Civic Network</div>
   </div>
 </body>
 </html>
@@ -963,7 +1063,7 @@ async def send_user_welcome_email(user_email: str, user_name: str) -> bool:
 
       <div class="footer">
         <strong>MomntumAi LLC</strong><br>
-        2025 EAiSER AI · Automated Civic Network<br>
+        2026 EAiSER AI · Automated Civic Network<br>
         <div class="social-links">
           <a href="#">Terms</a> • <a href="#">Privacy</a> • <a href="#">Support</a>
         </div>
@@ -1019,25 +1119,40 @@ async def send_password_reset_email(email: str, token: str) -> bool:
 <head>
 <meta charset="UTF-8">
 <style>
-  body {{ background-color: #0f172a; font-family: 'Inter', sans-serif; color: #f8fafc; padding: 40px 20px; }}
-  .container {{ max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; padding: 40px; border: 1px solid #334155; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); }}
-  h2 {{ color: #fbbf24; margin-top: 0; font-size: 24px; font-weight: 800; }}
-  p {{ color: #94a3b8; line-height: 1.6; font-size: 16px; }}
-  .btn {{ display: inline-block; background: #fbbf24; color: #0f172a !important; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: 700; margin: 25px 0; }}
-  .footer {{ margin-top: 30px; font-size: 12px; color: #64748b; border-top: 1px solid #334155; padding-top: 20px; text-align: center; }}
+  body {{ background-color: #f8fafc; font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }}
+  .wrapper {{ padding: 40px 20px; background-color: #f8fafc; }}
+  .container {{ max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 24px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.1); }}
+  .header {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 40px; text-align: center; position: relative; }}
+  .header-accent {{ position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(to right, #fbbf24, #f59e0b); }}
+  .header h2 {{ color: #ffffff; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }}
+  .header p {{ color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; margin: 10px 0 0; font-weight: 600; }}
+  .content {{ padding: 40px; color: #475569; line-height: 1.7; font-size: 16px; }}
+  .cta {{ text-align: center; margin: 35px 0; }}
+  .cta a {{ display: inline-block; background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); color: #0f172a !important; padding: 16px 40px; border-radius: 12px; text-decoration: none; font-weight: 700; font-size: 16px; box-shadow: 0 10px 25px rgba(251, 191, 36, 0.25); }}
+  .safety-note {{ background: #f8fafc; border-radius: 12px; padding: 20px; border: 1px solid #e2e8f0; font-size: 14px; color: #64748b; margin-top: 25px; }}
+  .expiry {{ display: inline-block; padding: 5px 12px; background: #fef2f2; color: #dc2626; border-radius: 8px; font-size: 12px; font-weight: 600; }}
+  .footer {{ padding: 25px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; background: #f8fafc; }}
 </style>
 </head>
 <body>
-  <div class="container">
-    <h2>Secure Password Reset</h2>
-    <p>We received a request to reset your password. Click the button below to choose a new one. This link will expire in 15 minutes.</p>
-    
-    <a href="{reset_link}" class="btn">Reset Password</a>
-    
-    <p style="font-size: 14px;">If you didn't request this, you can safely ignore this email. Your password will remain unchanged.</p>
-    
-    <div class="footer">
-      © 2025 EAiSER AI · Secure Identity Protection
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-accent"></div>
+        <h2>🔒 Secure Password Reset</h2>
+        <p>Identity Protection</p>
+      </div>
+      <div class="content">
+        <p>We received a request to reset your EAiSER account password. Click the button below to choose a new one.</p>
+        <p><span class="expiry">⏰ This link expires in 15 minutes</span></p>
+        <div class="cta">
+          <a href="{reset_link}">Reset My Password →</a>
+        </div>
+        <div class="safety-note">
+          🛡️ If you didn't request this, you can safely ignore this email. Your password will remain unchanged.
+        </div>
+      </div>
+      <div class="footer">© 2026 EAiSER AI · Secure Identity Protection</div>
     </div>
   </div>
 </body>
@@ -1062,23 +1177,35 @@ async def send_tos_email(email: str, name: str) -> bool:
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <style>
-    body {{ font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f9fafb; margin: 0; padding: 0; }}
-    .container {{ max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); padding: 40px; text-align: left; border-top: 5px solid #eab308; }}
-    h1 {{ color: #111827; font-size: 24px; margin-bottom: 20px; }}
-    p {{ color: #4b5563; font-size: 16px; line-height: 1.6; margin-bottom: 20px; }}
-    .btn {{ display: inline-block; background-color: #eab308; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; font-size: 16px; margin-top: 10px; }}
-    .footer {{ margin-top: 40px; font-size: 12px; color: #9ca3af; text-align: center; }}
+    body {{ font-family: 'Inter', system-ui, -apple-system, sans-serif; background-color: #f8fafc; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }}
+    .wrapper {{ padding: 40px 20px; background-color: #f8fafc; }}
+    .container {{ max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.08); border: 1px solid #e2e8f0; }}
+    .header {{ background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%); padding: 35px 30px; text-align: center; border-bottom: 1px solid #e2e8f0; position: relative; }}
+    .header-accent {{ position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(to right, #fbbf24, #f59e0b); }}
+    .header h1 {{ color: #0f172a; font-size: 22px; margin: 0; font-weight: 700; }}
+    .content {{ padding: 40px 30px; }}
+    p {{ color: #475569; font-size: 16px; line-height: 1.7; margin-bottom: 20px; }}
+    .check-badge {{ display: inline-flex; align-items: center; gap: 8px; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 10px 18px; border-radius: 10px; color: #16a34a; font-weight: 600; font-size: 14px; margin-bottom: 20px; }}
+    .footer {{ padding: 25px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; background: #f8fafc; }}
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Terms of Service Acceptance</h1>
-    <p>Hi {name or 'User'},</p>
-    <p>Thank you for creating an account on EAiSER.Ai. This email serves as confirmation that you have agreed to our Terms of Service.</p>
-    <p>We are excited to have you on board!</p>
-    <div class="footer">
-      © {datetime.utcnow().year} EAiSER AI · The Future of Issue Reporting
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-accent"></div>
+        <h1>Terms of Service Confirmation</h1>
+      </div>
+      <div class="content">
+        <p>Hi {name or 'User'},</p>
+        <div class="check-badge">✅ Terms of Service Accepted</div>
+        <p>Thank you for creating an account on EAiSER AI. This email confirms that you have reviewed and accepted our Terms of Service.</p>
+        <p>We're thrilled to have you on board. Together, we're building smarter, safer communities.</p>
+        <p style="font-weight: 600; color: #0f172a;">— The EAiSER Team</p>
+      </div>
+      <div class="footer">© {datetime.utcnow().year} EAiSER AI · Intelligent Civic Response</div>
     </div>
   </div>
 </body>

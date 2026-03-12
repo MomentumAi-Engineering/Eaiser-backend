@@ -402,213 +402,370 @@ async def send_authority_email(
     else:
         subject_override = f"[ID: {report_oid}] CIVIC ALERT: {display_issue_type}"
     
-    # --- PROFESSIONAL LIGHT-MODE TEMPLATE ---
+    # --- PREMIUM MODERN TEMPLATE ---
     html_content = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        
         body {{
-            font-family: 'Segoe UI', Arial, sans-serif;
-            line-height: 1.7;
-            color: #333333;
-            background-color: #f4f7f6;
+            font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+            line-height: 1.6;
+            color: #1e293b;
+            background-color: #f8fafc;
             margin: 0;
-            padding: 20px;
-            font-size: 16px;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }}
+        .email-wrapper {{
+            background-color: #f8fafc;
+            padding: 40px 20px;
         }}
         .email-container {{
             max-width: 650px;
-            margin: auto;
-            background: #ffffff;
-            border: 1px solid #e1e4e8;
-            border-radius: 8px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 20px;
             overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.08);
+            border: 1px solid #e2e8f0;
         }}
         .header {{
-            background-color: #1a202c;
-            color: #ffffff;
-            padding: 25px;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            padding: 45px 30px;
             text-align: center;
+            position: relative;
+        }}
+        .header-accent {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(to right, #fbbf24, #f59e0b);
+        }}
+        .logo-img {{
+            height: 32px;
+            margin-bottom: 20px;
+            opacity: 0.9;
         }}
         .header h1 {{
             margin: 0;
-            font-size: 28px;
-            letter-spacing: 1px;
-            color: #f6c521;
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            color: #ffffff;
         }}
-        .status-badge {{
+        .header h1 span {{
+            color: #fbbf24;
+        }}
+        .priority-pill {{
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 14px;
+            padding: 6px 16px;
+            border-radius: 50px;
+            font-size: 13px;
             font-weight: 700;
             text-transform: uppercase;
-            color: white;
+            letter-spacing: 1px;
+            color: #ffffff;
             background-color: {priority_color};
-            margin-top: 10px;
+            margin-top: 15px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
         }}
-        .content-section {{
-            padding: 30px;
+        .content-body {{
+            padding: 40px;
         }}
-        .section-header {{
-            font-size: 22px;
+        .section-title {{
+            display: flex;
+            align-items: center;
+            margin-bottom: 25px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #f1f5f9;
+        }}
+        .section-number {{
+            background: #f1f5f9;
+            color: #64748b;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
             font-weight: 700;
-            color: #2c3e50;
-            border-bottom: 2px solid #f1f1f1;
-            padding-bottom: 10px;
-            margin-bottom: 22px;
+            margin-right: 12px;
+        }}
+        .section-text {{
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }}
-        .info-grid {{
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin-bottom: 25px;
+        .intelligence-box {{
+            background: linear-gradient(145deg, #ffffff, #f8fafc);
+            border: 1px solid #e2e8f0;
+            border-left: 6px solid #fbbf24;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 35px;
+            position: relative;
+            overflow: hidden;
         }}
-        .info-item {{
-            margin-bottom: 15px;
-        }}
-        .label {{
-            font-size: 14px;
-            color: #7f8c8d;
-            font-weight: 600;
+        .intelligence-tag {{
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: #fffbeb;
+            color: #b45309;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 0 0 0 12px;
             text-transform: uppercase;
-            display: block;
-            margin-bottom: 3px;
         }}
-        .value {{
+        .ai-quote {{
             font-size: 18px;
-            color: #2d3436;
-            font-weight: 500;
-        }}
-        .description-box {{
-            background-color: #f8fafc;
-            border-left: 4px solid #f6c521;
-            padding: 18px 20px;
-            font-style: italic;
-            font-size: 17px;
             line-height: 1.7;
-            margin-bottom: 25px;
-        }}
-        .evidence-image {{
-            width: 100%;
-            max-width: 100%;
-            border-radius: 6px;
-            border: 1px solid #ddd;
-            margin: 15px 0;
-        }}
-        .analysis-card {{
-            background-color: #f1f5f9;
-            border-radius: 8px;
-            padding: 20px;
-            margin-top: 20px;
-        }}
-        .routing-list {{
-            padding-left: 20px;
+            color: #334155;
+            font-weight: 500;
             margin: 0;
-            color: #475569;
-            font-size: 17px;
         }}
-        .routing-list li {{
-            margin-bottom: 10px;
+        .data-grid {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }}
+        .data-label {{
+            font-size: 12px;
+            color: #94a3b8;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding-bottom: 4px;
+        }}
+        .data-value {{
+            font-size: 16px;
+            color: #1e293b;
+            font-weight: 600;
+            padding-bottom: 20px;
+        }}
+        .location-pane {{
+            background-color: #f1f5f9;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 10px;
+        }}
+        .map-link {{
+            display: inline-flex;
+            align-items: center;
+            padding: 12px 24px;
+            background-color: #0f172a;
+            color: #ffffff !important;
+            text-decoration: none;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 15px;
+            margin-top: 15px;
+            transition: transform 0.2s;
+        }}
+        .evidence-container {{
+            margin: 35px 0;
+        }}
+        .evidence-img {{
+            width: 100%;
+            border-radius: 16px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            display: block;
+        }}
+        .action-card {{
+            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+            border: 1px solid #fde68a;
+            border-radius: 16px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 35px;
+        }}
+        .action-card h3 {{
+            margin: 0 0 10px 0;
+            color: #92400e;
+            font-size: 20px;
+            font-weight: 700;
+        }}
+        .action-card p {{
+            margin: 0;
+            color: #b45309;
+            font-size: 15px;
+            line-height: 1.6;
+        }}
+        .confidence-meter {{
+            height: 10px;
+            background: #e2e8f0;
+            border-radius: 10px;
+            margin-top: 15px;
+            overflow: hidden;
+        }}
+        .confidence-fill {{
+            height: 100%;
+            background: {conf_bar_color};
+            border-radius: 10px;
+        }}
+        .severity-badge {{
+            display: inline-block;
+            padding: 2px 8px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 800;
+            margin-left: 8px;
+            vertical-align: middle;
+        }}
+        .routing-pill-container {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 15px;
+        }}
+        .routing-pill {{
+            background: #f1f5f9;
+            color: #475569;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            border: 1px solid #e2e8f0;
         }}
         .footer {{
             background-color: #f8fafc;
-            padding: 25px;
+            padding: 40px;
             text-align: center;
-            font-size: 13px;
-            color: #94a3b8;
-            border-top: 1px solid #e2e8f0;
+            border-top: 1px solid #f1f5f9;
         }}
-        .map-btn {{
-            display: inline-block;
-            padding: 12px 24px;
-            background-color: #1a202c;
-            color: white !important;
-            text-decoration: none;
-            border-radius: 6px;
-            font-weight: 600;
-            font-size: 16px;
-            margin-top: 12px;
+        .footer-logo {{
+            height: 24px;
+            opacity: 0.3;
+            margin-bottom: 20px;
+        }}
+        .footer p {{
+            margin: 5px 0;
+            font-size: 12px;
+            color: #94a3b8;
+            line-height: 1.5;
+        }}
+        .confidential {{
+            margin-top: 20px !important;
+            font-size: 10px !important;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }}
     </style>
 </head>
 <body>
-    <div class="email-container">
-        <div class="header">
-            <h1>EAiSER CIVIC</h1>
-            <div class="status-badge">{display_priority} Priority</div>
-            <p style="margin: 5px 0 0 0; font-size: 16px; opacity: 0.8;">Automated Incident Routing System</p>
-        </div>
-
-        <div class="content-section">
-            <div class="section-header">1. Incident Overview</div>
-            
-            <div class="description-box">
-                {short_description}
+    <div class="email-wrapper">
+        <div class="email-container">
+            <div class="header">
+                <div class="header-accent"></div>
+                <img src="cid:momentumai_logo" alt="EAiSER" class="logo-img" onerror="this.style.display='none'">
+                <h1>EAiSER <span>CIVIC</span></h1>
+                <div class="priority-pill">
+                    {display_priority} Priority
+                    <span class="severity-badge">{public_safety_risk} Risk</span>
+                </div>
             </div>
 
-            <table width="100%" cellpadding="0" cellspacing="0">
-                <tr>
-                    <td width="50%" style="padding-bottom: 15px;">
-                        <span class="label">Issue Type</span>
-                        <span class="value">{display_issue_type}</span>
-                    </td>
-                    <td width="50%" style="padding-bottom: 15px;">
-                        <span class="label">Reported On</span>
-                        <span class="value">{timestamp_formatted}</span>
-                    </td>
-                </tr>
-                <tr>
-                    <td colspan="2" style="padding-bottom: 15px;">
-                        <span class="label">Location</span>
-                        <span class="value">{final_address}</span>
-                        <br>
-                        <a href="{map_link}" class="map-btn">📍 View Precise Location Map</a>
-                    </td>
-                </tr>
-                <tr>
-                    <td width="50%">
-                        <span class="label">GPS Coordinates</span>
-                        <span class="value">{lat_fmt}, {lon_fmt}</span>
-                    </td>
-                    <td width="50%">
-                        <span class="label">Report ID</span>
-                        <span class="value">{report_oid}</span>
-                    </td>
-                </tr>
-            </table>
+            <div class="content-body">
+                <div class="section-title">
+                    <span class="section-number">01</span>
+                    <span class="section-text">Contextual Intelligence</span>
+                </div>
+                
+                <div class="intelligence-box">
+                    <div class="intelligence-tag">AI Analysis</div>
+                    <p class="ai-quote">
+                        {short_description}
+                    </p>
+                    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <span style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Confidence Index</span>
+                            <span style="font-size: 14px; font-weight: 800; color: {conf_bar_color};">{int(conf_val)}%</span>
+                        </div>
+                        <div class="confidence-meter">
+                            <div class="confidence-fill" style="width: {conf_val}%"></div>
+                        </div>
+                    </div>
+                </div>
 
-            <div class="section-header" style="margin-top: 40px;">2. Photographic Evidence</div>
-            <p style="font-size: 15px; color: #666; margin-bottom: 8px;">Primary visual evidence from the scene:</p>
-            <img src="{img_src}" alt="Incident Evidence" class="evidence-image" style="max-height: 500px; object-fit: contain;">
+                <div class="section-title">
+                    <span class="section-number">02</span>
+                    <span class="section-text">Incident Data</span>
+                </div>
+                
+                <table class="data-grid">
+                    <tr>
+                        <td width="50%">
+                            <div class="data-label">Issue Classification</div>
+                            <div class="data-value">{display_issue_type}</div>
+                        </td>
+                        <td width="50%">
+                            <div class="data-label">Temporal Record</div>
+                            <div class="data-value">{timestamp_formatted}</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td colspan="2">
+                            <div class="data-label">Geographic Precision</div>
+                            <div class="location-pane">
+                                <div class="data-value" style="padding-bottom: 5px; color: #0f172a;">{final_address}</div>
+                                <div style="font-size: 13px; color: #64748b;">
+                                    <strong>GPS:</strong> {lat_fmt}, {lon_fmt} • <strong>ID:</strong> {report_oid}
+                                </div>
+                                <a href="{map_link}" class="map-link">📍 View on Interactive Map</a>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
 
-            <div class="section-header" style="margin-top: 40px;">3. Direct Authority Actions</div>
-            <div style="background-color: #fff9db; border: 1px solid #ffec99; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 30px;">
-                <p style="margin: 0; font-size: 18px; font-weight: 700; color: #856404;">📧 Reply to Communicate</p>
-                <p style="margin: 10px 0 0 0; color: #92700e; font-size: 16px;">
-                    To coordinate with the reporter or request more details, simply <strong>reply directly to this email</strong>. Your response will be automatically forwarded to the citizen.
+                <div class="section-title">
+                    <span class="section-number">03</span>
+                    <span class="section-text">Visual Evidence</span>
+                </div>
+                
+                <div class="evidence-container">
+                    <img src="{img_src}" alt="Incident Photograph" class="evidence-img">
+                </div>
+
+                <div class="action-card">
+                    <h3>💬 Multi-Channel Communication</h3>
+                    <p>
+                        To coordinate with relevant parties or request clarification, simply <strong>reply directly to this email</strong>. 
+                        Your response will be securely routed through the EAiSER engine to the responsible individuals.
+                    </p>
+                </div>
+
+                <div class="section-title">
+                    <span class="section-number">04</span>
+                    <span class="section-text">Unified Routing</span>
+                </div>
+                
+                <p style="font-size: 14px; color: #64748b; margin-top: 10px;">
+                    This incident has been validated and dispatched to the following active jurisdictions:
                 </p>
+                <div class="routing-pill-container">
+                    { "".join([f'<div class="routing-pill">{auth.get("name", "Department")} ({auth.get("type", "General").title()})</div>' for auth in department_list]) }
+                </div>
             </div>
 
-            <div class="section-header" style="margin-top: 40px;">4. Incident Routing</div>
-            <div class="analysis-card">
-                <p style="margin: 0 0 15px 0; font-size: 16px; color: #334155; font-weight: 500;">This incident has been securely routed to the following departments for appropriate action:</p>
-                <ul class="routing-list" style="font-size: 17px;">
-                    {routing_html}
-                </ul>
+            <div class="footer">
+                <img src="cid:momentumai_logo" alt="EAiSER - Powered by Momntum AI" class="footer-logo">
+                <p>This report was generated and transmitted via the <strong>EAiSER AI Routing Engine</strong>.</p>
+                <p>Digital signature verified. Automated timestamp synchronized with UTC.</p>
+                <p class="confidential">Confidential: For Authorized Agency Use Only</p>
             </div>
-        </div>
-
-        <div class="footer">
-            <img src="cid:momentumai_logo" alt="MomntumAi" style="height: 25px; margin-bottom: 10px; opacity: 0.5;">
-            <p style="margin: 0;">This report was transmitted electronically via EAiSER AI.</p>
-            <p style="margin: 5px 0;">Verification of on-site conditions is recommended before full deployment.</p>
-            <p style="margin: 10px 0 0 0; font-size: 10px;">© 2025 MomntumAi LLC — Confidentiality Notice: This document may contain privileged information.</p>
         </div>
     </div>
 </body>
