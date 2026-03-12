@@ -21,12 +21,6 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "https://www.eaiser.ai") # Default to l
 # Re-use user auth from issues router if needed, or define here
 from routes.issues_optimized_v2 import get_current_user
 
-class ChatMessage(BaseModel):
-    text: str
-    issue_id: str
-    media_url: Optional[str] = None
-    media_type: Optional[str] = None # 'image' or 'video'
-
 class UserFeedback(BaseModel):
     status: str # 'resolved' or 'persistent'
 
@@ -215,115 +209,6 @@ async def get_authority_dashboard(token: str):
         logger.error(f"Dashboard error: {e}")
         return {"valid": False, "error": str(e)}
 
-@router.post("/chat/send/{token}")
-async def authority_send_chat(token: str, chat: ChatMessage, background_tasks: BackgroundTasks):
-    """Authority sends message to user using token"""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        db = await get_db()
-        
-        msg = {
-            "sender": "authority",
-            "text": chat.text,
-            "media_url": chat.media_url,
-            "media_type": chat.media_type,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        await db.issues.update_one(
-            {"_id": chat.issue_id},
-            {
-                "$push": {"messages": msg},
-                "$set": {
-                    "chat_active": True,
-                    "has_unread_authority_messages": True
-                }
-            }
-        )
-        
-        # Notify User via Email
-        issue = await db.issues.find_one({"_id": chat.issue_id})
-        user_email = issue.get("user_email")
-        authority_name = payload.get("authority_name", "Official Authority")
-
-        # Check if it's the first authority message to prevent spamming emails
-        authority_message_count = sum(1 for m in issue.get("messages", []) if m.get("sender") == "authority")
-
-        if user_email and authority_message_count == 1:
-            subject = f"New Message from {authority_name}"
-            html_body = f"""
-            <div style="font-family: 'Inter', system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #fef3c7; border-radius: 16px; background-color: #fffbeb;">
-                <div style="display: flex; align-items: center; margin-bottom: 20px;">
-                    <div style="background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-right: 15px; box-shadow: 0 4px 10px rgba(245, 158, 11, 0.3);">
-                        <span style="font-size: 20px; color: #000;">🛡️</span>
-                    </div>
-                    <h2 style="color: #92400e; margin: 0; font-size: 22px; font-weight: 800;">Message from {authority_name}</h2>
-                </div>
-                
-                <p style="color: #4b5563; font-size: 15px; line-height: 1.6;">An official authority member has sent a professional inquiry regarding your report <strong>#{chat.issue_id[-6:]}</strong>:</p>
-                
-                <div style="background-color: #ffffff; padding: 20px 25px; border-left: 4px solid #f59e0b; border-radius: 8px; margin: 25px 0; color: #1f2937; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); font-style: italic; font-size: 15px; line-height: 1.6;">
-                    "{chat.text}"
-                </div>
-                
-                <p style="color: #4b5563; font-size: 14px;">Please respond directly through your secure citizen dashboard to maintain the official record.</p>
-                
-                <div style="margin-top: 35px; text-align: center;">
-                    <a href="{FRONTEND_URL}/chat-hub?issueId={chat.issue_id}" style="background: linear-gradient(135deg, #fcd34d 0%, #f59e0b 100%); color: #000000; padding: 14px 28px; text-decoration: none; border-radius: 10px; font-weight: 800; font-size: 15px; display: inline-block; box-shadow: 0 6px 15px -3px rgba(245, 158, 11, 0.4); text-transform: uppercase; letter-spacing: 0.5px;">
-                        Open Secure Chat
-                    </a>
-                </div>
-                
-                <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #fde68a; font-size: 11px; color: #92400e; text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
-                    © 2026 EAiSER AI • Official Authority Channel
-                </div>
-            </div>
-            """
-            
-            background_tasks.add_task(
-                send_email,
-                user_email,
-                subject,
-                html_body,
-                f"New Message from {authority_name}: {chat.text}"
-            )
-            
-        return {"success": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/chat/user/send")
-async def user_send_chat(chat: ChatMessage, user: dict = Depends(get_current_user)):
-    """User sends message to authority"""
-    db = await get_db()
-    
-    msg = {
-        "sender": "user",
-        "text": chat.text,
-        "media_url": chat.media_url,
-        "media_type": chat.media_type,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    
-    await db.issues.update_one(
-        {"_id": chat.issue_id, "user_email": user["sub"]},
-        {
-            "$push": {"messages": msg},
-            "$set": {
-                "chat_active": True,
-                "has_unread_user_messages": True # For authority visibility
-            }
-        }
-    )
-    return {"success": True}
-
-@router.get("/chat/history/{issue_id}")
-async def get_chat_history(issue_id: str):
-    db = await get_db()
-    issue = await db.issues.find_one({"_id": issue_id})
-    if not issue: return {"messages": []}
-    return {"messages": issue.get("messages", [])}
-
 @router.post("/user-feedback/{issue_id}")
 async def user_update_status_feedback(issue_id: str, feedback: UserFeedback, user: dict = Depends(get_current_user)):
     """User provides feedback on work status"""
@@ -344,24 +229,3 @@ async def user_update_status_feedback(issue_id: str, feedback: UserFeedback, use
         }}
     )
     return {"success": True}
-from services.cloudinary_service import upload_file_to_cloudinary
-
-@router.post("/chat/upload")
-async def upload_chat_media(file: UploadFile = File(...)):
-    """Upload media for chat to Cloudinary and return URL"""
-    try:
-        # Upload directly to the cloud without local processing
-        result = await upload_file_to_cloudinary(file, folder="chat_media")
-        
-        if result and result.get("url"):
-            return {
-                "success": True, 
-                "url": result.get("url"),
-                "type": result.get("type", "image" if file.content_type.startswith("image") else "video")
-            }
-        else:
-            raise Exception("Cloudinary upload failed or returned no URL")
-            
-    except Exception as e:
-        logger.error(f"Chat Cloudinary upload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))

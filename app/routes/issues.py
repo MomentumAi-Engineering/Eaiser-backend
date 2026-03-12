@@ -320,14 +320,9 @@ async def send_authority_email(
     
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
-    # --- GENERATE TOKENS FOR ACTION LINKS ---
-    from routes.authority_action import create_authority_token
+    # --- CONFIG ---
     import os
     frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
-    
-    # Generate a secure token valid for 48 hours for the authority to access chat/portal
-    auth_token = create_authority_token(issue_id)
-    chat_hub_link = f"{frontend_url}/authority/chat-hub?token={auth_token}"
 
     # --- CLEAN + AUTO SHORT DESCRIPTION (2–3 sentences) ---
     import re
@@ -403,9 +398,9 @@ async def send_authority_email(
     ai_eval_email = report.get('ai_evaluation', {})
     email_issue_detected = ai_eval_email.get('issue_detected', True)
     if email_issue_detected is False:
-        subject_override = f"CIVIC REPORT: {display_issue_type} - ID: {report_oid} - Flagged for Review"
+        subject_override = f"[ID: {report_oid}] Flagged for Review: {display_issue_type}"
     else:
-        subject_override = f"CIVIC ALERT: {display_issue_type} - ID: {report_oid}"
+        subject_override = f"[ID: {report_oid}] CIVIC ALERT: {display_issue_type}"
     
     # --- PROFESSIONAL LIGHT-MODE TEMPLATE ---
     html_content = f"""
@@ -593,8 +588,11 @@ async def send_authority_email(
             <img src="{img_src}" alt="Incident Evidence" class="evidence-image" style="max-height: 500px; object-fit: contain;">
 
             <div class="section-header" style="margin-top: 40px;">3. Direct Authority Actions</div>
-            <div style="display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap;">
-                <a href="{chat_hub_link}" style="display: inline-block; padding: 14px 28px; background-color: #facc15; color: #000000 !important; text-decoration: none; border-radius: 8px; font-weight: 800; font-size: 16px; box-shadow: 0 4px 15px rgba(234, 179, 8, 0.3); border: 1px solid #eab308;">💬 Open Secure Chat Hub</a>
+            <div style="background-color: #fff9db; border: 1px solid #ffec99; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 30px;">
+                <p style="margin: 0; font-size: 18px; font-weight: 700; color: #856404;">📧 Reply to Communicate</p>
+                <p style="margin: 10px 0 0 0; color: #92700e; font-size: 16px;">
+                    To coordinate with the reporter or request more details, simply <strong>reply directly to this email</strong>. Your response will be automatically forwarded to the citizen.
+                </p>
             </div>
 
             <div class="section-header" style="margin-top: 40px;">4. Incident Routing</div>
@@ -640,13 +638,15 @@ async def send_authority_email(
                 is_user_review=is_user_review
             )
             logger.debug(f"Sending email to [redacted] for {authority.get('type', 'general')} with subject: {subject}")
+            inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "adb1d888168b5611b7b7a489f1c8ab76@inbound.postmarkapp.com")
             success = await send_email(
                 to_email=authority.get("email", "eaiser@momntumai.com"),
                 subject=subject_override or subject,
                 html_content=html_content,
                 text_content=text_content,
                 attachments=None,
-                embedded_images=embedded_images
+                embedded_images=embedded_images,
+                reply_to=inbound_email
             )
             if success:
                 successful_emails.append(authority.get("email", "eaiser@momntumai.com"))

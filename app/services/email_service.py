@@ -25,6 +25,7 @@ async def send_email(
     text_content: str,
     attachments: Optional[List[str]] = None,
     embedded_images: Optional[List[Tuple[str, str, str]]] = None,
+    reply_to: Optional[str] = None,
     retry: bool = True
 ) -> bool:
     """
@@ -52,6 +53,9 @@ async def send_email(
         "TextBody": text_content,
         "Attachments": []
     }
+
+    if reply_to:
+        payload["ReplyTo"] = reply_to
 
     # Add inline images to Attachments
     if embedded_images:
@@ -226,44 +230,22 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
             return {"status": "dry_run", "recipients": recipients}
 
         # -------------------------------------------------------------
-        # 🔥 Generate Secure Authority Action Link (Step 1 Strategy)
+        # 📧 Automated Email Communication Note
         # -------------------------------------------------------------
         try:
-            # We need the real DB ID for the token
+            # We need the real DB ID
             real_id = report.get("template_fields", {}).get("oid") or report.get("_id")
             
             if real_id:
-                # Import here to avoid circular dependency
-                # Get authority name for token
-                authority_name = "Official Authority"
-                if authorities and isinstance(authorities[0], dict):
-                    authority_name = authorities[0].get("name", "Official Authority")
-
-                token = create_authority_token(str(real_id), authority_name=authority_name)
-                
-                # Determine Frontend URL
-                frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
-
-                chat_hub_link = f"{frontend_url}/authority/chat-hub?token={token}"
-                action_portal_link = f"{frontend_url}/authority-action?token={token}"
-                
-                logger.info(f"🔗 Generated Authority Links for {real_id} ({authority_name})")
-
                 button_html = f"""
                 <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 30px 0;">
                 <div style="text-align: center; background-color: #f8fafc; padding: 25px; border-radius: 12px; border: 1px solid #e2e8f0;">
-                    <h3 style="margin-top: 0; color: #1e293b; font-size: 18px;">⚡ Official Investigation Required</h3>
-                    <p style="color: #64748b; margin-bottom: 25px; font-size: 14px;">Use the secure link below to coordinate with the citizen regarding this incident.</p>
-                    
-                    <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;">
-                        <a href="{chat_hub_link}" target="_blank" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);">
-                            💬 Open Secure Chat Hub
-                        </a>
-                    </div>
+                    <h3 style="margin-top: 0; color: #1e293b; font-size: 18px;">📧 Official Communication</h3>
+                    <p style="color: #64748b; margin-bottom: 25px; font-size: 14px;">To coordinate with the citizen regarding this incident, please <strong>reply directly to this email</strong>.</p>
                     
                     <p style="margin-top: 15px; font-size: 11px; color: #94a3b8; line-height: 1.5;">
-                        <strong>Investigation Note:</strong> You can request additional photos or videos from the reporter via the Chat Hub for verification.<br>
-                        Secure Access • No Login Required • Expires in 7 Days
+                        <strong>Note:</strong> Your reply will be automatically routed to the reporter. You can request additional details or provide updates via this thread.<br>
+                        Issue ID: #{real_id} • Automated Routing Active
                     </p>
                 </div>
                 """
@@ -290,7 +272,7 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
                 </div>
                 """
                 
-                final_text = f"{formatted_content}\n\nSecure Chat Hub: {chat_hub_link}"
+                final_text = f"{formatted_content}\n\nREPLY TO THIS EMAIL to communicate with the reporter (Issue ID: #{real_id})."
                 
         except Exception as token_error:
             logger.error(f"⚠️ Failed to generate authority token: {token_error}")
@@ -298,7 +280,9 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
             final_text = formatted_content
 
         async def _send(to_email: str):
-            return await send_email(to_email, subject, final_html, final_text)
+            # Use the Postmark inbound email address or the verified domain
+            inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "reports@inbound.eaiser.ai")
+            return await send_email(to_email, subject, final_html, final_text, reply_to=inbound_email)
 
         if background:
             for r in recipients:
