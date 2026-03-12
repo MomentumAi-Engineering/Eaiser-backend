@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Request, HTTPException
 from services.mongodb_service import get_db
 from services.email_service import send_email
@@ -13,18 +12,21 @@ logger = logging.getLogger(__name__)
 def extract_issue_id(text: str) -> str:
     """
     Extracts the Issue ID (Report ID) from the text.
-    Looks for patterns like 'ID: ID_...' or just 'ID_...'
     """
     if not text:
         return None
         
-    # Pattern for short IDs like ID_A1B2C3D or IDs listed in brackets (ID: DDT62ZZ)
-    # 1. Try to find ID_ prefix first
+    # 1. Try to find the specific EAiSER format (e.g., eaiser-2024-123456)
+    match = re.search(r"eaiser-[\d-]+", text, re.IGNORECASE)
+    if match:
+        return match.group(0).lower() 
+
+    # 2. Try to find ID_ prefix
     match = re.search(r"ID_([a-zA-Z0-9]{5,20})", text, re.IGNORECASE)
     if match:
         return match.group(0).upper()
         
-    # 2. Try to find ID: [VALUE] or (ID: [VALUE])
+    # 3. Try to find ID: [VALUE] or (ID: [VALUE])
     match = re.search(r"ID[:\s]+([a-zA-Z0-9]{5,20})", text, re.IGNORECASE)
     if match:
         val = match.group(1).upper()
