@@ -16,10 +16,9 @@ def extract_issue_id(text: str) -> str:
     if not text:
         return None
         
-    # 1. Try to find the specific EAiSER format (e.g., eaiser-2024-123456)
     match = re.search(r"eaiser-[\d-]+", text, re.IGNORECASE)
     if match:
-        return match.group(0).lower() 
+        return match.group(0).lower().strip() 
 
     # 2. Try to find ID_ prefix
     match = re.search(r"ID_([a-zA-Z0-9]{5,20})", text, re.IGNORECASE)
@@ -75,14 +74,16 @@ async def handle_inbound_email(request: Request):
             
         # 2. Find Issue in DB
         db = await get_db()
-        # Search in multiple possible ID fields
+        # Search in multiple possible ID fields including nested report fields
         issue = await db.issues.find_one({
             "$or": [
                 {"_id": issue_id},
                 {"report_id": issue_id},
                 {"template_fields.oid": issue_id},
+                {"report.template_fields.oid": issue_id},
                 {"_id": {"$regex": f"^{re.escape(issue_id)}$", "$options": "i"}},
-                {"report_id": {"$regex": f"^{re.escape(issue_id)}$", "$options": "i"}}
+                {"report_id": {"$regex": f"^{re.escape(issue_id)}$", "$options": "i"}},
+                {"report.template_fields.oid": {"$regex": f"^{re.escape(issue_id)}$", "$options": "i"}}
             ]
         })
         
@@ -96,9 +97,16 @@ async def handle_inbound_email(request: Request):
         # Normalize emails for comparison
         from_email_lower = from_email.lower()
         
-        # 3. Determine Routing
-        is_from_authority = any(auth_email.lower() in from_email for auth_email in authority_emails)
-        is_from_user = user_email and user_email.lower() in from_email
+        # 3. Determine Routing with better error handling for data types
+        is_from_authority = False
+        if authority_emails:
+            for auth in authority_emails:
+                auth_str = str(auth.get('email') if isinstance(auth, dict) else auth).lower()
+                if auth_str in from_email_lower:
+                    is_from_authority = True
+                    break
+        
+        is_from_user = user_email and user_email.lower() in from_email_lower
         
         if is_from_authority:
             # Forward to User
