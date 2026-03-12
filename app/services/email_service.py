@@ -26,7 +26,8 @@ async def send_email(
     attachments: Optional[List[str]] = None,
     embedded_images: Optional[List[Tuple[str, str, str]]] = None,
     reply_to: Optional[str] = None,
-    retry: bool = True
+    retry: bool = True,
+    raw_attachments: Optional[List[Dict[str, Any]]] = None
 ) -> bool:
     """
     Sends an email via Postmark API with inline images and attachments.
@@ -90,6 +91,14 @@ async def send_email(
                 logger.debug(f"📎 Attached file: {file_path}")
             except Exception as e:
                 logger.error(f"⚠️ Failed to prepare attachment {file_path}: {e}")
+
+    # Add raw pre-encoded attachments
+    if raw_attachments:
+        for attachment in raw_attachments:
+            # Postmark expects keys: Name, Content, ContentType
+            if all(k in attachment for k in ["Name", "Content", "ContentType"]):
+                payload["Attachments"].append(attachment)
+                logger.debug(f"📎 Added raw attachment: {attachment.get('Name')}")
 
     def _do_send():
         url = "https://api.postmarkapp.com/email"

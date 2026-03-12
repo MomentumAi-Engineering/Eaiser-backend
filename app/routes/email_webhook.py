@@ -65,11 +65,24 @@ async def handle_inbound_email(request: Request):
         logger.info(f"📥 Processing inbound email from {from_email}")
         logger.info(f"📝 Raw From: {raw_from} | Subject: {subject}")
         
-        # 1. Extract Issue ID
-        issue_id = extract_issue_id(subject) or extract_issue_id(body_text)
+        # Extract Attachments
+        inbound_attachments = data.get("Attachments", [])
+        raw_attachments_to_forward = []
+        if inbound_attachments:
+            logger.info(f"📎 Found {len(inbound_attachments)} attachments in inbound email.")
+            for att in inbound_attachments:
+                raw_attachments_to_forward.append({
+                    "Name": att.get("Name"),
+                    "Content": att.get("Content"),
+                    "ContentType": att.get("ContentType"),
+                    "ContentID": att.get("ContentID")
+                })
+        
+        # 1. Extract Issue ID (Check Subject, then Text, then HTML)
+        issue_id = extract_issue_id(subject) or extract_issue_id(body_text) or extract_issue_id(body_html)
         
         if not issue_id:
-            logger.warning(f"Could not extract Issue ID from email from {from_email}")
+            logger.warning(f"⚠️ Could not extract Issue ID from email from {from_email}. Subject: {subject}")
             return {"status": "ignored", "reason": "no_issue_id"}
             
         # 2. Find Issue in DB
@@ -108,6 +121,15 @@ async def handle_inbound_email(request: Request):
         
         is_from_user = user_email and user_email.lower() in from_email_lower
         
+        # Prepare display body (fallback to HTML if text is empty)
+        display_body = body_text
+        if not display_body or len(display_body.strip()) < 5:
+            if body_html:
+                # Simple strip tags for display
+                display_body = re.sub(r'<[^>]+>', '', body_html)
+            else:
+                display_body = "[No text content]"
+
         if is_from_authority:
             # Forward to User
             if not user_email:
@@ -120,7 +142,7 @@ async def handle_inbound_email(request: Request):
                 <h2 style="color: #856404; margin-top: 0;">Message from Official Authority</h2>
                 <p style="font-size: 16px; line-height: 1.6;">The authority managing your report <strong>#{issue_id[-6:]}</strong> has sent a response:</p>
                 
-                <div style="background-color: #ffffff; padding: 20px; border-left: 4px solid #fbbf24; border-radius: 8px; margin: 20px 0; font-style: italic; white-space: pre-wrap;">{body_text}</div>
+                <div style="background-color: #ffffff; padding: 20px; border-left: 4px solid #fbbf24; border-radius: 8px; margin: 20px 0; font-style: italic; white-space: pre-wrap;">{display_body}</div>
                 
                 <p style="font-size: 14px; color: #666;">To reply back to the authority, simply <strong>reply to this email</strong>.</p>
                 <hr style="border: 0; border-top: 1px solid #fde68a; margin: 20px 0;">
@@ -129,7 +151,14 @@ async def handle_inbound_email(request: Request):
             """
             
             inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "reports@inbound.eaiser.ai")
-            await send_email(user_email, forward_subject, forward_body, f"Authority reply for {issue_id}", reply_to=inbound_email)
+            await send_email(
+                user_email, 
+                forward_subject, 
+                forward_body, 
+                f"Authority reply for {issue_id}", 
+                reply_to=inbound_email,
+                raw_attachments=raw_attachments_to_forward
+            )
             logger.info(f"✅ Forwarded authority reply for {issue_id} to user {user_email}")
             
         elif is_from_user:
@@ -144,7 +173,7 @@ async def handle_inbound_email(request: Request):
                 <h2 style="color: #1e293b; margin-top: 0;">Citizen Follow-up: #{issue_id[-6:]}</h2>
                 <p style="font-size: 16px; line-height: 1.6;">The reporter of incident <strong>#{issue_id}</strong> has sent a follow-up message:</p>
                 
-                <div style="background-color: #ffffff; padding: 20px; border-left: 4px solid #1e293b; border-radius: 8px; margin: 20px 0; font-style: italic; white-space: pre-wrap;">{body_text}</div>
+                <div style="background-color: #ffffff; padding: 20px; border-left: 4px solid #1e293b; border-radius: 8px; margin: 20px 0; font-style: italic; white-space: pre-wrap;">{display_body}</div>
                 
                 <p style="font-size: 14px; color: #666;">To coordinate with the citizen, simply <strong>reply to this email</strong>.</p>
                 <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;">
@@ -154,7 +183,14 @@ async def handle_inbound_email(request: Request):
             
             inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "reports@inbound.eaiser.ai")
             for auth_email in authority_emails:
-                await send_email(auth_email, forward_subject, forward_body, f"User follow-up for {issue_id}", reply_to=inbound_email)
+                await send_email(
+                    auth_email, 
+                    forward_subject, 
+                    forward_body, 
+                    f"User follow-up for {issue_id}", 
+                    reply_to=inbound_email,
+                    raw_attachments=raw_attachments_to_forward
+                )
                 
             logger.info(f"✅ Forwarded user follow-up for {issue_id} to {len(authority_emails)} authorities.")
             
