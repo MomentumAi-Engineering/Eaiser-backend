@@ -75,12 +75,17 @@ async def handle_inbound_email(request: Request):
             
         # 2. Find Issue in DB
         db = await get_db()
-        issue = await db.issues.find_one({"_id": issue_id})
+        # Search in multiple possible ID fields
+        issue = await db.issues.find_one({
+            "$or": [
+                {"_id": issue_id},
+                {"report_id": issue_id},
+                {"template_fields.oid": issue_id},
+                {"_id": {"$regex": f"^{re.escape(issue_id)}$", "$options": "i"}},
+                {"report_id": {"$regex": f"^{re.escape(issue_id)}$", "$options": "i"}}
+            ]
+        })
         
-        if not issue:
-            # Try searching with Case Insensitive if exact match fails
-            issue = await db.issues.find_one({"_id": {"$regex": f"^{re.escape(issue_id)}$", "$options": "i"}})
-            
         if not issue:
             logger.warning(f"❌ Issue {issue_id} not found in database for inbound email from {from_email}")
             return {"status": "ignored", "reason": f"issue_{issue_id}_not_found"}
