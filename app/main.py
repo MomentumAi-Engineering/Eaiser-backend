@@ -195,7 +195,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "img-src 'self' data: https: https://*.googleusercontent.com; "
             "media-src 'self' data: https: http:; "
             "connect-src 'self' https://eaiser.ai https://admin.eaiser.ai https://*.eaiser.ai "
-            "https://accounts.google.com https://*.googleapis.com https://eaiser-backend-rf95.onrender.com http://localhost:8005 http://localhost:8000; "
+            "https://accounts.google.com https://*.googleapis.com https://eaiser-backend-u8me.onrender.com http://localhost:8005 http://localhost:8000; "
             "frame-src 'self' https://accounts.google.com; "
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
@@ -298,11 +298,20 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:5174",
+        "http://localhost:8005",
+        "http://localhost:8081",
+        "http://localhost:19006",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
+        "http://127.0.0.1:8005",
+        "http://127.0.0.1:8081",
         "http://admin.localhost:5173",
         "http://admin.localhost:3000",
         "http://admin.localhost:5174",
+        # Mobile app / Replit origins
+        "https://eaiser-backend-u8me.onrender.com",
+        "https://*.replit.dev",
+        "https://*.repl.co",
     ],
     allow_credentials=True,
     allow_methods=["*"],
