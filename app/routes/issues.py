@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, status
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from services.ai_service import classify_issue
 from services.ai_service_optimized import generate_report_optimized as generate_report
 from services.email_service import send_email
@@ -21,7 +21,7 @@ from pathlib import Path
 import base64
 from datetime import datetime
 import pytz
-from typing import List, Optional, Dict, Any
+from typing import Dict, Any, Optional, Tuple, List, Callable, Dict, Any
 import gridfs.errors
 import asyncio
 from PIL import Image
@@ -74,9 +74,19 @@ async def get_my_issues(
     return await get_user_issues(current_user.get("sub"), limit=limit, skip=skip)
 
 class IssueResponse(BaseModel):
-    id: str
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    issue_id: str
+    id: str = Field(..., description="Backward compatibility for frontend")
+    status: Optional[str] = "pending"
     message: str
     report: Optional[Dict] = None
+    unified_report: Optional[Dict] = None
+    authority_data: Optional[Dict] = None
+    processing_time_ms: Optional[float] = None
+    confidence: Optional[float] = 0.0
+    issue_type: Optional[str] = None
+    severity: Optional[str] = None
 
 class IssueStatusUpdate(BaseModel):
     status: str
@@ -133,9 +143,21 @@ class Issue(BaseModel):
     available_authorities: Optional[List[Dict[str, str]]] = None
     recommended_actions: Optional[List[str]] = None
     
-    class Config:
-        validate_assignment = True
-        arbitrary_types_allowed = True
+    # Missing fields from DB/doc
+    unified_report: Optional[Dict] = None
+    authority_data: Optional[Dict] = None
+    confidence: Optional[float] = 0.0
+    policy_conflict: Optional[bool] = False
+    image_hash: Optional[str] = None
+    image_url: Optional[str] = None
+    processing_time_ms: Optional[float] = None
+    
+    model_config = ConfigDict(
+        validate_assignment=True,
+        arbitrary_types_allowed=True,
+        extra="ignore",
+        populate_by_name=True
+    )
 
 def get_logo_base64():
     try:
@@ -153,7 +175,7 @@ def get_department_email_content(department_type: str, issue_data: dict, is_user
     issue_type = issue_data.get("issue_type", "Unknown Issue")
     final_address = issue_data.get("address", "Unknown Address")
     zip_code = issue_data.get("zip_code", "Unknown Zip Code")
-    timestamp_formatted = issue_data.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M"))
+    timestamp_formatted = issue_data.get("timestamp_formatted", datetime.utcnow().strftime("%m/%d/%Y %H:%M"))
     report = issue_data.get("report", {"message": "No report generated"})
     authority_name = issue_data.get("authority_name", "Department")
     confidence = issue_data.get("confidence", 0.0)
@@ -348,14 +370,29 @@ async def send_authority_email(
     clean_desc = clean_desc.replace("..", ".")
 
     # Split into sentences
-    sentences = clean_desc.split('.')
+    display_issue_type = issue_type.replace('_', ' ').title()
 
-    # Keep only first 2–3 sentences
-    short_description = '. '.join([s.strip() for s in sentences if s.strip()][:3])
+    # Formatted Overview for the dispatcher (Standard format requested by user)
+    short_description = f"Possible {display_issue_type} has been reported at {final_address}."
 
     # Ensure full stop at end
     if not short_description.endswith('.'):
         short_description += '.'
+
+    # 🟢 NEW: Get the full detailed description for the Detailed Analysis section
+    detailed_description = (report.get('issue_overview', {}).get('detailed_description') or clean_desc).strip()
+    
+    # Combined for authority email - Structured for professional Trust
+    combined_email_desc = f"""
+<div style="margin-bottom: 20px;">
+    <span style="font-size: 10px; font-weight: 800; color: #b45309; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">◈ Official Notice</span>
+    <div style="font-size: 16px; font-weight: 700; color: #1a202c; line-height: 1.4;">{short_description}</div>
+</div>
+<div style="border-top: 1px solid #e2e8f0; padding-top: 15px;">
+    <span style="font-size: 10px; font-weight: 800; color: #4a5568; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">◈ Situational Analysis</span>
+    <div style="font-size: 15px; color: #4a5568; line-height: 1.6;">{detailed_description}</div>
+</div>
+"""
 
 
     
@@ -363,7 +400,6 @@ async def send_authority_email(
     feedback_str = str(feedback_value) if feedback_value is not None else 'None'
     
     # --- PREPARE DATA FOR PROFESSIONAL TEMPLATE ---
-    display_issue_type = issue_type.replace('_', ' ').title()
     display_priority = str(report.get('issue_overview', {}).get('severity') or report.get('template_fields', {}).get('priority') or 'Medium').title()
     
     # Color coding for priority/severity
@@ -402,7 +438,7 @@ async def send_authority_email(
     else:
         subject_override = f"[ID: {report_oid}] CIVIC ALERT: {display_issue_type}"
     
-    # --- PREMIUM MODERN TEMPLATE ---
+    # --- NEW CLEAN TEMPLATE MATCHING SCREENSHOTS ---
     html_content = f"""
 <!DOCTYPE html>
 <html>
@@ -410,258 +446,158 @@ async def send_authority_email(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-        
         body {{
-            font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-            line-height: 1.6;
-            color: #1e293b;
-            background-color: #f8fafc;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f4f7f9;
             margin: 0;
             padding: 0;
-            -webkit-font-smoothing: antialiased;
+            color: #333;
         }}
         .email-wrapper {{
-            background-color: #f8fafc;
-            padding: 40px 20px;
+            padding: 20px;
+            background-color: #f4f7f9;
         }}
         .email-container {{
-            max-width: 650px;
+            max-width: 600px;
             margin: 0 auto;
             background-color: #ffffff;
-            border-radius: 20px;
+            border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.08);
-            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }}
         .header {{
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            padding: 45px 30px;
+            background-color: #1a202c;
+            padding: 30px 20px;
             text-align: center;
-            position: relative;
-        }}
-        .header-accent {{
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: linear-gradient(to right, #fbbf24, #f59e0b);
-        }}
-        .logo-img {{
-            height: 32px;
-            margin-bottom: 20px;
-            opacity: 0.9;
         }}
         .header h1 {{
             margin: 0;
-            font-size: 26px;
-            font-weight: 800;
-            letter-spacing: -0.5px;
-            color: #ffffff;
-        }}
-        .header h1 span {{
             color: #fbbf24;
-        }}
-        .priority-pill {{
-            display: inline-block;
-            padding: 6px 16px;
-            border-radius: 50px;
-            font-size: 13px;
-            font-weight: 700;
-            text-transform: uppercase;
+            font-size: 28px;
+            font-weight: 800;
             letter-spacing: 1px;
-            color: #ffffff;
-            background-color: {priority_color};
-            margin-top: 15px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            text-transform: uppercase;
+        }}
+        .priority-badge {{
+            display: inline-block;
+            background-color: #f6ad55;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 800;
+            margin: 10px 0;
+            text-transform: uppercase;
+        }}
+        .subtitle {{
+            display: block;
+            color: #cbd5e0;
+            font-size: 14px;
+            margin-top: 5px;
         }}
         .content-body {{
-            padding: 40px;
+            padding: 30px 25px;
         }}
-        .section-title {{
-            display: flex;
-            align-items: center;
-            margin-bottom: 25px;
-            padding-bottom: 12px;
-            border-bottom: 2px solid #f1f5f9;
-        }}
-        .section-number {{
-            background: #f1f5f9;
-            color: #64748b;
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-            font-weight: 700;
-            margin-right: 12px;
-        }}
-        .section-text {{
-            font-size: 18px;
-            font-weight: 700;
-            color: #0f172a;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }}
-        .intelligence-box {{
-            background: linear-gradient(145deg, #ffffff, #f8fafc);
-            border: 1px solid #e2e8f0;
-            border-left: 6px solid #fbbf24;
-            border-radius: 12px;
-            padding: 25px;
-            margin-bottom: 35px;
-            position: relative;
-            overflow: hidden;
-        }}
-        .intelligence-tag {{
-            position: absolute;
-            top: 0;
-            right: 0;
-            background: #fffbeb;
-            color: #b45309;
-            font-size: 11px;
-            font-weight: 700;
-            padding: 4px 12px;
-            border-radius: 0 0 0 12px;
-            text-transform: uppercase;
-        }}
-        .ai-quote {{
-            font-size: 18px;
-            line-height: 1.7;
-            color: #334155;
-            font-weight: 500;
-            margin: 0;
-        }}
-        .data-grid {{
-            width: 100%;
-            border-collapse: collapse;
+        .section {{
             margin-bottom: 30px;
         }}
-        .data-label {{
-            font-size: 12px;
-            color: #94a3b8;
-            font-weight: 700;
+        .section-header {{
+            font-size: 18px;
+            font-weight: 800;
+            color: #2d3748;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            padding-bottom: 4px;
         }}
-        .data-value {{
-            font-size: 16px;
-            color: #1e293b;
-            font-weight: 600;
-            padding-bottom: 20px;
-        }}
-        .location-pane {{
-            background-color: #f1f5f9;
-            border-radius: 12px;
-            padding: 20px;
-            margin-top: 10px;
-        }}
-        .map-link {{
-            display: inline-flex;
-            align-items: center;
-            padding: 12px 24px;
-            background-color: #0f172a;
-            color: #ffffff !important;
-            text-decoration: none;
-            border-radius: 10px;
-            font-weight: 600;
+        .description-box {{
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-left: 4px solid #fbbf24;
+            padding: 25px;
+            margin-bottom: 25px;
+            border-radius: 4px;
             font-size: 15px;
-            margin-top: 15px;
-            transition: transform 0.2s;
+            line-height: 1.6;
+            color: #4a5568;
         }}
-        .evidence-container {{
-            margin: 35px 0;
+        .meta-grid {{
+            width: 100%;
+            border-collapse: collapse;
+        }}
+        .meta-item {{
+            padding-bottom: 20px;
+            width: 50%;
+        }}
+        .meta-label {{
+            font-size: 11px;
+            color: #a0aec0;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+            display: block;
+        }}
+        .meta-value {{
+            font-size: 14px;
+            color: #2d3748;
+            font-weight: 600;
+        }}
+        .map-btn {{
+            display: inline-block;
+            background-color: #1a202c;
+            color: white !important;
+            padding: 12px 20px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 700;
+            margin: 10px 0;
         }}
         .evidence-img {{
             width: 100%;
-            border-radius: 16px;
-            border: 1px solid #e2e8f0;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
-            display: block;
+            border-radius: 6px;
+            margin-top: 10px;
         }}
-        .action-card {{
-            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
-            border: 1px solid #fde68a;
-            border-radius: 16px;
-            padding: 30px;
-            text-align: center;
-            margin-bottom: 35px;
-        }}
-        .action-card h3 {{
-            margin: 0 0 10px 0;
-            color: #92400e;
-            font-size: 20px;
-            font-weight: 700;
-        }}
-        .action-card p {{
-            margin: 0;
-            color: #b45309;
-            font-size: 15px;
-            line-height: 1.6;
-        }}
-        .confidence-meter {{
-            height: 10px;
-            background: #e2e8f0;
-            border-radius: 10px;
-            margin-top: 15px;
-            overflow: hidden;
-        }}
-        .confidence-fill {{
-            height: 100%;
-            background: {conf_bar_color};
-            border-radius: 10px;
-        }}
-        .severity-badge {{
-            display: inline-block;
-            padding: 2px 8px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 800;
-            margin-left: 8px;
-            vertical-align: middle;
-        }}
-        .routing-pill-container {{
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 15px;
-        }}
-        .routing-pill {{
-            background: #f1f5f9;
-            color: #475569;
-            padding: 6px 12px;
+        .routing-box {{
+            background-color: #f7fafc;
             border-radius: 8px;
+            padding: 20px;
+        }}
+        .routing-box p {{
+            margin-top: 0;
             font-size: 14px;
-            font-weight: 600;
-            border: 1px solid #e2e8f0;
+            color: #4a5568;
+        }}
+        .routing-list {{
+            margin: 10px 0 0 0;
+            padding-left: 20px;
+            font-size: 14px;
+            font-weight: 700;
+            color: #2d3748;
         }}
         .footer {{
-            background-color: #f8fafc;
-            padding: 40px;
+            padding: 30px;
             text-align: center;
-            border-top: 1px solid #f1f5f9;
+            background-color: #ffffff;
+            border-top: 1px solid #edf2f7;
         }}
         .footer-logo {{
-            height: 24px;
-            opacity: 0.3;
-            margin-bottom: 20px;
+            width: 25px;
+            height: 25px;
+            margin-bottom: 10px;
+            opacity: 0.5;
         }}
-        .footer p {{
-            margin: 5px 0;
+        .footer-text {{
             font-size: 12px;
-            color: #94a3b8;
+            color: #a0aec0;
             line-height: 1.5;
+            margin-bottom: 5px;
         }}
-        .confidential {{
-            margin-top: 20px !important;
-            font-size: 10px !important;
-            text-transform: uppercase;
-            letter-spacing: 1px;
+        .footer-copyright {{
+            font-size: 10px;
+            color: #cbd5e0;
+            margin-top: 15px;
         }}
     </style>
 </head>
@@ -669,102 +605,86 @@ async def send_authority_email(
     <div class="email-wrapper">
         <div class="email-container">
             <div class="header">
-                <div class="header-accent"></div>
-                <img src="cid:momentumai_logo" alt="EAiSER" class="logo-img" onerror="this.style.display='none'">
-                <h1>EAiSER <span>CIVIC</span></h1>
-                <div class="priority-pill">
-                    {display_priority} Priority
-                    <span class="severity-badge">{public_safety_risk} Risk</span>
-                </div>
+                <h1>EAiSER CIVIC</h1>
+                <div class="priority-badge">{display_priority.upper()} PRIORITY</div>
+                <span class="subtitle">Automated Incident Routing System</span>
             </div>
 
             <div class="content-body">
-                <div class="section-title">
-                    <span class="section-number">01</span>
-                    <span class="section-text">Contextual Intelligence</span>
-                </div>
-                
-                <div class="intelligence-box">
-                    <div class="intelligence-tag">AI Analysis</div>
-                    <p class="ai-quote">
-                        {short_description}
-                    </p>
-                    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                            <span style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Confidence Index</span>
-                            <span style="font-size: 14px; font-weight: 800; color: {conf_bar_color};">{int(conf_val)}%</span>
-                        </div>
-                        <div class="confidence-meter">
-                            <div class="confidence-fill" style="width: {conf_val}%"></div>
-                        </div>
+                <!-- Section 1: Overview -->
+                <div class="section">
+                    <div class="section-header">1. Incident Overview</div>
+                    <div class="description-box">
+                        {combined_email_desc}
                     </div>
+
+                    <table class="meta-grid">
+                        <tr>
+                            <td class="meta-item">
+                                <span class="meta-label">Issue Type</span>
+                                <div class="meta-value">{display_issue_type}</div>
+                            </td>
+                            <td class="meta-item">
+                                <span class="meta-label">Reported On</span>
+                                <div class="meta-value">{timestamp_formatted}</div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="meta-item" colspan="2">
+                                <span class="meta-label">Location</span>
+                                <div class="meta-value">{final_address}</div>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <a href="{map_link}" class="map-btn">📍 View Precise Location Map</a>
+
+                    <table class="meta-grid" style="margin-top: 15px;">
+                        <tr>
+                            <td class="meta-item">
+                                <span class="meta-label">GPS Coordinates</span>
+                                <div class="meta-value">{lat_fmt}, {lon_fmt}</div>
+                            </td>
+                            <td class="meta-item">
+                                <span class="meta-label">Report ID</span>
+                                <div class="meta-value">{report_oid}</div>
+                            </td>
+                        </tr>
+                    </table>
                 </div>
 
-                <div class="section-title">
-                    <span class="section-number">02</span>
-                    <span class="section-text">Incident Data</span>
-                </div>
-                
-                <table class="data-grid">
-                    <tr>
-                        <td width="50%">
-                            <div class="data-label">Issue Classification</div>
-                            <div class="data-value">{display_issue_type}</div>
-                        </td>
-                        <td width="50%">
-                            <div class="data-label">Temporal Record</div>
-                            <div class="data-value">{timestamp_formatted}</div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td colspan="2">
-                            <div class="data-label">Geographic Precision</div>
-                            <div class="location-pane">
-                                <div class="data-value" style="padding-bottom: 5px; color: #0f172a;">{final_address}</div>
-                                <div style="font-size: 13px; color: #64748b;">
-                                    <strong>GPS:</strong> {lat_fmt}, {lon_fmt} • <strong>ID:</strong> {report_oid}
-                                </div>
-                                <a href="{map_link}" class="map-link">📍 View on Interactive Map</a>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
-
-                <div class="section-title">
-                    <span class="section-number">03</span>
-                    <span class="section-text">Visual Evidence</span>
-                </div>
-                
-                <div class="evidence-container">
-                    <img src="{img_src}" alt="Incident Photograph" class="evidence-img">
+                <!-- Section 2: Photographic Evidence -->
+                <div class="section">
+                    <div class="section-header">2. Photographic Evidence</div>
+                    <p style="font-size: 13px; color: #718096;">Primary visual evidence from the scene:</p>
+                    <img src="{img_src}" alt="Evidence Photograph" class="evidence-img">
                 </div>
 
-                <div class="action-card">
-                    <h3>💬 Multi-Channel Communication</h3>
-                    <p>
-                        To coordinate with relevant parties or request clarification, simply <strong>reply directly to this email</strong>. 
-                        Your response will be securely routed through the EAiSER engine to the responsible individuals.
-                    </p>
-                </div>
-
-                <div class="section-title">
-                    <span class="section-number">04</span>
-                    <span class="section-text">Unified Routing</span>
-                </div>
-                
-                <p style="font-size: 14px; color: #64748b; margin-top: 10px;">
-                    This incident has been validated and dispatched to the following active jurisdictions:
-                </p>
-                <div class="routing-pill-container">
-                    { "".join([f'<div class="routing-pill">{auth.get("name", "Department")} ({auth.get("type", "General").title()})</div>' for auth in department_list]) }
+                <!-- Section 4: Incident Routing -->
+                <div class="section">
+                    <div class="section-header">4. Incident Routing</div>
+                    <div class="routing-box">
+                        <p>This incident has been securely routed to the following departments for appropriate action:</p>
+                        <ul class="routing-list">
+                            {"".join([f"<li>{auth.get('name', 'Department')} ({auth.get('type', 'General').title()})</li>" for auth in department_list])}
+                        </ul>
+                    </div>
                 </div>
             </div>
 
             <div class="footer">
-                <img src="cid:momentumai_logo" alt="EAiSER - Powered by Momntum AI" class="footer-logo">
-                <p>This report was generated and transmitted via the <strong>EAiSER AI Routing Engine</strong>.</p>
-                <p>Digital signature verified. Automated timestamp synchronized with UTC.</p>
-                <p class="confidential">Confidential: For Authorized Agency Use Only</p>
+                <div style="margin-bottom: 20px;">
+                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#cbd5e0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display: block; margin: 0 auto;">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="2" y1="12" x2="22" y2="12"></line>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                    </svg>
+                </div>
+                <div class="footer-text">This report was transmitted electronically via EAiSER AI.</div>
+                <div class="footer-text">Verification of on-site conditions is recommended before full deployment.</div>
+                <div class="footer-copyright">
+                    © 2025 MomntumAi LLC — Confidentiality Notice: This document may contain privileged information.
+                </div>
             </div>
         </div>
     </div>
@@ -879,10 +799,10 @@ async def create_issue(
              except:
                 final_address = "Unknown Address"
 
-        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        timestamp_str = datetime.now().strftime("%m/%d/%Y %H:%M")
         
         # Construct a "Blank" Report for Manual Entry
-        manual_report = {
+        manual_report: Dict[str, Any] = { # Explicitly type as Dict[str, Any]
             "issue_overview": {
                 "issue_type": issue_type if issue_type != 'other' else "Manual Report",
                 "category": category,
@@ -929,20 +849,30 @@ async def create_issue(
         # Actually 'submit_issue' expects an existing issue in DB.
         # So we MUST save this initial shell to DB.
         
+        # Type-safe field extraction for store_issue
+        _m_rep: dict = manual_report if isinstance(manual_report, dict) else {}
+        issue_t = "Manual Report"
+        sev_t = "medium"
+        
+        _overview = _m_rep.get('issue_overview')
+        if isinstance(_overview, dict):
+            issue_t = str(_overview.get('issue_type', 'Manual Report'))
+            sev_t = str(_overview.get('severity', 'medium'))
+
         # Save to DB (Status: draft/pending)
         await store_issue(
              db,
              fs,
              issue_id,
              b'', # Empty image content
-             manual_report,
+             _m_rep,
              {}, # unified_report
              final_address,
              zip_code,
              latitude,
              longitude,
-             manual_report['issue_overview']['issue_type'],
-             manual_report['issue_overview']['severity'],
+             issue_t,
+             sev_t,
              "General", # category
              "Medium", # priority
              user_email,
@@ -951,6 +881,7 @@ async def create_issue(
         )
         
         return IssueResponse(
+            issue_id=issue_id,
             id=issue_id,
             message="Manual draft created. Please fill in details.",
             report={
@@ -1109,7 +1040,7 @@ async def create_issue(
         # 1. Check for Fake/Simulated Image
         # The AI, in 'generate_report_optimized', sets 'issue_detected'=False and type='None' for fake images
         is_issue_detected = ai_eval.get("issue_detected")
-        detected_type = str(issue_overview.get("type", "")).lower()
+        detected_type = str(issue_overview.get("type", "") or "").lower()
         confidence_val = issue_overview.get("confidence", 0)
         
         # ---------------------------------------------------------------
@@ -1119,7 +1050,7 @@ async def create_issue(
             description=description or "",
             issue_detected=is_issue_detected if is_issue_detected is not None else True,
             issue_type=detected_type,
-            severity=str(issue_overview.get("severity", severity)),
+            severity=str(issue_overview.get("severity", severity) or ""),
             ai_confidence_percent=float(confidence_val) if confidence_val else confidence,
         )
         if fire_override_report["fire_override_applied"]:
@@ -1137,7 +1068,7 @@ async def create_issue(
         conf_ctrl_report = apply_confidence_controls(
             ai_confidence_percent=float(confidence_val) if confidence_val else 0.0,
             issue_type=detected_type or issue_type,
-            severity=str(issue_overview.get("severity", severity)),
+            severity=str(issue_overview.get("severity", severity) or ""),
             description=description or "",
         )
         issue_overview["confidence"] = conf_ctrl_report["ai_confidence_percent"]
@@ -1149,8 +1080,8 @@ async def create_issue(
 
         # Conditions for rejection:
         # A. Explicitly detected as fake (confidence usually forced to ~5)
-        if "fake" in str(ai_eval.get("image_analysis", "")).lower() or \
-           "simulated" in str(ai_eval.get("rationale", "")).lower():
+        if "fake" in str(ai_eval.get("image_analysis", "") or "").lower() or \
+           "simulated" in str(ai_eval.get("rationale", "") or "").lower():
             logger.warning(f"🚫 Rejected fake image analysis for issue {issue_id}")
             raise HTTPException(status_code=400, detail="Analysis failed: This image appears to be AI-generated or manipulated.")
 
@@ -1174,7 +1105,7 @@ async def create_issue(
         no_issue_conditions = (
             is_issue_detected is False
             or confidence_val < 40
-            or str(issue_type).lower() == "unknown"
+            or str(issue_type or "").lower() == "unknown"
         )
         if no_issue_conditions:
             logger.info(f"⚠️ Task 2: No-issue conditions met for {issue_id}. "
@@ -1250,7 +1181,7 @@ async def create_issue(
     
     timezone_name = get_timezone_name(latitude, longitude) or "UTC"
     timestamp = datetime.utcnow().isoformat()
-    timestamp_formatted = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    timestamp_formatted = datetime.utcnow().strftime("%m/%d/%Y %H:%M")
     
     try:
         final_zip_code = zip_code if zip_code else "N/A"
@@ -1295,7 +1226,11 @@ async def create_issue(
             department_type=None,
             is_user_review=False,
         )
-        # Also attach unified report inside the report dict for downstream email rendering
+        # Also a            
+        if not is_issue_detected:
+            responsible_authorities = [{"name": "Mapping Department", "email": "eaiser@momntumai.com", "type": "admin_review"}]
+            report["responsible_authorities_or_parties"] = responsible_authorities
+            report["available_authorities"] = responsible_authorities
         try:
             report["unified_report"] = unified_report
             report["responsible_authorities_or_parties"] = responsible_authorities
@@ -1345,11 +1280,11 @@ async def create_issue(
 
     try:
         overview = report.get("issue_overview", {})
-        desc_text = str(overview.get("summary_explanation", "")).lower()
+        desc_text = str(overview.get("summary_explanation", "") or "").lower()
         labels_list = overview.get("detected_problems", [])
-        labels_text = " ".join([str(x).lower() for x in labels_list])
+        labels_text = " ".join([str(x or "").lower() for x in labels_list])
         combined = f"{desc_text} {labels_text}"
-        severity_val = str(overview.get("severity", severity or "medium")).lower()
+        severity_val = str(overview.get("severity", severity or "medium") or "").lower()
         confidence_val = 0.0
         try:
             confidence_val = float(report.get("template_fields", {}).get("confidence", 0) or 0)
@@ -1373,7 +1308,7 @@ async def create_issue(
         decision = guard.evaluate(
             {
                 "severity": severity_val,
-                "priority": str(priority or "medium").lower(),
+                "priority": str(priority or "medium" or "").lower(),
                 "ai_confidence_percent": confidence_val,
                 "metadata_complete": metadata_ok,
                 "is_duplicate": False,
@@ -1465,6 +1400,7 @@ async def create_issue(
         logger.info(f"📧 Skipping authority email dispatch for issue {issue_id} (manual_review_required)")
     
     return IssueResponse(
+        issue_id=issue_id,
         id=issue_id,
         message="Please review the generated report and select responsible authorities",
         report={
@@ -1478,7 +1414,7 @@ async def create_issue(
             "recommended_actions": recommended_actions,
             "timestamp_formatted": timestamp_formatted,
             "timezone_name": timezone_name,
-            "image_content": base64.b64encode(image_content).decode('utf-8')
+            "image_content": base64.b64encode(image_content).decode('utf-8') if isinstance(image_content, bytes) else ""
         }
     )
 
@@ -1604,8 +1540,7 @@ async def submit_issue(
         conf_val = 0.0
 
     # Determine Issue Type
-    current_issue_type = report.get("issue_type") or issue.get("issue_type", "unknown")
-    current_issue_type = str(current_issue_type).lower().strip()
+    current_issue_type = (report.get("issue_type") or issue.get("issue_type", "unknown") or "").lower()
 
     # Restricted Categories that ALWAYS require review
     restricted_categories = [
@@ -1634,11 +1569,23 @@ async def submit_issue(
             is_restricted = True
 
     # DECISION LOGIC
-    # 1. If restricted category -> Review
-    # 2. If confidence < 70 -> Review
-    # 3. Otherwise -> Auto Send
+    # 1. If AI explicitly said no issue detected -> Review
+    # 2. If restricted category -> Review
+    # 3. If confidence < 70 -> Review
+    # 4. Otherwise -> Auto Send
     
-    if is_restricted:
+    ai_eval = report.get("ai_evaluation", {})
+    issue_detected = ai_eval.get("issue_detected")
+    # If issue_detected is explicitly False (not just missing), force review
+    # Handle cases where it might be a string "false" or "False"
+    is_detected_bool = True
+    if issue_detected is False or str(issue_detected or "").lower() == "false":
+        is_detected_bool = False
+
+    if is_detected_bool is False:
+        logger.info(f"🚨 Issue {issue_id} flagged for review (AI Evaluation: No issue detected)")
+        needs_review = True
+    elif is_restricted:
         logger.info(f"🚨 Issue {issue_id} flagged for review (Restricted Category: '{current_issue_type}')")
         needs_review = True
     elif conf_val < 70:
@@ -1659,7 +1606,6 @@ async def submit_issue(
                 {
                     "$set": {
                         "report": report,
-                        "status": "needs_review",
                         "issue_type": current_issue_type,
                         "recommended_actions": recommended_actions,
                         "authority_email": [auth["email"] for auth in request.selected_authorities],
@@ -1668,12 +1614,13 @@ async def submit_issue(
                 }
             )
             return IssueResponse(
+                issue_id=issue_id,
                 id=issue_id,
                 message="Report submitted for quality review. Our team will verify the details shortly.",
                 report={
                     "issue_id": issue_id,
                     "status": "needs_review",
-                    "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+                    "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%m/%d/%Y %H:%M")),
                     "report": report
                 }
             )
@@ -1741,6 +1688,7 @@ async def submit_issue(
     
     logger.info(f"Issue {issue_id} submitted to authorities: {[auth['email'] for auth in selected_authorities]}. Email success: {email_success}")
     return IssueResponse(
+        issue_id=issue_id,
         id=issue_id,
         message=f"Issue submitted successfully to selected authorities. {'Emails sent successfully' if email_success else 'Email sending failed: ' + '; '.join(email_errors)}",
         report={
@@ -1766,17 +1714,12 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         logger.error(f"Failed to initialize database for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
-    try:
-        issue = await db.issues.find_one({"_id": issue_id})
-        if not issue:
-            logger.error(f"Issue {issue_id} not found in database")
-            raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-        if issue.get("status") and issue.get("status") not in ["pending", "needs_review"]:
-            logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
-            raise HTTPException(status_code=400, detail="Issue already processed")
-    except Exception as e:
-        logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
+    issue = await db.issues.find_one({"_id": issue_id})
+    if not issue:
+        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+    
+    if issue.get("status") and issue.get("status") not in ["pending", "needs_review"]:
+        raise HTTPException(status_code=400, detail="Issue already processed")
     
     required_fields = ["issue_type", "address", "image_id", "report"]
     missing_fields = [field for field in required_fields if field not in issue or issue[field] is None]
@@ -1803,17 +1746,22 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         report["template_fields"]["zip_code"] = issue.get("zip_code", "N/A")
 
     # -------------------------------------------------------------------------
-    # ACCEPT GUARD LOGIC (Combined Safety): 
+    # CONSOLIDATED ACCEPT GUARD LOGIC: 
     # Check for specific categories + Low Confidence -> Admin Review
     # -------------------------------------------------------------------------
     try:
-        conf_val = 0.0
+        _r_safe = report if isinstance(report, dict) else {}
+        _i_safe = issue if isinstance(issue, dict) else {}
         
         # Extract confidence from the REPORT (which might be edited/different than issue root)
+        _fields = _r_safe.get("template_fields")
+        _unified = _r_safe.get("unified_report")
+        _ov = _r_safe.get("issue_overview")
+        
         conf_candidates = [
-            report.get("template_fields", {}).get("confidence"),
-            report.get("unified_report", {}).get("confidence"),
-            report.get("issue_overview", {}).get("confidence"),
+            _fields.get("confidence") if isinstance(_fields, dict) else None,
+            _unified.get("confidence") if isinstance(_unified, dict) else None,
+            _ov.get("confidence") if isinstance(_ov, dict) else None,
         ]
         
         valid_scores = []
@@ -1827,35 +1775,49 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
                 valid_scores.append(v)
             except: continue
         
-        if valid_scores:
-            conf_val = min(valid_scores)
+        conf_val = min(valid_scores) if valid_scores else 0.0
         
         flagged_categories = [
             "bonfire", "controlled_fire", "festival", "ceremony", "burning_leaves", 
             "other", "unknown", "none"
         ]
         
-        current_issue_type = report.get("issue_type", issue.get("issue_type", "unknown")).lower()
-        if not current_issue_type or current_issue_type == "unknown":
-             current_issue_type = report.get("issue_overview", {}).get("issue_type", "unknown").lower()
+        current_issue_type = str(_r_safe.get("issue_type", _i_safe.get("issue_type", "unknown"))).lower()
+        # Also check nested issue type in overview if present, deeper check
+        if not current_issue_type or "unknown" in current_issue_type:
+             if isinstance(_ov, dict):
+                 current_issue_type = str(_ov.get("issue_type", "unknown")).lower()
 
+        # GUARD: Flag for review if confidence is low or category is restricted/flagged
+        # Priority: Check AI evaluation first
+        _ai_eval = _r_safe.get("ai_evaluation")
+        _ai_eval_safe = _ai_eval if isinstance(_ai_eval, dict) else {}
+        
+        issue_detected_raw = _ai_eval_safe.get("issue_detected")
+        is_detected_bool = True
+        if issue_detected_raw is False or str(issue_detected_raw).lower() == "false":
+            is_detected_bool = False
+
+        # Check if sensitive category OR 'fire' is in the type name (broad safety)
         is_flagged_category = current_issue_type in flagged_categories or "fire" in current_issue_type
 
-        # If confidence < 70 OR flagged category -> Admin Review
-        if conf_val < 70 or is_flagged_category:
-             logger.info(f"ACCEPT GUARD: Issue {issue_id} flagged for review (Type={current_issue_type}, Conf={conf_val}%)")
+        # If confidence < 70 OR flagged category OR AI did not detect an issue -> Admin Review
+        if is_detected_bool is False or conf_val < 70 or is_flagged_category:
+             logger.info(f"ACCEPT GUARD: Issue {issue_id} flagged for review (Type={current_issue_type}, Conf={conf_val}%, Detected={is_detected_bool})")
              
-             # Fail-Safe Update
+             # Update status
              await update_issue_status(issue_id, "needs_review")
              
              # Return early success response indicating review
              return IssueResponse(
+                issue_id=issue_id,
                 id=issue_id,
                 message="Report received. It has been flagged for internal quality assurance to verify details.",
                 report={
                     "issue_id": issue_id,
                     "status": "needs_review",
-                    "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+                    "timestamp_formatted": _i_safe.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+                    "report": report
                 }
             )
 
@@ -1863,82 +1825,6 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         raise
     except Exception as e:
         logger.error(f"Error in guard logic during accept: {e}")
-        # FAIL-SAFE: Return review response on error
-        return IssueResponse(
-            id=issue_id,
-            message="Report received. It has been flagged for internal quality assurance due to a system check.",
-            report={
-                "issue_id": issue_id,
-                "status": "needs_review",
-                "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
-            }
-        )
-    # -------------------------------------------------------------------------
-
-    # -------------------------------------------------------------------------
-    # FINAL GUARD LOGIC (Repeated for Safety): 
-    # Check for specific categories + Low Confidence -> Admin Review
-    # We must re-evaluate this here because user might have edited data or bypassed initial check.
-    # -------------------------------------------------------------------------
-    try:
-        conf_val = 0.0
-        
-        # Extract confidence from the REPORT (which might be edited/different than issue root)
-        conf_candidates = [
-            report.get("template_fields", {}).get("confidence"),
-            report.get("unified_report", {}).get("confidence"),
-            report.get("issue_overview", {}).get("confidence"),
-        ]
-        
-        valid_scores = []
-        for c in conf_candidates:
-            if c is None: continue
-            try:
-                s = str(c).strip().replace('%', '')
-                v = float(s)
-                if v <= 1.0: v = v * 100.0
-                v = max(0.0, min(100.0, v))
-                valid_scores.append(v)
-            except: continue
-        
-        if valid_scores:
-            conf_val = min(valid_scores)
-        
-        flagged_categories = [
-            "bonfire", "controlled_fire", "festival", "ceremony", "burning_leaves", 
-            "other", "unknown", "none"
-        ]
-        
-        current_issue_type = report.get("issue_type", issue.get("issue_type", "unknown")).lower()
-        # Also check nested issue type in overview if present, deeper check
-        if not current_issue_type or current_issue_type == "unknown":
-             current_issue_type = report.get("issue_overview", {}).get("issue_type", "unknown").lower()
-
-        # Check if sensitive category OR 'fire' is in the type name (broad safety)
-        is_flagged_category = current_issue_type in flagged_categories or "fire" in current_issue_type
-
-        # If confidence < 70 OR flagged category -> Admin Review
-        if conf_val < 70 or is_flagged_category:
-             logger.info(f"FINAL SUBMIT GUARD: Issue {issue_id} flagged for review (Type={current_issue_type}, Conf={conf_val}%)")
-             
-             # Update status
-             await update_issue_status(issue_id, "needs_review")
-             
-             # Return early success response indicating review
-             return IssueResponse(
-                id=issue_id,
-                message="Report submitted for quality review. Our team will verify the details shortly.",
-                report={
-                    "issue_id": issue_id,
-                    "status": "needs_review",
-                    "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
-                }
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in guard logic during final submit: {e}")
         # FAIL-SAFE: If guard crashes but we suspected it might need review, 
         # or just to be safe, we should probably NOT send the email.
         # But if we can't determine, maybe it's safer to stop.
@@ -1951,7 +1837,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         # if it crashed early.
         # Let's return the review response to be safe (Fail Closed).
         return IssueResponse(
-            id=issue_id,
+            issue_id=issue_id,
             message="Report received. It has been flagged for internal quality assurance due to a system check.",
             report={
                 "issue_id": issue_id,
@@ -1961,9 +1847,17 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         )
     # -------------------------------------------------------------------------
     
-    recommended_actions = report.get("recommended_actions", [])
-    if "recommended_actions" not in report:
-        report["recommended_actions"] = recommended_actions
+    # Process recommended actions defensively
+    if isinstance(report, dict):
+        _raw_ra = report.get("recommended_actions")
+        if isinstance(_raw_ra, list):
+            recommended_actions = _raw_ra
+        else:
+            report["recommended_actions"] = []
+            recommended_actions = []
+    else:
+        # If report is somehow NOT a dict, ensure we don't crash
+        recommended_actions = []
     
     try:
         # Get image content from GridFS
@@ -1979,7 +1873,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
     
     try:
         # Use selected authorities if provided, otherwise use recommended authorities
-        if request.selected_authorities and len(request.selected_authorities) > 0:
+        if request.selected_authorities:
             authorities = request.selected_authorities
             logger.info(f"Using selected authorities for issue {issue_id}: {[auth.get('name', 'Unknown') for auth in authorities]}")
         else:
@@ -2002,18 +1896,19 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
     except Exception as e:
         logger.warning(f"Failed to fetch authorities for issue {issue_id}: {str(e)}. Using default authority.", exc_info=True)
         authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
-    
     email_success = False
     email_errors = []
+    _r_safe = report or {}
+    _auth_safe = authorities or []
     try:
         email_success = await send_authority_email(
             issue_id=issue_id,
-            authorities=authorities,
+            authorities=_auth_safe,
             issue_type=issue.get("issue_type", "Unknown Issue"),
             final_address=issue.get("address", "Unknown Address"),
             zip_code=issue.get("zip_code", "N/A"),
             timestamp_formatted=issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
-            report=report,
+            report=_r_safe,
             confidence=issue.get("report", {}).get("issue_overview", {}).get("confidence", 0.0),
             category=issue.get("category", "Public"),
             timezone_name=issue.get("timezone_name", "UTC"),
@@ -2023,7 +1918,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             is_user_review=False
         )
         if not email_success:
-            email_errors = [f"Email sending failed for {auth['email']}" for auth in authorities]
+            email_errors = [f"Email sending failed for {auth['email']}" for auth in _auth_safe]
             logger.warning(f"Email sending failed for issue {issue_id}: {email_errors}")
     except Exception as e:
         logger.error(f"Failed to send authority emails for issue {issue_id}: {str(e)}", exc_info=True)
@@ -2037,8 +1932,8 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             {
                 "$set": {
                     "report": report,
-                    "authority_email": [auth["email"] for auth in authorities],
-                    "authority_name": [auth["name"] for auth in authorities],
+                    "authority_email": [auth["email"] for auth in _auth_safe],
+                    "authority_name": [auth["name"] for auth in _auth_safe],
                     "email_status": "sent" if email_success else "failed",
                     "email_errors": email_errors,
                     "status": "accepted",
@@ -2055,13 +1950,14 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
     
     logger.info(f"Issue {issue_id} accepted and reported to authorities: {[auth['email'] for auth in authorities]}. Email success: {email_success}")
     return IssueResponse(
+        issue_id=issue_id,
         id=issue_id,
         message=f"Thank you for using eaiser! Issue accepted and {'emails sent successfully' if email_success else 'email sending failed: ' + '; '.join(email_errors)}",
         report={
             "issue_id": issue_id,
             "report": report,
-            "authority_email": [auth["email"] for auth in authorities],
-            "authority_name": [auth["name"] for auth in authorities],
+            "authority_email": [auth.get('email') for auth in _auth_safe],
+            "authority_name": [auth.get('name') for auth in _auth_safe],
             "recommended_actions": recommended_actions,
             "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
             "zip_code": issue.get("zip_code", "N/A"),
@@ -2216,6 +2112,7 @@ async def decline_issue(issue_id: str, request: DeclineRequest):
     
     logger.info(f"Issue {issue_id} declined with reason: {request.decline_reason}. Updated report sent to user for review. Email success: {email_success}")
     return IssueResponse(
+        issue_id=issue_id,
         id=issue_id,
         message=f"Issue declined with reason: {request.decline_reason}. Updated report sent for review. {'Emails sent successfully' if email_success else 'Email sending failed: ' + '; '.join(email_errors)}",
         report={
@@ -2427,8 +2324,8 @@ async def send_authority_emails(request: EmailAuthoritiesRequest):
         """
         
         # Send emails to all selected authorities
-        successful_sends = 0
-        failed_sends = 0
+        successful_sends: int = 0
+        failed_sends: int = 0
         send_results = []
         
         logger.info(f"🔥 DEBUG: Starting email loop for {len(request.authorities)} authorities")
@@ -2470,7 +2367,10 @@ async def send_authority_emails(request: EmailAuthoritiesRequest):
                 
                 logger.info(f"🔥 DEBUG: Email sent successfully to {authority_name}")
                 
-                successful_sends += 1
+                if isinstance(successful_sends, int):
+                    successful_sends += 1
+                else:
+                    successful_sends = 1
                 send_results.append({
                     'authority': authority_name,
                     'email': authority_email,

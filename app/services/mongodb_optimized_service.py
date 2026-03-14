@@ -173,6 +173,7 @@ class OptimizedMongoDBService:
                     waitQueueTimeoutMS=10000,
                     retryWrites=True,
                     compressors=['zlib'],
+                    tlsAllowInvalidCertificates=True
                 )
                 
                 # Secondary client for reads (prefer secondary)
@@ -187,6 +188,7 @@ class OptimizedMongoDBService:
                     waitQueueTimeoutMS=10000,
                     compressors=['zlib'],
                     read_preference=ReadPreference.SECONDARY_PREFERRED,
+                    tlsAllowInvalidCertificates=True
                 )
                 
                 # Test connections

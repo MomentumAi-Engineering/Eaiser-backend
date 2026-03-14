@@ -45,87 +45,99 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import local modules with proper error handling
+# --- MIDDLEWARE & ROUTER IMPORTS ---
+# We use 'app.x' as the primary import path for IDE/Linter compatibility.
+# The project root in the IDE is 'EAiSER Ai - V2', and 'Eaiser-backend' is a subfolder.
+# Note: If running locally from the 'app' directory, uvicorn might need PYTHONPATH='.'.
+
 try:
+    from app.utils.timing_middleware import TimingMiddleware
+except ImportError:
     from utils.timing_middleware import TimingMiddleware
+
+# Router imports
+try:
+    from app.routes.issues_optimized_v2 import router as issues_router
 except ImportError:
     try:
-        from app.utils.timing_middleware import TimingMiddleware
+        from routes.issues_optimized_v2 import router as issues_router
     except ImportError:
-        import time
-        
-        class TimingMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request: Request, call_next):
-                start_time = time.time()
-                response = await call_next(request)
-                process_time = time.time() - start_time
-                response.headers["X-Process-Time"] = str(process_time)
-                return response
+        try:
+            from app.routes.issues import router as issues_router
+        except ImportError:
+            from routes.issues import router as issues_router
 
 try:
-    from routes.issues_optimized_v2 import router as issues_router
-    logger.info("🚀 using optimized issues router v2")
+    from app.api.reports import router as reports_router
 except ImportError:
     try:
-        from app.routes.issues_optimized_v2 import router as issues_router
-        logger.info("🚀 using optimized issues router v2")
-    except ImportError as e:
-        logger.warning(f"⚠️ optimized router v2 not found, falling back to legacy: {e}")
-        from app.routes.issues import router as issues_router
+        from api.reports import router as reports_router
+    except ImportError:
+        reports_router = None
+
 
 try:
-    from api.reports import router as reports_router
-except ImportError:
-    from app.api.reports import router as reports_router
-
-try:
-    from api.ai import router as ai_router
-    from api.ai import analyze_image as analyze_image_fn, analyze_image_alias as analyze_image_alias_fn
-except ImportError:
     from app.api.ai import router as ai_router
     from app.api.ai import analyze_image as analyze_image_fn, analyze_image_alias as analyze_image_alias_fn
+except ImportError:
+    try:
+        from api.ai import router as ai_router
+        from api.ai import analyze_image as analyze_image_fn, analyze_image_alias as analyze_image_alias_fn
+    except ImportError:
+        ai_router = None
+        analyze_image_fn = None
+        analyze_image_alias_fn = None
 
 try:
-    from routes.admin_review import router as admin_review_router
-except ImportError:
     from app.routes.admin_review import router as admin_review_router
+except ImportError:
+    try:
+        from routes.admin_review import router as admin_review_router
+    except ImportError:
+        admin_review_router = None
 
 try:
-    from routes.admin_assignment import router as admin_assignment_router
-except ImportError:
     from app.routes.admin_assignment import router as admin_assignment_router
+except ImportError:
+    try:
+        from routes.admin_assignment import router as admin_assignment_router
+    except ImportError:
+        admin_assignment_router = None
 
 try:
-    from routes.admin_settings import router as admin_settings_router
-except ImportError:
     from app.routes.admin_settings import router as admin_settings_router
+except ImportError:
+    try:
+        from routes.admin_settings import router as admin_settings_router
+    except ImportError:
+        admin_settings_router = None
 
+# Service imports
 try:
     from services.mongodb_service import init_db, close_db
 except ImportError:
-    from app.services.mongodb_service import init_db, close_db
+    try:
+        from app.services.mongodb_service import init_db, close_db
+    except ImportError:
+        init_db = close_db = None
 
 try:
     from services.redis_service import init_redis, close_redis
 except ImportError:
-    from app.services.redis_service import init_redis, close_redis
+    try:
+        from app.services.redis_service import init_redis, close_redis
+    except ImportError:
+        init_redis = close_redis = None
 
 try:
     from services.mongodb_optimized_service import init_optimized_mongodb, close_optimized_mongodb
 except ImportError:
-    from app.services.mongodb_optimized_service import init_optimized_mongodb, close_optimized_mongodb
+    try:
+        from app.services.mongodb_optimized_service import init_optimized_mongodb, close_optimized_mongodb
+    except ImportError:
+        init_optimized_mongodb = close_optimized_mongodb = None
 
-# Setup optimized logging with structured format
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger(__name__)
-
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-logging.getLogger("pymongo").setLevel(logging.WARNING)
-logging.getLogger("performance").setLevel(logging.INFO)
+logger.info("🚀 Eaiser AI logging configuration initialized")
 
 
 
@@ -443,43 +455,75 @@ async def get_report_page(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to generate report page: {str(e)}")
 
 # Include API routes
-app.include_router(issues_router, prefix="/api")
-app.include_router(reports_router, prefix="/api/reports")
-app.include_router(ai_router, prefix="/api")
-app.include_router(admin_review_router, prefix="/api")  # Mounted at /api/admin/review
-app.include_router(admin_assignment_router, prefix="/api") # Mounted at /api/admin/assignment
-app.include_router(admin_settings_router, prefix="/api") # Mounted at /api/admin/settings
+if issues_router:
+    app.include_router(issues_router, prefix="/api")
+if reports_router:
+    app.include_router(reports_router, prefix="/api/reports")
+if ai_router:
+    app.include_router(ai_router, prefix="/api")
+if admin_review_router:
+    app.include_router(admin_review_router, prefix="/api")  # Mounted at /api/admin/review
+if admin_assignment_router:
+    app.include_router(admin_assignment_router, prefix="/api") # Mounted at /api/admin/assignment
+if admin_settings_router:
+    app.include_router(admin_settings_router, prefix="/api") # Mounted at /api/admin/settings
 
-# Import and include Auth Router
+# Include Auth Router
 try:
-    from routes.auth import router as auth_router
+    import app.routes.auth as auth_mod
+    auth_router = auth_mod.router
 except ImportError:
-    from app.routes.auth import router as auth_router
+    try:
+        import routes.auth as auth_mod
+        auth_router = auth_mod.router
+    except ImportError:
+        auth_router = None
 
-app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+if auth_router:
+    app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 
 # Include Admin User Management
 try:
-    from routes.admin_users import router as admin_users_router
+    import app.routes.admin_users as admin_users_mod
+    admin_users_router = admin_users_mod.router
 except ImportError:
-    from app.routes.admin_users import router as admin_users_router
+    try:
+        import routes.admin_users as admin_users_mod
+        admin_users_router = admin_users_mod.router
+    except ImportError:
+        admin_users_router = None
 
-app.include_router(admin_users_router, prefix="/api") # Mounted at /api/admin/users
+if admin_users_router:
+    app.include_router(admin_users_router, prefix="/api") # Mounted at /api/admin/users
 
-# Authority Action Router removed in favor of Email Routing
-from routes.email_webhook import router as email_webhook_router
-app.include_router(email_webhook_router, prefix="/api/email", tags=["Email Webhooks"])
+# Include Email Webhooks
+try:
+    import app.routes.email_webhook as webhook_mod
+    email_webhook_router = webhook_mod.router
+except ImportError:
+    try:
+        import routes.email_webhook as webhook_mod
+        email_webhook_router = webhook_mod.router
+    except ImportError:
+        email_webhook_router = None
+
+if email_webhook_router:
+    app.include_router(email_webhook_router, prefix="/api/email", tags=["Email Webhooks"])
 
 # Explicit wrappers to ensure endpoints exist even if router mounting varies
 from fastapi import UploadFile, File
 
 @app.post("/api/ai/analyze-image")
 async def analyze_image_endpoint(image: UploadFile = File(...)):
-    return await analyze_image_fn(image=image)
+    if analyze_image_fn:
+        return await analyze_image_fn(image=image)
+    raise HTTPException(status_code=503, detail="AI Service unavailable")
 
 @app.post("/api/analyze-image")
 async def analyze_image_alias_endpoint(image: UploadFile = File(...)):
-    return await analyze_image_alias_fn(image=image)
+    if analyze_image_alias_fn:
+        return await analyze_image_alias_fn(image=image)
+    raise HTTPException(status_code=503, detail="AI Service unavailable")
 
 @app.get("/api/debug/routes")
 async def debug_routes():
@@ -500,50 +544,70 @@ async def debug_routes():
 async def startup_event():
     logger.info("🚀 Starting Eaiser AI backend server...")
     try:
-        await init_db()
+        if init_db:
+            await init_db()
     except Exception as e:
         logger.error(f"💥 Standard MongoDB Service initialization failed: {str(e)}")
 
     try:
-        await init_redis()
-        logger.info("✅ Redis caching initialized")
+        if init_redis:
+            await init_redis()
+            logger.info("✅ Redis caching initialized")
     except Exception as e:
         logger.warning(f"⚠️ Redis initialization failed: {str(e)}")
     
     # Initialize Optimized MongoDB Service
     try:
-        await init_optimized_mongodb()
-        logger.info("✅ Optimized MongoDB Service initialized")
+        if init_optimized_mongodb:
+            await init_optimized_mongodb()
+            logger.info("✅ Optimized MongoDB Service initialized")
     except Exception as e:
         logger.error(f"❌ Optimized MongoDB Service initialization failed: {str(e)}")
 
     # Initialize Admin Login Monitoring indexes
     try:
-        from services.admin_login_monitor import AdminLoginMonitor
-        await AdminLoginMonitor.create_indexes()
-        logger.info("✅ Admin login monitoring initialized")
+        try:
+            from services.admin_login_monitor import AdminLoginMonitor
+        except ImportError:
+            try:
+                from app.services.admin_login_monitor import AdminLoginMonitor
+            except ImportError:
+                AdminLoginMonitor = None
+                
+        if AdminLoginMonitor:
+            await AdminLoginMonitor.create_indexes()
+            logger.info("✅ Admin login monitoring initialized")
+        else:
+            logger.warning("⚠️ Admin login monitor service not found")
     except Exception as e:
         logger.warning(f"⚠️ Admin login monitor index creation failed: {str(e)}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("🔄 Shutting down Eaiser AI backend...")
-    await close_db()
-    await close_redis()
-    await close_optimized_mongodb()
+    if close_db:
+        await close_db()
+    if close_redis:
+        await close_redis()
+    if close_optimized_mongodb:
+        await close_optimized_mongodb()
     logger.info("✅ Shutdown completed successfully")
 
 # Import authority service loader
 try:
     from services.authority_service import load_mappings
 except ImportError:
-    from app.services.authority_service import load_mappings
+    try:
+        from app.services.authority_service import load_mappings
+    except ImportError:
+        load_mappings = None
 
 @app.on_event("startup")
 async def load_authority_mappings():
     """Load authority mappings into memory."""
     try:
-        load_mappings()
+        if load_mappings:
+            load_mappings()
     except Exception as e:
         logger.error(f"❌ Failed to load authority mappings: {e}")
 

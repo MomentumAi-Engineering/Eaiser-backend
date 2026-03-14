@@ -401,7 +401,7 @@ async def store_issue(
             "timestamp": datetime.now().isoformat(),
             "authority_email": authority_email,
             "authority_name": authority_name,
-            "timestamp_formatted": report.get("template_fields", {}).get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M")),
+            "timestamp_formatted": report.get("template_fields", {}).get("timestamp", datetime.now().strftime("%m/%d/%Y %H:%M")),
             "timezone_name": report.get("template_fields", {}).get("timezone_name", "UTC"),
             "user_email": user_email,
             "available_authorities": available_authorities,
@@ -589,7 +589,7 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
             issue.setdefault("decline_reason", None)
             issue.setdefault("decline_history", [])
             issue.setdefault("available_authorities", [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}])
-            issue.setdefault("timestamp_formatted", datetime.now().strftime("%Y-%m-%d %H:%M"))
+            issue.setdefault("timestamp_formatted", datetime.now().strftime("%m/%d/%Y %H:%M"))
             issue.setdefault("timezone_name", "UTC")
             
             # Optimized authority field processing
@@ -695,7 +695,7 @@ async def get_user_issues(user_email: str, limit: int = 50, skip: int = 0) -> Li
             issue.setdefault("category", "Public")
             issue.setdefault("priority", "Medium")
             issue.setdefault("status", "pending")
-            issue.setdefault("timestamp_formatted", datetime.now().strftime("%Y-%m-%d %H:%M"))
+            issue.setdefault("timestamp_formatted", datetime.now().strftime("%m/%d/%Y %H:%M"))
 
         return issues
 
@@ -756,7 +756,7 @@ async def get_report(issue_id: str) -> Dict[str, Any]:
             authority_name = [str(authority_name)] if authority_name else ["City Department"]
         issue["authority_name"] = authority_name
         
-        issue["timestamp_formatted"] = issue.get("timestamp_formatted", datetime.now().strftime("%Y-%m-%d %H:%M"))
+        issue["timestamp_formatted"] = issue.get("timestamp_formatted", datetime.now().strftime("%m/%d/%Y %H:%M"))
         issue["timezone_name"] = issue.get("timezone_name", "UTC")
         
         # Validate image_id
@@ -777,9 +777,9 @@ async def update_issue_status(issue_id: str, status: str) -> bool:
     """
     try:
         db = await get_db()
-        valid_statuses = ["pending", "accepted", "rejected", "completed", "needs_review"]
+        valid_statuses = ["pending", "accepted", "rejected", "completed", "needs_review", "submitted"]
         if status not in valid_statuses:
-            raise ValueError(f"Invalid status. Must be one of {valid_statuses}")
+            raise ValueError(f"Invalid status '{status}'. Must be one of {valid_statuses}")
         
         result = await db.issues.update_one(
             {"_id": issue_id},

@@ -26,7 +26,7 @@ import string
 import json
 import re
 import hashlib
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, cast
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -34,7 +34,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, Request, UploadFile, File, Form, status
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, ConfigDict
 
 # Services - Using optimized versions
 from services.mongodb_optimized_service import get_optimized_mongodb_service
@@ -152,11 +152,14 @@ performance_metrics = PerformanceMetrics()
 # PYDANTIC MODELS
 # ========================================
 class IssueResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
     issue_id: str
-    id: str  # Backward compatibility for frontend
+    id: str = Field(..., description="Backward compatibility for frontend")
     status: str
     message: str
     report: Optional[Dict] = None
+    unified_report: Optional[Dict] = None
     authority_data: Optional[Dict] = None
     processing_time_ms: Optional[float] = None
     confidence: Optional[float] = 0.0
@@ -225,10 +228,19 @@ class Issue(BaseModel):
     messages: List[Dict] = []
     chat_active: bool = False
     
-    class Config:
-        validate_assignment = True
-        arbitrary_types_allowed = True
-        allow_population_by_field_name = True
+    # Missing fields from DB/doc
+    unified_report: Optional[Dict] = None
+    authority_data: Optional[Dict] = None
+    confidence: Optional[float] = 0.0
+    policy_conflict: Optional[bool] = False
+    image_hash: Optional[str] = None
+    
+    model_config = ConfigDict(
+        validate_assignment=True,
+        arbitrary_types_allowed=True,
+        populate_by_name=True,
+        extra="ignore"
+    )
 
 # ========================================
 # CACHING UTILITIES
@@ -681,7 +693,7 @@ async def process_issue_background(
                 timezone_name = get_timezone_name(latitude, longitude) or "UTC"
             except Exception:
                 timezone_name = "UTC"
-            timestamp_formatted = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            timestamp_formatted = datetime.utcnow().strftime("%m/%d/%Y %H:%M")
 
             # Build unified report JSON for consistent UI/Email rendering
             try:
@@ -874,7 +886,7 @@ async def create_issue_optimized(
             report={
                 "issue_id": issue_id,
                 "status": issue_doc.get("status", "pending"),
-                "timestamp_formatted": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+                "timestamp_formatted": datetime.utcnow().strftime("%m/%d/%Y %H:%M"),
                 "report": issue_doc.get("report"),
                 "confidence": issue_doc.get("confidence", 0.0),
                 "image_content": base64.b64encode(image_content).decode('utf-8') if image_content else None,
@@ -1279,6 +1291,7 @@ async def update_issue_status_optimized(
         
         return IssueResponse(
             issue_id=issue_id,
+            id=issue_id,
             status=status_update.status,
             message=f"Issue status updated to {status_update.status}",
             processing_time_ms=processing_time
@@ -1400,11 +1413,11 @@ async def submit_issue_optimized(
             }]
             
         # 4. Prepare report (merge edits)
-        report = issue.get("report") or {}
+        report = cast(Dict[str, Any], dict(issue.get("report") or {}))
         if request.edited_report:
             # Deep merge simple logic
             for key, value in request.edited_report.items():
-                if key in report and isinstance(report[key], dict) and isinstance(value, dict):
+                if isinstance(report, dict) and key in report and isinstance(report[key], dict) and isinstance(value, dict):
                     report[key].update(value)
                 else:
                     report[key] = value
@@ -1548,7 +1561,7 @@ async def submit_issue_optimized(
                 report={
                     "issue_id": issue_id,
                     "status": "needs_review",
-                    "timestamp_formatted": issue.get("timestamp_formatted") or datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+                    "timestamp_formatted": issue.get("timestamp_formatted") or datetime.utcnow().strftime("%m/%d/%Y %H:%M"),
                     "report": report
                 },
                 processing_time_ms=processing_time,
@@ -1582,7 +1595,7 @@ async def submit_issue_optimized(
                     issue_type=issue_type,
                     final_address=issue.get("address", "N/A"),
                     zip_code=issue.get("zip_code", "N/A"),
-                    timestamp_formatted=issue.get("timestamp_formatted") or datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+                    timestamp_formatted=issue.get("timestamp_formatted") or datetime.utcnow().strftime("%m/%d/%Y %H:%M"),
                     report=report,
                     confidence=conf_val,
                     category=issue.get("category", "public"),
@@ -1694,6 +1707,7 @@ async def decline_issue_optimized(
             message="Report updated based on your feedback.",
             report={
                 "issue_id": issue_id,
+                "id": issue_id,
                 "status": "pending",
                 "report": report
             }

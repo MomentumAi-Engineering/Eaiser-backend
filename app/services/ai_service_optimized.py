@@ -3,7 +3,7 @@ import json
 import re
 import io
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple, List, Callable
 import pytz
 from PIL import Image
 import google.generativeai as genai
@@ -286,7 +286,9 @@ async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: i
         }
         
         # Cache the fallback report for future use
-        cache_key = f"fallback_report_{hash(str(image_content[:100]))}"
+        import hashlib
+        img_hash = hashlib.md5(image_content[:100]).hexdigest()
+        cache_key = f"fallback_report_{img_hash}"
         await set_cached_data(cache_key, fallback_report, CACHE_TTL['ai_report'])
         logger.info(f"Generated and cached fallback report due to timeout after {timeout}s")
         return json.dumps(fallback_report, indent=2)
@@ -317,7 +319,7 @@ async def generate_report_optimized(
         logger.warning(f"⛔ Image rejected by PRE-CHECK heuristic: {fake_analysis}")
         
         # Build immediate rejection report
-        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        timestamp_str = datetime.now().strftime("%m/%d/%Y %H:%M")
         return {
             "issue_overview": {
                 "type": "None",
@@ -368,7 +370,7 @@ async def generate_report_optimized(
     timezone_str = await get_timezone_cached(latitude, longitude)
     timezone = pytz.timezone(timezone_str or "UTC")
     now = datetime.now(timezone)
-    local_time = now.strftime("%Y-%m-%d %H:%M")
+    local_time = now.strftime("%m/%d/%Y %H:%M")
     utc_time = now.astimezone(pytz.UTC).strftime("%H:%M")
     report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
     report_id = f"eaiser-{now.year}-{report_number}"
@@ -475,8 +477,8 @@ async def generate_report_optimized(
 
     # Authority data with caching (fetch in parallel later)
     authority_data = None
-    responsible_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
-    available_authorities = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
+    responsible_authorities = [{"name": "Mapping Department", "email": "eaiser@momntumai.com", "type": "admin_review"}]
+    available_authorities = [{"name": "Mapping Department", "email": "eaiser@momntumai.com", "type": "admin_review"}]
     
     # 1. Fetch live authorities for this zip/issue-type EARLY
     # This ensures they are available for both the AI prompt and the fallback logic.
@@ -651,47 +653,53 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
         report["available_authorities"] = available_authorities
 
         # Ensure UI-friendly aliases for primary path and enforce minimum 6-line summary_explanation
-        overview = report.get("issue_overview") or {}
-        if overview:
-            overview["type"] = overview.get("type") or overview.get("issue_type") or (issue_type.title() if issue_type else "Issue")
-            ai_eval = report.get("ai_evaluation") or {}
-            detected_type = (ai_eval.get("detected_issue_type") or "").strip()
-            if detected_type and detected_type.lower() != "none":
-                overview["type"] = detected_type
-            expl = (overview.get("summary_explanation") or "").strip()
-            lines = [l for l in expl.split("\n") if l.strip()]
+        _overview = report.get("issue_overview")
+        if isinstance(_overview, dict):
+            _overview["type"] = str(_overview.get("type") or _overview.get("issue_type") or (issue_type.title() if issue_type else "Issue"))
+            _ai_eval = report.get("ai_evaluation")
+            if isinstance(_ai_eval, dict):
+                _det_type = str(_ai_eval.get("detected_issue_type") or "").strip()
+                if _det_type and _det_type.lower() != "none":
+                    _overview["type"] = _det_type
+                
+                _ai_conf = _ai_eval.get("ai_confidence_percent")
+                try:
+                    _ai_conf_val = int(round(float(_ai_conf))) if _ai_conf is not None else None
+                except Exception:
+                    _ai_conf_val = None
+            else:
+                _ai_conf_val = None
+                
+            _expl = str(_overview.get("summary_explanation") or "").strip()
+            lines = [l for l in _expl.split("\n") if l.strip()]
             ai_conf = ai_eval.get("ai_confidence_percent")
-            try:
-                ai_conf_val = int(round(float(ai_conf))) if ai_conf is not None else None
-            except Exception:
-                ai_conf_val = None
-            # Enforce minimal summary processing - Do NOT inject repetitive metadata
-            issue_overview = report.get("issue_overview", {})
-            # Ensure summary is present
-            if not issue_overview.get("summary_explanation"):
-                issue_overview["summary_explanation"] = f"Identified {issue_type} based on visual analysis."
             
-            report["issue_overview"] = overview
+            # Enforce minimal summary processing - Do NOT inject repetitive metadata
+            # Ensure summary is present
+            if not _overview.get("summary_explanation"):
+                _overview["summary_explanation"] = f"Identified {issue_type} based on visual analysis."
+            
+            report["issue_overview"] = _overview
+            
             # Normalize ai_evaluation fields with sensible defaults
-            if ai_eval:
-                ai_eval["issue_detected"] = bool(ai_eval.get("issue_detected")) if ai_eval.get("issue_detected") is not None else (overview.get("type") not in (None, "", "None"))
-                if ai_conf_val is None:
-                    try:
-                        ai_eval["ai_confidence_percent"] = int(round(float(overview.get("confidence", confidence))))
-                    except Exception:
-                        ai_eval["ai_confidence_percent"] = int(round(confidence))
+            _ai_eval_final = report.get("ai_evaluation")
+            if isinstance(_ai_eval_final, dict):
+                _ai_eval_final["issue_detected"] = bool(_ai_eval_final.get("issue_detected")) if _ai_eval_final.get("issue_detected") is not None else (_overview.get("type") not in (None, "", "None"))
+                if _ai_conf_val is None:
+                     _ai_eval_final["ai_confidence_percent"] = int(round(confidence))
                 else:
-                    ai_eval["ai_confidence_percent"] = ai_conf_val
-                if not detected_type:
-                    ai_eval["detected_issue_type"] = overview.get("type")
-                if not ai_eval.get("image_analysis"):
-                    ai_eval["image_analysis"] = "No explicit image analysis provided."
-                ai_eval["rationale"] = ai_eval.get("rationale") or "Rationale not provided."
-                report["ai_evaluation"] = ai_eval
-        detailed = report.get("detailed_analysis") or {}
-        if detailed and "potential_consequences_if_ignored" in detailed:
-            detailed["potential_impact"] = detailed["potential_consequences_if_ignored"]
-            report["detailed_analysis"] = detailed
+                     _ai_eval_final["ai_confidence_percent"] = _ai_conf_val
+                if not _ai_eval_final.get("detected_issue_type"): # Use _ai_eval_final here
+                    _ai_eval_final["detected_issue_type"] = _overview.get("type")
+                if not _ai_eval_final.get("image_analysis"):
+                    _ai_eval_final["image_analysis"] = "No explicit image analysis provided."
+                _ai_eval_final["rationale"] = _ai_eval_final.get("rationale") or "Rationale not provided."
+                report["ai_evaluation"] = _ai_eval_final
+        detailed = report.get("detailed_analysis")
+        if isinstance(report, dict) and isinstance(detailed, dict):
+            if "potential_consequences_if_ignored" in detailed:
+                detailed["potential_impact"] = detailed["potential_consequences_if_ignored"]
+                report["detailed_analysis"] = detailed
 
         # Post-adjust confidence for benign/minor scenes to reduce false positives
         try:
@@ -747,7 +755,6 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                 has_animal = False
                 has_generic_animal = False
                 has_specific_animal = False
-
             issue_detected = bool(ai_eval.get("issue_detected"))
             
             # Special check for Fire + People -> likely controlled
@@ -773,6 +780,13 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                 ia = ai_eval.get("image_analysis") or ""
                 if "no public issue" not in ia.lower():
                     ai_eval["image_analysis"] = "Detected controlled fire/bonfire/festival; classified as non-emergency."
+            
+            # 🛡️ SAFETY OVERRIDE: If no issue detected, MUST route to Mapping Department
+            if not issue_detected:
+                responsible_authorities = [{"name": "Mapping Department", "email": "eaiser@momntumai.com", "type": "admin_review"}]
+                if isinstance(report, dict):
+                    report["responsible_authorities_or_parties"] = responsible_authorities
+                logger.info(f"🛡️ Safety Bypass: Issue not detected, routing to Mapping Department for ID {issue_id}")
             elif is_minor and not has_danger:
                 new_conf = max(75, int(conf_val if conf_val is not None else (ai_eval.get("ai_confidence_percent") or 70)))
             elif (has_accident or is_serious_collision) and not any(w in combined for w in ["fire","flame","burning"]):
@@ -930,18 +944,23 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             elif lower_desc.startswith("a "): entry_issue_desc = entry_issue_desc[2:]
             
             exact_summary = f"Possible {entry_issue_desc} has been reported at {location_str}; priority {priority}, confidence {new_conf}."
+            
+            # 🟢 Preserve original detailed summary for frontend/detailed report sections
+            overview["detailed_description"] = orig_desc
+            
             overview["summary_explanation"] = exact_summary
             overview["summary"] = exact_summary
             
-            report["issue_overview"] = overview
-            report["ai_evaluation"] = ai_eval
+            if isinstance(report, dict):
+                report["issue_overview"] = overview
+                report["ai_evaluation"] = ai_eval
         except Exception as e:
             logger.error(f"Post-adjust error: {e}")
             pass
 
         # RE-FETCH AUTHORITIES IF ISSUE TYPE CHANGED
         # This fixes the issue where authority assignment is wrong because it used the initial (potentially wrong) classification.
-        final_issue_type = (report.get("issue_overview", {}).get("type") or issue_type).lower().replace(" ", "_")
+        final_issue_type = (report.get("issue_overview", {}).get("type") or issue_type or "unknown").lower().replace(" ", "_")
         initial_issue_type = issue_type.lower().replace(" ", "_")
         
         if final_issue_type != initial_issue_type and final_issue_type in allowed_types:
@@ -957,15 +976,16 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
                 available_authorities = new_authority_data.get("available_authorities", available_authorities)
                 
                 # Update Report JSON
-                report["responsible_authorities_or_parties"] = responsible_authorities
-                report["available_authorities"] = available_authorities
+                if isinstance(report, dict):
+                    report["responsible_authorities_or_parties"] = responsible_authorities
+                    report["available_authorities"] = available_authorities
                 
                 # Also try to update department in template fields if possible, though it's less critical
             except Exception as e:
                 logger.warning(f"Failed to re-fetch authorities for new type {final_issue_type}: {e}")
 
         # Build concise summary per strict template (City, State, ZIP)
-        def _extract_city_state(addr: str) -> (str, str):
+        def _extract_city_state(addr: str) -> Tuple[str, str]:
             """Try to split 'City, State' from address; fallback to Unknowns."""
             if not addr:
                 return "Unknown City", "Unknown State"
@@ -990,7 +1010,8 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
         summary_text = overview.get("summary_explanation", "")
 
         # Attach concise summary to report for downstream consumers
-        report["summary"] = summary_text
+        if isinstance(report, dict):
+            report["summary"] = str(summary_text)
 
         # Cache the generated report
         await set_cached_data(report_cache_key, report, CACHE_TTL['ai_report'])
@@ -1043,30 +1064,28 @@ ________________________________________
 Automated report generated via EAiSER AI by MomntumAI
 © 2025 MomntumAI | All Rights Reserved
 """
-        # Add formatted alert into report dictionary
-        report["formatted_report"] = formatted_alert
-
-        # Ticket 3: Authority Recommendation Logic Adjustment
-        # If no issue detected OR confidence is low (<50%), CLEAR authorities
-        ai_eval = report.get("ai_evaluation", {})
-        # Ensure we check the boolean correctly
-        issue_detected_flag = ai_eval.get("issue_detected")
-        if isinstance(issue_detected_flag, str):
-             issue_detected_flag = issue_detected_flag.lower() == 'true'
-        
-        confidence_val = ai_eval.get("ai_confidence_percent", 0)
-
-        if not issue_detected_flag or confidence_val < 50:
-             report["responsible_authorities_or_parties"] = []
-             # report["available_authorities"] = [] # Optional: keep available for manual reassignment if needed
+        if isinstance(report, dict):
+             report["formatted_report"] = formatted_alert
              
-             # Enrich recommended actions to be helpful to the USER instead of the AUTHORITY
-             report["recommended_actions"] = [
-                 "Review the report details manually.",
-                 "If you believe this is an error, please re-submit with a clearer image.",
-                 "Monitor the situation."
-             ]
-             logger.info(f"Report {issue_id}: Cleared authorities due to Low Confidence/No Issue (Conf: {confidence_val}%, Detected: {issue_detected_flag})")
+             # Ticket 3: Authority Recommendation Logic Adjustment
+             # If no issue detected OR confidence is low (<50%), CLEAR authorities
+             ai_eval_2 = report.get("ai_evaluation", {})
+             if isinstance(ai_eval_2, dict):
+                 # Ensure we check the boolean correctly
+                 issue_detected_flag = ai_eval_2.get("issue_detected")
+                 if isinstance(issue_detected_flag, str):
+                      issue_detected_flag = issue_detected_flag.lower() == 'true'
+                 
+                 confidence_val = ai_eval_2.get("ai_confidence_percent", 0)
+
+                 if not issue_detected_flag or confidence_val < 50:
+                      report["responsible_authorities_or_parties"] = []
+                      report["recommended_actions"] = [
+                          "Review the report details manually.",
+                          "If you believe this is an error, please re-submit with a clearer image.",
+                          "Monitor the situation."
+                      ]
+                      logger.info(f"Report {issue_id}: Cleared authorities due to low confidence")
 
         return report
     except Exception as e:
@@ -1124,60 +1143,76 @@ Automated report generated via EAiSER AI by MomntumAI
         elif _issue_desc_fallback.lower().startswith("a "):
             _issue_desc_fallback = _issue_desc_fallback[2:]
 
+        # Build the fallback report structure with explicit types to
+        # Final report assembly
+        fallback_report: Dict[str, Any] = {}
+        
+        # Build the fallback report structure with explicit types to satisfy linter
+        overview_data: Dict[str, Any] = {
+            "type": _detected_type,
+            "category": str(category).title(),
+            "severity": severity,
+            "summary_explanation": f"Possible {_issue_desc_fallback} has been reported at {location_str}; priority {priority}, confidence {_ai_confidence_percent}.",
+            "detailed_description": _issue_desc_fallback,
+            "confidence": _ai_confidence_percent
+        }
+        
+        evaluation_data: Dict[str, Any] = {
+            "image_analysis": _image_analysis,
+            "issue_detected": bool(_issue_detected),
+            "detected_issue_type": _detected_type,
+            "ai_confidence_percent": _ai_confidence_percent,
+            "rationale": "Derived from supplied fields; image clarity unverifiable in fallback."
+        }
+
+        analysis_data: Dict[str, Any] = {
+            "root_causes": "Possible causes of the issue.",
+            "potential_consequences_if_ignored": "Risks if the issue is not addressed.",
+            "public_safety_risk": "medium",
+            "environmental_impact": "none",
+            "structural_implications": "low",
+            "legal_or_regulatory_considerations": "Refer to local regulations.",
+            "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else None
+        }
+
+        template_data: Dict[str, Any] = {
+            "oid": report_id,
+            "timestamp": local_time,
+            "utc_time": utc_time,
+            "priority": priority,
+            "tracking_link": f"https://momentum-ai.org/track/{report_id}",
+            "image_filename": image_filename,
+            "ai_tag": str(issue_type).title(),
+            "app_version": "1.5.3",
+            "device_type": "Mobile (Generic)",
+            "map_link": map_link,
+            "zip_code": zip_code if zip_code else "N/A",
+            "address": display_address,
+            "confidence": _ai_confidence_percent
+        }
+
+        if decline_reason:
+            overview_data["summary_explanation"] = str(overview_data["summary_explanation"]) + f" Declined due to: {decline_reason}."
+
         fallback_report = {
-            "issue_overview": {
-                "type": _detected_type,
-                "category": category.title(),
-                "severity": severity,
-                "summary_explanation": f"Possible {_issue_desc_fallback} has been reported at {location_str}; priority {priority}, confidence {_ai_confidence_percent}.",
-                "confidence": _ai_confidence_percent
-            },
-            "ai_evaluation": {
-                "image_analysis": _image_analysis,
-                "issue_detected": _issue_detected,
-                "detected_issue_type": _detected_type,
-                "ai_confidence_percent": _ai_confidence_percent,
-                "rationale": "Derived from supplied fields; image clarity unverifiable in fallback."
-            },
-            "detailed_analysis": {
-                "root_causes": "Possible causes of the issue.",
-                "potential_consequences_if_ignored": "Risks if the issue is not addressed.",
-                "public_safety_risk": "medium",
-                "environmental_impact": "none",
-                "structural_implications": "low",
-                "legal_or_regulatory_considerations": "Refer to local regulations.",
-                "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else None
-            },
+            "issue_overview": overview_data,
+            "ai_evaluation": evaluation_data,
+            "detailed_analysis": analysis_data,
             "recommended_actions": [],
             "responsible_authorities_or_parties": responsible_authorities,
             "available_authorities": available_authorities,
-            "additional_notes": f"{_detected_type if _issue_detected else 'Issue'} identified at {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Track report: https://eaiser.ai/track/{report_id}.",
-            "template_fields": {
-                "oid": report_id,
-                "timestamp": local_time,
-                "utc_time": utc_time,
-                "priority": priority,
-                "tracking_link": f"https://momentum-ai.org/track/{report_id}",
-                "image_filename": image_filename,
-                "ai_tag": issue_type.title(),
-                "app_version": "1.5.3",
-                "device_type": "Mobile (Generic)",
-                "map_link": map_link,
-                "zip_code": zip_code if zip_code else "N/A",
-                "address": display_address,
-                "confidence": _ai_confidence_percent
-            }
+            "additional_notes": f"{_detected_type if _issue_detected else 'Issue'} identified at {location_str}. Issue ID: {issue_id}.",
+            "template_fields": template_data
         }
-        if decline_reason:
-            fallback_report["issue_overview"]["summary_explanation"] += f" Declined due to: {decline_reason}."
-        # UI-friendly aliases and mapping
+
+        # UI-friendly aliases
         try:
-            expl = (fallback_report.get("issue_overview", {}).get("summary_explanation") or "").strip()
-            fallback_report["issue_overview"]["summary"] = (expl.split("\n")[0].strip() if "\n" in expl else expl) or f"{issue_type.title()} reported at {display_address}."
-            da = fallback_report.get("detailed_analysis", {})
-            if "potential_consequences_if_ignored" in da:
-                da["potential_impact"] = da["potential_consequences_if_ignored"]
-                fallback_report["detailed_analysis"] = da
+            summary_text = str(overview_data.get("summary_explanation") or "").strip()
+            overview_data["summary"] = (summary_text.split("\n")[0].strip() if "\n" in summary_text else summary_text) or f"{str(issue_type).title()} reported."
+            
+            p_consequences = analysis_data.get("potential_consequences_if_ignored")
+            if p_consequences:
+                analysis_data["potential_impact"] = p_consequences
         except Exception:
             pass
 
@@ -1195,7 +1230,13 @@ Automated report generated via EAiSER AI by MomntumAI
             if (priority or "").lower() in ("urgent", "high"):
                 risk_tags_fb.append("High Priority")
             # Deduplicate and cap to 6 tags
-            risk_tags_fb = list(dict.fromkeys(risk_tags_fb))[:6]
+            unique_tags: list[str] = []
+            for tag in risk_tags_fb:
+                if tag not in unique_tags:
+                    unique_tags.append(tag)
+                    if len(unique_tags) == 6:
+                        break
+            risk_tags_fb = unique_tags
 
             # Compose a short visual description from user description if available
             short_desc_fb = (description or f"{issue_type.title() if issue_type else 'Issue'} observed.").strip()

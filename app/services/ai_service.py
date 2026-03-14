@@ -507,7 +507,7 @@ async def generate_report(
             timezone_str = await asyncio.to_thread(get_timezone_name, latitude, longitude) or "UTC"
             timezone = pytz.timezone(timezone_str)
             now = datetime.now(timezone)
-            local_time = now.strftime("%Y-%m-%d %H:%M")
+            local_time = now.strftime("%m/%d/%Y %H:%M")
             utc_time = now.astimezone(pytz.UTC).strftime("%H:%M")
             report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
             report_id = f"eaiser-{now.year}-{report_number}"
@@ -818,6 +818,10 @@ Keep the report under 200 words, professional, and specific to the issue type an
     elif lower_desc.startswith("a "): entry_issue_desc = entry_issue_desc[2:]
         
     exact_summary = f"Possible {entry_issue_desc} has been reported at {location_str}; priority {priority}, confidence {confidence}."
+    
+    # 🟢 Preserve original detailed summary for frontend/detailed report sections
+    issue_overview["detailed_description"] = orig_desc
+    
     issue_overview["summary_explanation"] = exact_summary
     issue_overview["summary"] = exact_summary
     report["issue_overview"] = issue_overview

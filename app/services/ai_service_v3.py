@@ -198,7 +198,7 @@ class AIServiceV3:
             },
             "template_fields": {
                 "oid": meta_overrides.get("report_id") if meta_overrides else "N/A",
-                "timestamp": meta_overrides.get("local_time") if meta_overrides else datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "timestamp": meta_overrides.get("local_time") if meta_overrides else datetime.now().strftime("%m/%d/%Y %H:%M"),
                 "confidence": conf_val,
                 "ai_tag": primary_issue,
                 "address": meta_overrides.get("address") if meta_overrides else "Unknown",
@@ -245,7 +245,7 @@ class AIServiceV3:
         now = datetime.now()
         meta_overrides = {
             "report_id": f"v3-{now.year}-{int(now.timestamp()) % 1000000:06d}",
-            "local_time": now.strftime("%Y-%m-%d %H:%M"),
+            "local_time": now.strftime("%m/%d/%Y %H:%M"),
             "address": address or "Unknown",
             "image_filename": f"V3_IMG_{now.strftime('%Y%m%d_%H%M')}.jpg"
         }
