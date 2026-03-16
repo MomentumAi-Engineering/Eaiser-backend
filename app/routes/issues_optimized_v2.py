@@ -165,6 +165,7 @@ class IssueResponse(BaseModel):
     confidence: Optional[float] = 0.0
     issue_type: Optional[str] = None
     severity: Optional[str] = None
+    severity: Optional[str] = None
     image_url: Optional[str] = None
     cached: Optional[bool] = False
     is_guest: bool = False
@@ -174,7 +175,6 @@ class IssueResponse(BaseModel):
     zip_code: Optional[str] = None
     latitude: Optional[float] = 0.0
     longitude: Optional[float] = 0.0
-    image_content: Optional[str] = None
 
 class IssueStatusUpdate(BaseModel):
     status: str
@@ -889,7 +889,6 @@ async def create_issue_optimized(
                 "timestamp_formatted": datetime.utcnow().strftime("%m/%d/%Y %H:%M"),
                 "report": issue_doc.get("report"),
                 "confidence": issue_doc.get("confidence", 0.0),
-                "image_content": base64.b64encode(image_content).decode('utf-8') if image_content else None,
                 "address": issue_doc.get("address"),
                 "zip_code": issue_doc.get("zip_code")
             },
@@ -904,8 +903,7 @@ async def create_issue_optimized(
             address=issue_doc.get("address"),
             zip_code=issue_doc.get("zip_code"),
             latitude=issue_doc.get("latitude"),
-            longitude=issue_doc.get("longitude"),
-            image_content=base64.b64encode(image_content).decode('utf-8') if image_content else None
+            longitude=issue_doc.get("longitude")
         )
         
 
