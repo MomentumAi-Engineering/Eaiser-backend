@@ -510,6 +510,20 @@ except ImportError:
 if email_webhook_router:
     app.include_router(email_webhook_router, prefix="/api/email", tags=["Email Webhooks"])
 
+# Include Inquiry Router
+try:
+    import app.routes.inquiry as inquiry_mod
+    inquiry_router = inquiry_mod.router
+except ImportError:
+    try:
+        import routes.inquiry as inquiry_mod
+        inquiry_router = inquiry_mod.router
+    except ImportError:
+        inquiry_router = None
+
+if inquiry_router:
+    app.include_router(inquiry_router, prefix="/api/inbound", tags=["Inquiries"])
+
 # Explicit wrappers to ensure endpoints exist even if router mounting varies
 from fastapi import UploadFile, File
 

@@ -33,7 +33,7 @@ async def send_email(
     Sends an email via Postmark API with inline images and attachments.
     Uses asyncio.to_thread to keep the event loop non-blocking.
     """
-    email_user = os.getenv("EMAIL_USER", "alert@momntumai.com")
+    email_user = os.getenv("EMAIL_USER", "eaiser@momntumai.com")
     postmark_token = os.getenv("POSTMARK_API_TOKEN")
     dry_run = os.getenv("EMAIL_DRY_RUN", "false").lower() == "true"
 

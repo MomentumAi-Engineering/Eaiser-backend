@@ -1058,7 +1058,7 @@ ________________________________________
 📬 CONTACT & FOLLOW-UP
 Please review and address this issue as soon as feasible.
 For questions or to confirm completion, contact:
-📧 support@momntumai.com
+📧 eaiser@momntumai.com
 🔗 View Report on Map: {map_link}
 ________________________________________
 Automated report generated via EAiSER AI by MomntumAI
@@ -1304,7 +1304,7 @@ ________________________________________
 📬 CONTACT & FOLLOW-UP
 Please review and address this issue as soon as feasible.
 For questions or to confirm completion, contact:
-📧 support@momntumai.com
+📧 eaiser@momntumai.com
 🔗 View Report on Map: {map_link}
 ________________________________________
 Automated report generated via EAiSER AI by MomntumAI
