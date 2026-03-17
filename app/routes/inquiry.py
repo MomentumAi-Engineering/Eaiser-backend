@@ -38,7 +38,7 @@ async def create_city_inquiry(inquiry: CityInquiry, background_tasks: Background
         logger.info(f"📩 New city inquiry saved from {inquiry.email} regarding {inquiry.city}")
 
         # 2. Prepare Email for Admin
-        admin_email = os.getenv("ADMIN_NOTIFICATION_EMAIL", "eaiser@momntumai.com")
+        admin_email = os.getenv("CITY_INQUIRY_EMAIL", "eaiser@momntumai.com")
         subject = f"🏙️ New City Partnership Request: {inquiry.city}"
         
         html_content = f"""

@@ -717,7 +717,7 @@ async def send_authority_email(
             logger.debug(f"Sending email to [redacted] for {authority.get('type', 'general')} with subject: {subject}")
             inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "adb1d888168b5611b7b7a489f1c8ab76@inbound.postmarkapp.com")
             success = await send_email(
-                to_email=authority.get("email", "eaiser@momntumai.com"),
+                to_email=authority.get("email", "alert@momntumai.com"),
                 subject=subject_override or subject,
                 html_content=html_content,
                 text_content=text_content,

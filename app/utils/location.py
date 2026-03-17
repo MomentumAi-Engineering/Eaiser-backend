@@ -141,15 +141,15 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
     Strictly adheres to issue_department_map.json for responsible authorities.
     """
     try:
-        # Clean and validate zip code format (5 digits)
+            # Clean and validate zip code format (5 digits)
         if zip_code:
             zip_code = str(zip_code).strip().split('-')[0][:5]
             
         if not zip_code or not zip_code.isdigit() or len(zip_code) != 5:
             logger.warning(f"Invalid or missing zip code: {zip_code}. Falling back to general.")
             return {
-                "responsible_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}],
-                "available_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
+                "responsible_authorities": [{"name": "City Department", "email": "alert@momntumai.com", "type": "general"}],
+                "available_authorities": [{"name": "City Department", "email": "alert@momntumai.com", "type": "general"}]
             }
 
         # Normalize issue type

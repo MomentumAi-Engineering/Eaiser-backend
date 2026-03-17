@@ -518,8 +518,8 @@ async def process_issue_background(
             except Exception as e:
                 logger.warning(f"Failed to fetch authorities: {e}")
                 authority_data = {
-                    "responsible_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}],
-                    "available_authorities": [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
+                    "responsible_authorities": [{"name": "City Department", "email": "alert@momntumai.com", "type": "general"}],
+                    "available_authorities": [{"name": "City Department", "email": "alert@momntumai.com", "type": "general"}]
                 }
 
         # === UPDATE LOCAL VARIABLES FROM FINAL REPORT ===
