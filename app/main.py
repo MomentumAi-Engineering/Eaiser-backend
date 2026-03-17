@@ -107,10 +107,15 @@ except ImportError:
 try:
     from app.routes.admin_settings import router as admin_settings_router
 except ImportError:
+    from routes.admin_settings import router as admin_settings_router
+
+try:
+    from app.routes.analytics import router as analytics_router
+except ImportError:
     try:
-        from routes.admin_settings import router as admin_settings_router
+        from routes.analytics import router as analytics_router
     except ImportError:
-        admin_settings_router = None
+        analytics_router = None
 
 # Service imports
 try:
@@ -523,6 +528,9 @@ except ImportError:
 
 if inquiry_router:
     app.include_router(inquiry_router, prefix="/api/inbound", tags=["Inquiries"])
+
+if analytics_router:
+    app.include_router(analytics_router)
 
 # Explicit wrappers to ensure endpoints exist even if router mounting varies
 from fastapi import UploadFile, File
