@@ -357,12 +357,13 @@ async def generate_report_optimized(
             }
         }
 
-    # Generate cache key for similar reports
+    # Generate cache key for reports (now including image content for exact image caching)
     report_cache_key = generate_cache_key(
         "ai_report",
         issue_type=issue_type,
         severity=severity,
         category=category,
+        image_content=image_content,
         description_hash=hashlib.md5(description.encode()).hexdigest()[:8]
     )
 
