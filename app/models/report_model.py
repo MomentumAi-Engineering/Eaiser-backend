@@ -28,7 +28,7 @@ class ReportModel(BaseModel):
     )
     imageUrl: str
     originalName: Optional[str] = None
-    status: str = "pending"  # pending, flagged, declined, waiting_review, submitted, approved
+    status: str = "reported"  # reported, assigned, in_progress, resolved, declined, flagged
     location: Location
     checkResult: Optional[Dict[str, Any]] = None
     flagFlowDetails: Optional[FlagFlowDetails] = None

@@ -188,7 +188,7 @@ async def get_authority_dashboard(token: str):
         cursor = db.issues.find({
             "zip_code": zip_code,
             "category": category,
-            "status": {"$ne": "draft"}
+            "status": {"$in": ["reported", "assigned", "in_progress", "working", "resolved", "pending", "submitted"]}
         }).sort("timestamp", -1).limit(20)
         
         issues = []
@@ -215,8 +215,10 @@ async def user_update_status_feedback(issue_id: str, feedback: UserFeedback, use
     db = await get_db()
     
     status_map = {
-        'resolved': 'resolved_by_user',
-        'persistent': 'reported_persistent'
+        'resolved': 'resolved',
+        'persistent': 'reported_persistent',
+        'assigned': 'assigned',
+        'in_progress': 'in_progress'
     }
     
     new_status = status_map.get(feedback.status, feedback.status)

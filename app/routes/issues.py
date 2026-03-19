@@ -78,7 +78,7 @@ class IssueResponse(BaseModel):
 
     issue_id: str
     id: str = Field(..., description="Backward compatibility for frontend")
-    status: Optional[str] = "pending"
+    status: Optional[str] = "reported"
     message: str
     report: Optional[Dict] = None
     unified_report: Optional[Dict] = None
@@ -125,7 +125,7 @@ class Issue(BaseModel):
     issue_type: str = "other"
     severity: str = "Medium"
     image_id: Optional[str] = None
-    status: str = "pending"
+    status: str = "reported"
     report: Dict = {"message": "No report generated"}
     category: str = "public"
     priority: str = "Medium"

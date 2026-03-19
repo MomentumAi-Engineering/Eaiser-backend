@@ -864,8 +864,9 @@ async def get_warroom_data(
             "stats": {
                 "total_on_map": total_on_map,
                 "high_severity": high_severity,
-                "pending": len([i for i in issues if i.get("status") in ["pending", "needs_review", "pending_review"]]),
-                "resolved": len([i for i in issues if i.get("status") in ["approved", "submitted", "resolved"]])
+                "reported": len([i for i in issues if i.get("status") in ["reported", "pending", "pending_review", "submitted"]]),
+                "needs_review": len([i for i in issues if i.get("status") == "needs_review"]),
+                "resolved": len([i for i in issues if i.get("status") in ["approved", "resolved"]])
             }
         }
         
@@ -901,11 +902,11 @@ async def get_pending_reviews(
         
         match_query = {
             "status": {
-                "$in": ["pending", "needs_review", "pending_review", "screened_out", "dispatch_decision"]
+                "$in": ["reported", "pending", "needs_review", "pending_review", "screened_out", "dispatch_decision"]
             }
         }
         # Filter exclusions
-        match_query["status"]["$nin"] = ["approved", "submitted", "declined", "rejected", "completed", "resolved"]
+        match_query["status"]["$nin"] = ["assigned", "in_progress", "working", "approved", "submitted", "declined", "rejected", "completed", "resolved"]
         
         # TEAM MEMBER FILTER: Only see assigned issues
         if admin.get("role") == "team_member":
@@ -958,9 +959,9 @@ async def get_pending_reviews(
             issue["confidence"] = issue.get("effective_confidence", 0)
             
             # Force status for UI consistency
-            if issue.get("status") == "pending":
-                 issue["status_original"] = "pending"
-                 issue["status"] = "needs_review"
+            if issue.get("status") in ["pending", "submitted"]:
+                 issue["status_original"] = issue.get("status")
+                 issue["status"] = "reported"
 
             if issue.get("reporter_email"):
                 reporter_emails.add(issue["reporter_email"])
@@ -1100,8 +1101,7 @@ async def get_resolved_reviews(
         query = {
             "$and": [
                 {"status": {"$in": valid_statuses}},
-                {"status": {"$ne": "needs_review"}}, 
-                {"status": {"$ne": "pending"}},
+                {"status": {"$nin": ["needs_review", "reported", "pending"]}},
                 {"$or": or_conditions}
             ]
         }
@@ -1122,7 +1122,7 @@ async def get_resolved_reviews(
             # Double check status
             if status not in valid_statuses:
                 continue
-            if status in ["needs_review", "pending"]:
+            if status in ["needs_review", "pending", "reported"]:
                 continue
             filtered_issues.append(issue)
             
@@ -1225,7 +1225,7 @@ async def approve_issue(action: ReviewAction, admin: dict = Depends(require_perm
             filter_dict={"_id": action.issue_id},
             update_dict={
                 "$set": {
-                    "status": "submitted",  # Mark as submitted/completed
+                    "status": "reported",  # Mark as reported (ready for authority)
                     "admin_review": {
                         "action": "approve",
                         "admin_id": action.admin_id,

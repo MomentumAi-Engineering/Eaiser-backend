@@ -124,6 +124,7 @@ class OptimizedMongoDBService:
                 IndexModel([('category', ASCENDING), ('priority', ASCENDING)], name='category_priority'),
                 IndexModel([('admin_review.timestamp', DESCENDING)], name='admin_review_timestamp'),
                 IndexModel([('address', TEXT), ('issue_type', TEXT)], name='address_issue_type_text'),
+                IndexModel([('is_submitted', ASCENDING)], name='is_submitted'),
             ],
             'users': [
                 IndexModel([('email', ASCENDING)], unique=True),
@@ -793,7 +794,23 @@ class OptimizedMongoDBService:
         try:
             from services.cloudinary_service import upload_file_to_cloudinary
             import asyncio
+            import io
             
+            # Store image in GridFS as a backup and for intermediate serving
+            if image_content and self.fs:
+                try:
+                    # motor-asyncio upload_from_stream works with streams
+                    # However, open_upload_stream is often easier for bytes buffer
+                    grid_id = await self.fs.upload_from_stream(
+                        f"issue_{issue_doc['_id']}",
+                        image_content,
+                        metadata={"issue_id": issue_doc['_id']}
+                    )
+                    issue_doc['image_id'] = str(grid_id)
+                    logger.info(f"✅ Image stored in GridFS for {issue_doc['_id']}")
+                except Exception as fs_e:
+                    logger.warning(f"⚠️ Failed to store image to GridFS: {fs_e}")
+
             # Store image in Cloudinary as a BACKGROUND task to avoid blocking the main API response
             if image_content:
                 async def _background_cloudinary_storage():
@@ -902,7 +919,7 @@ class OptimizedMongoDBService:
                             "total_issues": {"$sum": 1},
                             "open_issues": {
                                 "$sum": {
-                                    "$cond": [{"$in": ["$status", ["pending", "needs_review", "submitted", "under_review"]]}, 1, 0]
+                                    "$cond": [{"$in": ["$status", ["reported", "assigned", "in_progress", "pending", "needs_review", "submitted", "under_review"]]}, 1, 0]
                                 }
                             },
                             "resolved_issues": {

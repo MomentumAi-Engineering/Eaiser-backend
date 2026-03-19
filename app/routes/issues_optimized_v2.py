@@ -214,7 +214,7 @@ class Issue(BaseModel):
     issue_type: str = "other"
     severity: str = "Medium"
     image_id: Optional[str] = None
-    status: str = "pending"
+    status: str = "reported"
     is_submitted: bool = False
     report: Dict = {"message": "No report generated"}
     category: str = "public"
@@ -631,9 +631,9 @@ async def process_issue_background(
             guard = AuthorityDispatchGuard()
             decision = guard.evaluate(guard_payload)
             
-            # Determine initial status: Always start as 'draft' until user officially clicks 'Submit'
-            # Hindish: Pehle report 'draft' status me rahegi jab tak user 'Submit' nahi kar deta.
-            final_status = "draft"
+            # Determine initial status: Always start as 'reported' until user officially clicks 'Submit'
+            # Hindish: Pehle report 'reported' status me rahegi jab tak user 'Submit' nahi kar deta.
+            final_status = "reported"
             
             # Record what the guard would HAVE DONE if it were an auto-dispatch flow
             # This allows downstream logic to know the AI's original preference.
@@ -654,7 +654,7 @@ async def process_issue_background(
         except Exception as e:
             logger.warning(f"Dispatch guard evaluation failed for issue {issue_id}: {e}")
             decision = None
-            final_status = "draft"
+            final_status = "reported"
 
         # Determine if it's already considered "submitted"
         # 🛡️ FIX: No report is submitted initially anymore, must wait for user approval.
@@ -881,11 +881,11 @@ async def create_issue_optimized(
         return IssueResponse(
             issue_id=issue_id,
             id=issue_id, # Compatibility
-            status=issue_doc.get("status", "pending"),
+            status=issue_doc.get("status", "reported"),
             message="Issue processed successfully" if not is_guest_user else "Guest report generated! Login to view full details and submit.",
             report={
                 "issue_id": issue_id,
-                "status": issue_doc.get("status", "pending"),
+                "status": issue_doc.get("status", "reported"),
                 "timestamp_formatted": datetime.utcnow().strftime("%m/%d/%Y %H:%M"),
                 "report": issue_doc.get("report"),
                 "confidence": issue_doc.get("confidence", 0.0),
@@ -956,7 +956,7 @@ async def get_my_issues(
             "user_email": {"$in": emails_to_check},
             "$or": [
                 {"is_submitted": True},
-                {"is_submitted": {"$exists": False}, "status": {"$ne": "pending"}}
+                {"status": {"$in": ["reported", "assigned", "in_progress", "working", "resolved", "needs_review", "submitted", "pending", "pending_review"]}}
             ]
         }
         issues_data = await mongodb_service.get_issues_optimized(
@@ -1393,8 +1393,8 @@ async def submit_issue_optimized(
             raise HTTPException(status_code=404, detail="Issue not found")
             
         # 2. Check current status
-        current_status = issue.get("status", "pending")
-        if current_status not in ["pending", "needs_review", "screened_out", "draft"]:
+        current_status = issue.get("status", "reported")
+        if current_status not in ["reported", "pending", "needs_review", "screened_out", "draft"]:
              # If it's already submitted, we might allow re-submit if needed, but usually block
              logger.warning(f"Issue {issue_id} has status '{current_status}'. Proceeding anyway for user convenience.")
         
@@ -1681,6 +1681,11 @@ async def decline_issue_optimized(
         issue = await mongodb_service.get_issue_by_id(issue_id)
         if not issue:
              raise HTTPException(status_code=404, detail="Issue not found")
+        
+        # Invalidate cache for this user
+        user_email = issue.get("user_email")
+        if user_email:
+            await invalidate_user_issues_cache(user_email)
 
         # Update report with edits
         report = issue.get("report") or {}
@@ -1695,18 +1700,18 @@ async def decline_issue_optimized(
         await mongodb_service.update_issue_status(issue_id, {
             "report": report,
             "decline_reason": request.decline_reason,
-            "status": "pending" # Keep as pending for re-review
+            "status": "reported" # Retain as reported for correction
         })
         
         return IssueResponse(
             issue_id=issue_id,
             id=issue_id,
-            status="pending",
+            status="reported",
             message="Report updated based on your feedback.",
             report={
                 "issue_id": issue_id,
                 "id": issue_id,
-                "status": "pending",
+                "status": "reported",
                 "report": report
             }
         )
