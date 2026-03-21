@@ -117,6 +117,7 @@ class ResetPasswordRequest(BaseModel):
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
     user: Dict[str, Any]
 
@@ -125,8 +126,17 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+def create_refresh_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -256,17 +266,17 @@ async def login(user_data: UserLogin):
         #     raise HTTPException(status_code=403, detail="Please verify your email first.")
 
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": user["email"], "role": user.get("role", "user"), "id": str(user["_id"])},
-            expires_delta=access_token_expires
+        refresh_token = create_refresh_token(
+            data={"sub": user["email"], "id": str(user["_id"])}
         )
-        
+
         # Generate a display-friendly short ID
         raw_id = str(user["_id"])
         short_id = raw_id[-7:].upper()
 
         return {
             "access_token": access_token, 
+            "refresh_token": refresh_token,
             "token_type": "bearer",
             "user": {
                 "id": short_id,
@@ -316,6 +326,51 @@ async def verify_email(request: VerifyEmailRequest):
     except Exception as e:
         logger.error(f"Verification error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.post("/refresh", response_model=Token)
+async def refresh_token_endpoint(refresh_token: str = Body(..., embed=True)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None or payload.get("type") != "refresh":
+            raise credentials_exception
+            
+        db = await get_db()
+        user = await db["users"].find_one({"email": email})
+        if not user:
+            raise credentials_exception
+            
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user["email"], "role": user.get("role", "user"), "id": str(user["_id"])},
+            expires_delta=access_token_expires
+        )
+        
+        new_refresh_token = create_refresh_token(
+            data={"sub": user["email"], "id": str(user["_id"])}
+        )
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "bearer",
+            "user": {
+                "id": str(user["_id"])[-7:].upper(),
+                "first_name": user.get("first_name", ""),
+                "last_name": user.get("last_name", ""),
+                "username": user.get("username", ""),
+                "email": user.get("email"),
+                "role": user.get("role", "user"),
+                "email_verified": user.get("email_verified", False)
+            }
+        }
+    except JWTError:
+        raise credentials_exception
 
 @router.post("/resend-verification")
 async def resend_verification(current_user: dict = Depends(get_current_user)):
@@ -447,12 +502,17 @@ async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTask
             expires_delta=access_token_expires
         )
         
+        refresh_token = create_refresh_token(
+            data={"sub": email, "id": user_id}
+        )
+        
         # Generate a display-friendly short ID
         raw_id = str(user["_id"])
         short_id = raw_id[-7:].upper()
 
         return {
             "access_token": access_token, 
+            "refresh_token": refresh_token,
             "token_type": "bearer",
             "user": {
                 "id": short_id,
@@ -580,8 +640,13 @@ async def apple_login(login_data: AppleLogin, background_tasks: BackgroundTasks)
             expires_delta=access_token_expires
         )
 
+        refresh_token = create_refresh_token(
+            data={"sub": user["email"], "id": user_id}
+        )
+
         return {
             "access_token": access_token,
+            "refresh_token": refresh_token,
             "token_type": "bearer",
             "user": {
                 "id": user_id,

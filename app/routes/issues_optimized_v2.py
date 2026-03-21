@@ -795,6 +795,7 @@ async def process_issue_background(
 # OPTIMIZED ENDPOINTS
 # ========================================
 
+@router.post("/issues/analyze", response_model=IssueResponse)
 @router.post("/issues", response_model=IssueResponse)
 async def create_issue_optimized(
     background_tasks: BackgroundTasks,
@@ -916,6 +917,7 @@ async def create_issue_optimized(
         from fastapi import HTTPException as HTTPExc
         raise HTTPExc(status_code=500, detail=f"Failed to create issue: {str(e)}")
 
+@router.get("/issues/my-reports", response_model=List[Issue])
 @router.get("/issues/my-issues", response_model=List[Issue])
 async def get_my_issues(
     skip: int = Query(0, ge=0),
