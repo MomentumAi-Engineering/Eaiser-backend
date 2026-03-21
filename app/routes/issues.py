@@ -373,7 +373,9 @@ async def send_authority_email(
     display_issue_type = issue_type.replace('_', ' ').title()
 
     # Formatted Overview for the dispatcher (Standard format requested by user)
-    short_description = f"Possible {display_issue_type} has been reported at {final_address}."
+    # Heuristic: use 'at' for specific addresses (usually starting with a number), 'in' for cities/general areas
+    preposition = "at" if any(char.isdigit() for char in final_address.split(',')[0]) else "in"
+    short_description = f"A possible {display_issue_type.lower()} has been reported {preposition} {final_address}."
 
     # Ensure full stop at end
     if not short_description.endswith('.'):
@@ -385,11 +387,11 @@ async def send_authority_email(
     # Combined for authority email - Structured for professional Trust
     combined_email_desc = f"""
 <div style="margin-bottom: 20px;">
-    <span style="font-size: 10px; font-weight: 800; color: #b45309; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">◈ Official Notice</span>
+    <span style="font-size: 10px; font-weight: 800; color: #b45309; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">◈ Incident Summary</span>
     <div style="font-size: 16px; font-weight: 700; color: #1a202c; line-height: 1.4;">{short_description}</div>
 </div>
 <div style="border-top: 1px solid #e2e8f0; padding-top: 15px;">
-    <span style="font-size: 10px; font-weight: 800; color: #4a5568; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">◈ Situational Analysis</span>
+    <span style="font-size: 10px; font-weight: 800; color: #4a5568; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">◈ Incident Details</span>
     <div style="font-size: 15px; color: #4a5568; line-height: 1.6;">{detailed_description}</div>
 </div>
 """
@@ -605,7 +607,7 @@ async def send_authority_email(
     <div class="email-wrapper">
         <div class="email-container">
             <div class="header">
-                <h1>EAiSER CIVIC</h1>
+                <h1>EAiSER – Incident Report Standard</h1>
                 <div class="priority-badge">{display_priority.upper()} PRIORITY</div>
                 <span class="subtitle">Automated Incident Routing System</span>
             </div>
@@ -1457,11 +1459,31 @@ async def submit_issue(
         logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
     
-    required_fields = ["issue_type", "address", "image_id", "report"]
+    # Required fields for a valid submission. image_id is optional for Manual Reports.
+    required_fields = ["issue_type", "address", "report"]
     missing_fields = [field for field in required_fields if field not in issue or issue[field] is None]
+    
     if missing_fields:
         logger.error(f"Issue {issue_id} missing required fields: {missing_fields}")
         raise HTTPException(status_code=400, detail=f"Issue missing required fields: {missing_fields}")
+    
+    # Handle optional image_id
+    image_id = issue.get("image_id")
+    image_content = b""  # Use empty bytes instead of None to satisfy type checks and avoid retrieval errors
+    
+    if image_id:
+        try:
+            # Get image content from GridFS if available
+            gridout = await fs.open_download_stream(ObjectId(image_id))
+            image_content = await gridout.read()
+            logger.debug(f"Image {image_id} retrieved for issue {issue_id}")
+        except gridfs.errors.NoFile:
+            logger.warning(f"Image id {image_id} specified but not found in GridFS for issue {issue_id}")
+        except Exception as e:
+            logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}", exc_info=True)
+            # Don't fail the whole submission if image is missing, just log it
+    else:
+        logger.info(f"Report for issue {issue_id} has no image_id (Manual Report)")
     
     selected_authorities = request.selected_authorities
     if not selected_authorities:
@@ -1475,19 +1497,7 @@ async def submit_issue(
         if not auth["email"].endswith("@momntumai.com") and not any(auth["email"] == avail["email"] for avail in issue.get("available_authorities", [])):
             logger.warning(f"Custom authority email {auth['email']} not in available authorities for issue {issue_id}")
             auth["type"] = auth.get("type", "custom")
-    
-    try:
-        # Get image content from GridFS
-        gridout = await fs.open_download_stream(ObjectId(issue["image_id"]))
-        image_content = await gridout.read()
-        logger.debug(f"Image {issue['image_id']} retrieved for issue {issue_id}")
-    except gridfs.errors.NoFile:
-        logger.error(f"Image not found for image_id {issue['image_id']} in issue {issue_id}")
-        raise HTTPException(status_code=404, detail=f"Image not found for issue {issue_id}")
-    except Exception as e:
-        logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
-    
+            
     report = issue["report"]
 
     # 1. Apply Edits to Report Object (InMemory) - BEFORE Guard Logic

@@ -944,7 +944,8 @@ Return JSON with issue_overview, detailed_analysis, recommended_actions, etc.
             elif lower_desc.startswith("potential "): entry_issue_desc = entry_issue_desc[10:]
             elif lower_desc.startswith("a "): entry_issue_desc = entry_issue_desc[2:]
             
-            exact_summary = f"Possible {entry_issue_desc} has been reported at {location_str}; priority {priority}, confidence {new_conf}."
+            preposition = "at" if any(char.isdigit() for char in location_str.split(',')[0]) else "in"
+            exact_summary = f"A possible {entry_issue_desc.lower()} has been reported {preposition} {location_str}; priority {priority}, confidence {new_conf}%."
             
             # 🟢 Preserve original detailed summary for frontend/detailed report sections
             overview["detailed_description"] = orig_desc
@@ -1149,11 +1150,12 @@ Automated report generated via EAiSER AI by MomntumAI
         fallback_report: Dict[str, Any] = {}
         
         # Build the fallback report structure with explicit types to satisfy linter
+        preposition_fb = "at" if any(char.isdigit() for char in location_str.split(',')[0]) else "in"
         overview_data: Dict[str, Any] = {
             "type": _detected_type,
             "category": str(category).title(),
             "severity": severity,
-            "summary_explanation": f"Possible {_issue_desc_fallback} has been reported at {location_str}; priority {priority}, confidence {_ai_confidence_percent}.",
+            "summary_explanation": f"A possible {_issue_desc_fallback.lower()} has been reported {preposition_fb} {location_str}; priority {priority}, confidence {_ai_confidence_percent}%.",
             "detailed_description": _issue_desc_fallback,
             "confidence": _ai_confidence_percent
         }

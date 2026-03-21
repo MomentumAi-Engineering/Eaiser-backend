@@ -1182,13 +1182,29 @@ async def send_tos_email(email: str, name: str) -> bool:
     body {{ font-family: 'Inter', system-ui, -apple-system, sans-serif; background-color: #f8fafc; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }}
     .wrapper {{ padding: 40px 20px; background-color: #f8fafc; }}
     .container {{ max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.08); border: 1px solid #e2e8f0; }}
-    .header {{ background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%); padding: 35px 30px; text-align: center; border-bottom: 1px solid #e2e8f0; position: relative; }}
-    .header-accent {{ position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(to right, #fbbf24, #f59e0b); }}
-    .header h1 {{ color: #0f172a; font-size: 22px; margin: 0; font-weight: 700; }}
-    .content {{ padding: 40px 30px; }}
-    p {{ color: #475569; font-size: 16px; line-height: 1.7; margin-bottom: 20px; }}
-    .check-badge {{ display: inline-flex; align-items: center; gap: 8px; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 10px 18px; border-radius: 10px; color: #16a34a; font-weight: 600; font-size: 14px; margin-bottom: 20px; }}
-    .footer {{ padding: 25px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; background: #f8fafc; }}
+    .header {{ background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%); padding: 60px 30px; text-align: center; border-bottom: 1px solid #e2e8f0; position: relative; }}
+    .header-accent {{ position: absolute; top: 0; left: 0; right: 0; height: 5px; background: linear-gradient(to right, #fbbf24, #f59e0b); }}
+    .header h1 {{ color: #0f172a; font-size: 26px; margin: 0; font-weight: 800; letter-spacing: -0.5px; }}
+    .content {{ padding: 45px 40px; }}
+    p {{ color: #475569; font-size: 16px; line-height: 1.8; margin-bottom: 25px; }}
+    .check-badge {{ 
+      display: inline-flex; 
+      align-items: center; 
+      gap: 10px; 
+      background: #ecfdf5; 
+      border: 1px solid #10b981; 
+      padding: 14px 24px; 
+      border-radius: 50px; 
+      color: #065f46; 
+      font-weight: 700; 
+      font-size: 15px; 
+      margin: 30px 0;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.1);
+    }}
+    .check-icon {{ font-size: 18px; margin-right: 8px; }}
+    .tos-link {{ color: #3b82f6; text-decoration: none; font-weight: 600; border-bottom: 2px solid rgba(59,130,246,0.1); transition: all 0.2s; }}
+    .tos-link:hover {{ color: #2563eb; border-bottom-color: #2563eb; }}
+    .footer {{ padding: 30px; text-align: center; font-size: 13px; color: #94a3b8; border-top: 1px solid #e2e8f0; background: #f8fafc; }}
   </style>
 </head>
 <body>
@@ -1200,10 +1216,10 @@ async def send_tos_email(email: str, name: str) -> bool:
       </div>
       <div class="content">
         <p>Hi {name or 'User'},</p>
-        <div class="check-badge">✅ Terms of Service Accepted</div>
-        <p>Thank you for creating an account on EAiSER AI. This email confirms that you have reviewed and accepted our Terms of Service.</p>
+        <div class="check-badge"><span class="check-icon">✅</span> Terms of Service Accepted</div>
+        <p>Thank you for creating an account on EAiSER AI. This email confirms that you have reviewed and accepted our <a href="{frontend_url}/terms" class="tos-link">Terms of Service</a>.</p>
         <p>We're thrilled to have you on board. Together, we're building smarter, safer communities.</p>
-        <p style="font-weight: 600; color: #0f172a;">— The EAiSER Team</p>
+        <p style="font-weight: 700; color: #0f172a; margin-top: 40px;">— The EAiSER Team</p>
       </div>
       <div class="footer">© {datetime.utcnow().year} EAiSER AI · Intelligent Civic Response</div>
     </div>

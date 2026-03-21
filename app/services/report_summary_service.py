@@ -22,8 +22,7 @@ class ReportSummaryBuilder:
     """
 
     DEFAULT_TEMPLATE = (
-        "Our AI analyzed the image and identified a potential {Issue_Type} showing {Short_Visual_Description}. "
-        "This issue is located at {City}, {State} (ZIP {Zip_Code})."
+        "A possible {Issue_Type} has been reported {Preposition} {City}, {State} (ZIP {Zip_Code})."
     )
 
     def __init__(self, template: Optional[str] = None, max_risk_tags: int = 5):
@@ -46,9 +45,14 @@ class ReportSummaryBuilder:
         priority = self._val(payload, ["Priority_Label", "priority_label", "priority"], default="Medium")
         risk_tags_str = self._risk_str(payload.get("Risk_Tags") or payload.get("risk_tags"))
 
+        # Determine preposition: 'at' for specific addresses, 'in' for general areas/cities
+        is_specific = any(char.isdigit() for char in city.split(',')[0])
+        preposition = "at" if is_specific else "in"
+
         # Normalize formats (title case where applicable)
         summary = self.template.format(
-            Issue_Type=self._title(issue_type, "Issue"),
+            Issue_Type=self._title(issue_type, "Issue").lower(),
+            Preposition=preposition,
             City=self._title(city, "Unknown City"),
             State=state,
             Zip_Code=zip_code or "N/A",
