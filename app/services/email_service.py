@@ -1168,10 +1168,13 @@ async def send_password_reset_email(email: str, token: str) -> bool:
 async def send_tos_email(email: str, name: str) -> bool:
     """Send a copy of the Terms of Service to the user upon acceptance."""
     try:
-        subject = "Your Copy of EAiSER.Ai Terms of Service"
+        subject = "Your Accepted Terms: EAiSER & MomntumAi"
         
         frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
         if frontend_url.endswith("/"): frontend_url = frontend_url[:-1]
+        
+        # Path to the final Terms PDF
+        tos_pdf = r"c:/Users/chris/OneDrive/Desktop/MomntumAi/momentum-frontend/public/TERMSand.pdf"
         
         html_content = f"""
 <!DOCTYPE html>
@@ -1217,9 +1220,9 @@ async def send_tos_email(email: str, name: str) -> bool:
       <div class="content">
         <p>Hi {name or 'User'},</p>
         <div class="check-badge"><span class="check-icon">✅</span> Terms of Service Accepted</div>
-        <p>Thank you for creating an account on EAiSER AI. This email confirms that you have reviewed and accepted our <a href="{frontend_url}/terms" class="tos-link">Terms of Service</a>.</p>
-        <p>We're thrilled to have you on board. Together, we're building smarter, safer communities.</p>
-        <p style="font-weight: 700; color: #0f172a; margin-top: 40px;">— The EAiSER Team</p>
+        <p>Thank you for using EAiSER AI. This email confirms that you have reviewed and accepted our Terms of Service and Privacy Policy.</p>
+        <p>As requested, we have attached a copy of these legal documents for your records. We're thrilled to have you on board. Together, we're building smarter, safer communities.</p>
+        <p style="font-weight: 700; color: #0f172a; margin-top: 40px;">— The EAiSER & MomntumAi Team</p>
       </div>
       <div class="footer">© {datetime.utcnow().year} EAiSER AI · Intelligent Civic Response</div>
     </div>
@@ -1227,9 +1230,10 @@ async def send_tos_email(email: str, name: str) -> bool:
 </body>
 </html>
 """
-        text_content = f"Hi {name or 'User'},\n\nThank you for creating an account on EAiSER.Ai. This email serves as confirmation that you have agreed to our Terms of Service.\n\nThanks,\nThe EAiSER AI Team"
+        text_content = f"Hi {name or 'User'},\n\nThank you for using EAiSER.Ai. This email serves as confirmation that you have agreed to our Terms of Service. We have attached a copy for your records.\n\nThanks,\nThe EAiSER & MomntumAi Team"
 
-        return await send_email(email, subject, html_content, text_content)
+        attachments = [tos_pdf] if os.path.exists(tos_pdf) else None
+        return await send_email(email, subject, html_content, text_content, attachments=attachments)
     except Exception as e:
         logger.error(f"Failed to send TOS email to {email}: {e}")
         return False

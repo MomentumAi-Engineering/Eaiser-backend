@@ -96,6 +96,7 @@ class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
+    tos_accepted: Optional[bool] = False
 
 class UserLogin(BaseModel):
     identifier: str # Email or Username
@@ -793,6 +794,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             "avatar": user.get("avatar"),
             "notifications": user.get("notifications", {"email": True, "push": False, "updates": True}),
             "email_verified": user.get("email_verified", False),
+            "tos_accepted": user.get("tos_accepted", False),
             "created_at": user.get("created_at")
         }
     except Exception as e:
@@ -905,3 +907,33 @@ async def upload_avatar(file: UploadFile = File(...), current_user: dict = Depen
     except Exception as e:
         logger.error(f"Avatar upload error: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload avatar")
+
+@router.post("/accept-tos")
+async def accept_tos(current_user: dict = Depends(get_current_user), background_tasks: BackgroundTasks = BackgroundTasks()):
+    """Manually accept Terms of Service and trigger confirmation email."""
+    try:
+        db = await get_db()
+        email = current_user["sub"]
+        
+        user = await db["users"].find_one({"email": email})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+            
+        await db["users"].update_one(
+            {"email": email},
+            {"$set": {"tos_accepted": True}}
+        )
+        
+        # Send confirmation email
+        try:
+            from services.email_service import send_tos_email
+            background_tasks.add_task(send_tos_email, email, user.get("first_name", "User"))
+        except Exception as e:
+            logger.error(f"Failed to queue TOS email: {e}")
+            
+        return {"message": "Terms of Service accepted successfully."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error accepting TOS: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")

@@ -388,7 +388,7 @@ async def send_authority_email(
     combined_email_desc = f"""
 <div style="margin-bottom: 20px;">
     <span style="font-size: 10px; font-weight: 800; color: #b45309; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">◈ Incident Summary</span>
-    <div style="font-size: 16px; font-weight: 700; color: #1a202c; line-height: 1.4;">{short_description}</div>
+    <div style="font-size: 15px; font-weight: 700; color: #1a202c; line-height: 1.6;">{short_description}</div>
 </div>
 <div style="border-top: 1px solid #e2e8f0; padding-top: 15px;">
     <span style="font-size: 10px; font-weight: 800; color: #4a5568; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">◈ Incident Details</span>
