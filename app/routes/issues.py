@@ -639,7 +639,14 @@ async def send_authority_email(
                         </tr>
                     </table>
 
-                    <a href="{map_link}" class="map-btn">📍 View Precise Location Map</a>
+                    <a href="{map_link}" class="map-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align: text-bottom; margin-right: 8px;">
+                            <ellipse cx="12" cy="20" rx="7" ry="2.5" stroke="#a0aec0" stroke-width="2.5"/>
+                            <path d="M12 2C7.58 2 4 5.58 4 10c0 5.25 8 11.5 8 11.5s8-6.25 8-11.5c0-4.42-3.58-8-8-8z" fill="#2563eb"/>
+                            <circle cx="12" cy="10" r="3.5" fill="#ffffff"/>
+                        </svg>
+                        View Precise Location Map
+                    </a>
 
                     <table class="meta-grid" style="margin-top: 15px;">
                         <tr>
