@@ -266,6 +266,12 @@ async def login(user_data: UserLogin):
         #     raise HTTPException(status_code=403, detail="Please verify your email first.")
 
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        
+        access_token = create_access_token(
+            data={"sub": user["email"], "id": str(user["_id"]), "role": user.get("role", "user")},
+            expires_delta=access_token_expires
+        )
+        
         refresh_token = create_refresh_token(
             data={"sub": user["email"], "id": str(user["_id"])}
         )

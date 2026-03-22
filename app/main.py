@@ -341,6 +341,23 @@ async def custom_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception in {request.method} {request.url}: {str(exc)}", exc_info=True)
     return JSONResponse(status_code=500, content={"detail": f"Internal server error: {str(exc)}"})
 
+@app.get("/api/proxy/places/autocomplete")
+async def proxy_places_autocomplete(input: str, key: str):
+    import urllib.request, json
+    from urllib.parse import quote
+    url = f"https://maps.googleapis.com/maps/api/place/autocomplete/json?input={quote(input)}&key={key}"
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req) as response:
+        return json.loads(response.read().decode())
+
+@app.get("/api/proxy/places/details")
+async def proxy_places_details(place_id: str, fields: str, key: str):
+    import urllib.request, json
+    url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields={fields}&key={key}"
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req) as response:
+        return json.loads(response.read().decode())
+
 @app.get("/")
 async def read_root():
     return {"message": "Eaiser AI backend is up and running!", "status": "healthy", "timestamp": datetime.now().isoformat()}
