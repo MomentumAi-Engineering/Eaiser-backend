@@ -181,20 +181,20 @@ async def signup(user: UserCreate, background_tasks: BackgroundTasks):
             "hashed_password": hashed_password,
             "role": "user",
             "is_active": True,
-            "email_verified": False,
-            "verification_token": verification_token,
+            "email_verified": True,
+            "verification_token": None,
             "tos_accepted": True,
             "created_at": datetime.utcnow()
         }
         
         await db["users"].insert_one(new_user)
         
-        # Send Verification Email in background
-        try:
-            from services.email_service import send_verification_email
-            background_tasks.add_task(send_verification_email, email, user.firstName, verification_token)
-        except Exception as email_error:
-            logger.error(f"Failed to dispatch verification email: {email_error}")
+        # Skip sending Verification Email - Removed by user request
+        # try:
+        #     from services.email_service import send_verification_email
+        #     background_tasks.add_task(send_verification_email, email, user.firstName, verification_token)
+        # except Exception as email_error:
+        #     logger.error(f"Failed to dispatch verification email: {email_error}")
 
         # Send TOS Email in background
         try:
@@ -204,7 +204,7 @@ async def signup(user: UserCreate, background_tasks: BackgroundTasks):
             logger.error(f"Failed to dispatch TOS email for new user: {tos_error}")
 
         return {
-            "message": "Account created successfully. Please check your email to verify your account.",
+            "message": "Account created successfully.",
             "email": email
         }
             
@@ -292,7 +292,7 @@ async def login(user_data: UserLogin):
                 "username": user.get("username", ""),
                 "email": user.get("email"),
                 "role": user.get("role", "user"),
-                "email_verified": user.get("email_verified", False)
+                "email_verified": True
             }
         }
     except HTTPException:
@@ -373,7 +373,7 @@ async def refresh_token_endpoint(refresh_token: str = Body(..., embed=True)):
                 "username": user.get("username", ""),
                 "email": user.get("email"),
                 "role": user.get("role", "user"),
-                "email_verified": user.get("email_verified", False)
+                "email_verified": True
             }
         }
     except JWTError:
@@ -458,7 +458,7 @@ async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTask
                 "is_active": True,
                 "auth_provider": "google",
                 "avatar": id_info.get("picture"),
-                "email_verified": id_info.get("email_verified", False),
+                "email_verified": True,
                 "tos_accepted": True,
                 "created_at": datetime.utcnow()
             }
@@ -793,7 +793,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             "role": user.get("role", "user"),
             "avatar": user.get("avatar"),
             "notifications": user.get("notifications", {"email": True, "push": False, "updates": True}),
-            "email_verified": user.get("email_verified", False),
+            "email_verified": True,
             "tos_accepted": user.get("tos_accepted", False),
             "created_at": user.get("created_at")
         }
