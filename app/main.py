@@ -283,16 +283,14 @@ async def log_requests(request: Request, call_next):
         response = await call_next(request)
         if should_log and response.status_code >= 400:
             if response.status_code == 401 and "/api/auth/login" in path:
-                try:
-                    # Capture body if possible (only for debugging)
-                    # Note: request.body() can only be called once, so we might need more complex handling
-                    # but for now let's just log that it was a 401 on login
-                    logger.warning(f"❌ AUTH FAILURE: 401 for {path}")
-                except: pass
+                logger.warning(f"❌ AUTH FAILURE: 401 for {path}")
             logger.warning(f"⚠️ {response.status_code} for {request.method} {path}")
         return response
+    except HTTPException:
+        # Re-raise HTTPExceptions so they hit the official FastAPI handler
+        raise
     except Exception as e:
-        logger.error(f"💥 Error processing {request.method} {path}: {str(e)}", exc_info=True)
+        logger.error(f"💥 UNHANDLED ERROR in {request.method} {path}: {str(e)}", exc_info=True)
         # If we hit an error here, WE MUST still return a response or CORS will fail
         return JSONResponse(
             status_code=500,
@@ -325,6 +323,9 @@ app.add_middleware(
         "http://admin.localhost:5173",
         "http://admin.localhost:3000",
         "http://admin.localhost:5174",
+        "http://gov.localhost:3000",
+        "http://gov.localhost:5173",
+        "http://gov.localhost:5174",
         # Mobile app / Replit origins
         "https://eaiser-backend-u8me.onrender.com",
         "https://*.replit.dev",
@@ -517,6 +518,34 @@ except ImportError:
 
 if admin_users_router:
     app.include_router(admin_users_router, prefix="/api") # Mounted at /api/admin/users
+
+# Include Gov Auth Router
+try:
+    import app.routes.gov_auth as gov_auth_mod
+    gov_auth_router = gov_auth_mod.router
+except ImportError:
+    try:
+        import routes.gov_auth as gov_auth_mod
+        gov_auth_router = gov_auth_mod.router
+    except ImportError:
+        gov_auth_router = None
+
+if gov_auth_router:
+    app.include_router(gov_auth_router, prefix="/api") # Mounted at /api/gov (auth)
+
+# Include Gov Portal Content Router (Reports/Stats)
+try:
+    import app.routes.gov_portal as gov_portal_mod
+    gov_portal_router = gov_portal_mod.router
+except ImportError:
+    try:
+        import routes.gov_portal as gov_portal_mod
+        gov_portal_router = gov_portal_mod.router
+    except ImportError:
+        gov_portal_router = None
+
+if gov_portal_router:
+    app.include_router(gov_portal_router, prefix="/api") # Mounted at /api/gov/portal
 
 # Include Email Webhooks
 try:

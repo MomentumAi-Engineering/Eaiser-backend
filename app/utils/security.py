@@ -34,13 +34,22 @@ def get_password_hash(password: str) -> str:
     # gensalt() generates a salt, hashpw hashes it
     return bcrypt.hashpw(password, bcrypt.gensalt()).decode('utf-8')
 
-def create_access_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(subject: Union[str, Any] = None, data: dict = None, expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Polymorphic access token creator. 
+    Can take a 'subject' (str) or a full 'data' (dict).
+    """
+    if data:
+        to_encode = data.copy()
+    else:
+        to_encode = {"sub": str(subject), "type": "access"}
+    
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    to_encode = {"exp": expire, "sub": str(subject), "type": "access"}
+    to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 

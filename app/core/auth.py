@@ -29,32 +29,42 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
+        token_type = payload.get("type", "admin") # default to admin token
+        
         if email is None:
             raise credentials_exception
-        
-        # Check if user exists in DB and is active
-        # Optimization: We could trust the token until expiry, but checking DB allows revocation
-        mongo_service = await get_optimized_mongodb_service()
-        if mongo_service:
-            try:
-                collection = await mongo_service.get_collection("admins")
-                user = await collection.find_one({"email": email})
-                
-                if user:
-                    if not user.get("is_active", True):
-                        raise HTTPException(status_code=403, detail="Inactive user")
-                    
-                    return {
-                        "id": str(user["_id"]),
-                        "email": user["email"],
-                        "role": user.get("role", "admin"),
-                        "name": user.get("name", "Admin")
-                    }
-            except Exception as e:
-                logger.warning(f"Auth DB check failed, falling back to token validation: {e}")
             
-        # Fallback if DB check fails but token is valid (should ideally not happen)
-        return {"email": email, "role": "admin"}
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            return {"email": email, "role": "admin"} # Fallback if DB is down during startup
+
+        # Select appropriate collection based on token type
+        collection_name = "government_users" if token_type == "gov_portal" else "admins"
+        collection = await mongo_service.get_collection(collection_name)
+        user = await collection.find_one({"email": email})
+        
+        if not user:
+            raise credentials_exception
+            
+        if not user.get("is_active", True):
+            raise HTTPException(status_code=403, detail="Account is deactivated")
+            
+        # Return unified user object
+        user_data = {
+            "id": str(user["_id"]),
+            "email": user["email"],
+            "role": user.get("role", "admin"),
+            "name": user.get("name", "User"),
+            "type": token_type
+        }
+
+        # Add extra context for gov officials
+        if token_type == "gov_portal":
+             user_data["dept"] = user.get("department")
+             user_data["zip"] = user.get("zip_code")
+             user_data["org"] = user.get("city")
+
+        return user_data
         
     except JWTError:
         raise credentials_exception

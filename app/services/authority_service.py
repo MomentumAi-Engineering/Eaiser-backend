@@ -252,6 +252,25 @@ def _save_zip_authorities():
         logger.error(f"❌ Failed to save zip_code_authorities.json: {e}")
         return False
 
+async def delete_zip_authority(zip_code: str, admin_email: str = "system"):
+    """Remove a zip code entry."""
+    zip_str = str(zip_code)
+    if zip_str not in ZIP_CODE_AUTHORITIES:
+        return False
+        
+    old_value = ZIP_CODE_AUTHORITIES.pop(zip_str)
+    success = _save_zip_authorities()
+    
+    if success:
+        await log_audit_event(
+            action="delete_zip_authority",
+            target=zip_str,
+            details={"old": old_value},
+            admin_email=admin_email
+        )
+        
+    return success
+
 def get_all_department_mappings():
     """Return the entire issue -> department map."""
     return ISSUE_DEPARTMENT_MAP

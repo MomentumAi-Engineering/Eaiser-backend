@@ -653,24 +653,6 @@
       }
     ]
   },
-  "37230": {
-    "general": [
-      {
-        "name": "Unique Services",
-        "email": "unique.37230@nashville.gov",
-        "type": "general",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "fire": [
-      {
-        "name": "Nashville Fire Department",
-        "email": "fire.37230@nashville.gov",
-        "type": "fire",
-        "timezone": "America/Chicago"
-      }
-    ]
-  },
   "37232": {
     "general": [
       {
@@ -703,114 +685,6 @@
         "name": "Sanitation Department",
         "email": "sanitation.37234@nashville.gov",
         "type": "sanitation",
-        "timezone": "America/Chicago"
-      }
-    ]
-  },
-  "37235": {
-    "general": [
-      {
-        "name": "Unique Services",
-        "email": "unique.37235@nashville.gov",
-        "type": "general",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "public_works": [
-      {
-        "name": "Public Works Department",
-        "email": "pw.37235@nashville.gov",
-        "type": "public_works",
-        "timezone": "America/Chicago"
-      }
-    ]
-  },
-  "37236": {
-    "general": [
-      {
-        "name": "Unique Services",
-        "email": "unique.37236@nashville.gov",
-        "type": "general",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "fire": [
-      {
-        "name": "Nashville Fire Department",
-        "email": "fire.37236@nashville.gov",
-        "type": "fire",
-        "timezone": "America/Chicago"
-      }
-    ]
-  },
-  "37238": {
-    "general": [
-      {
-        "name": "Unique Services",
-        "email": "unique.37238@nashville.gov",
-        "type": "general",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "sanitation": [
-      {
-        "name": "Sanitation Department",
-        "email": "sanitation.37238@nashville.gov",
-        "type": "sanitation",
-        "timezone": "America/Chicago"
-      }
-    ]
-  },
-  "37240": {
-    "general": [
-      {
-        "name": "Unique Services",
-        "email": "unique.37240@nashville.gov",
-        "type": "general",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "public_works": [
-      {
-        "name": "Public Works Department",
-        "email": "pw.37240@nashville.gov",
-        "type": "public_works",
-        "timezone": "America/Chicago"
-      }
-    ]
-  },
-  "37242": {
-    "general": [
-      {
-        "name": "Unique Services",
-        "email": "unique.37242@nashville.gov",
-        "type": "general",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "fire": [
-      {
-        "name": "Nashville Fire Department",
-        "email": "fire.37242@nashville.gov",
-        "type": "fire",
-        "timezone": "America/Chicago"
-      }
-    ]
-  },
-  "37250": {
-    "public_works": [
-      {
-        "name": "Nashville Public Works",
-        "email": "pw.37250@nashville.gov",
-        "type": "public_works",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "general": [
-      {
-        "name": "PO Box Services",
-        "email": "po.37250@nashville.gov",
-        "type": "general",
         "timezone": "America/Chicago"
       }
     ]

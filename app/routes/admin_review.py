@@ -2559,3 +2559,12 @@ async def get_mapping_history(limit: int = 50, admin: dict = Depends(get_admin_u
     except Exception as e:
         logger.error(f"Error fetching mapping history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/authorities/{zip_code}")
+async def delete_authority_zip(zip_code: str, admin: dict = Depends(get_admin_user)):
+    """Delete a zip code authority entry."""
+    from services.authority_service import delete_zip_authority
+    success = await delete_zip_authority(zip_code, admin_email=admin["email"])
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Zip code {zip_code} not found")
+    return {"message": f"Zip code {zip_code} deleted successfully"}

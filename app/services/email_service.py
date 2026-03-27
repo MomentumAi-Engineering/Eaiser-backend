@@ -1237,3 +1237,112 @@ async def send_tos_email(email: str, name: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to send TOS email to {email}: {e}")
         return False
+
+# --------------------------------------------------------------------
+# ✅ Government Portal Welcome Email
+# --------------------------------------------------------------------
+
+GOV_PORTAL_URL = "https://gov.eaiser.ai/login"
+
+async def send_gov_welcome_email(
+    email: str,
+    name: str,
+    department: str,
+    city: str,
+    zip_code: str,
+    temporary_password: str
+) -> bool:
+    """
+    Sends a professional welcome email to newly created Government Official accounts.
+    """
+    try:
+        subject = f"Security Clearance Granted — EAiSER Government Portal ({department})"
+        
+        # Style inspired by the admin welcome email but tailored for Gov/Civic feel
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body {{ background-color: #f8fafc; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }}
+  .wrapper {{ background-color: #f8fafc; padding: 40px 20px; }}
+  .container {{ max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }}
+  .header {{ background: #000000; padding: 45px 40px; text-align: center; border-bottom: 4px solid #fbbf24; }}
+  .header h1 {{ margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; color: #ffffff; }}
+  .header h1 span {{ color: #fbbf24; }}
+  .header p {{ margin: 10px 0 0; font-size: 13px; color: #71717a; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; }}
+  .content {{ padding: 40px 50px; color: #334155; font-size: 16px; line-height: 1.7; }}
+  .greeting {{ font-size: 20px; font-weight: 800; color: #000000; margin-bottom: 8px; }}
+  .dept-badge {{ display: inline-block; padding: 5px 14px; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.2); color: #d97706; border-radius: 50px; font-size: 11px; font-weight: 800; margin-bottom: 25px; text-transform: uppercase; }}
+  .credential-card {{ background: #fafafa; border: 1px solid #f1f1f1; border-radius: 16px; padding: 30px; margin: 30px 0; }}
+  .label {{ font-size: 10px; color: #999; display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }}
+  .value {{ font-size: 15px; color: #111; font-weight: 700; }}
+  .password-box {{ background: #ffffff; border: 1px dashed #ddd; padding: 12px 18px; border-radius: 10px; font-family: 'Consolas', monospace; font-size: 17px; color: #000; font-weight: 800; display: table; margin-top: 8px; }}
+  .scope-box {{ background: #f0fdf4; border: 1px solid #dcfce7; padding: 20px; border-radius: 12px; margin-bottom: 30px; }}
+  .scope-box h4 {{ margin: 0 0 6px 0; color: #166534; font-size: 14px; font-weight: 800; }}
+  .scope-box p {{ margin: 0; font-size: 13px; color: #15803d; font-weight: 500; }}
+  .cta-block {{ text-align: center; margin-top: 40px; }}
+  .cta-button {{ background: #000; color: #fff !important; padding: 16px 40px; border-radius: 12px; text-decoration: none; font-size: 15px; font-weight: 800; display: inline-block; box-shadow: 0 10px 20px rgba(0,0,0,0.1); }}
+  .footer {{ padding: 30px; background: #fafafa; text-align: center; border-top: 1px solid #f1f1f1; font-size: 12px; color: #a1a1aa; }}
+</style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <h1>EA<span>i</span>SER <span>Gov</span></h1>
+        <p>Authority Command Center</p>
+      </div>
+      <div class="content">
+        <div class="greeting">Official Clearance Granted</div>
+        <div class="dept-badge">{department} — {city}</div>
+        <p>Hello <strong>{name}</strong>,</p>
+        <p>Your official credentials for the EAiSER Government Portal have been provisioned by the EAiSER Global Operations team. You now have access to real-time citizen report routing and AI-driven department insights.</p>
+        
+        <div class="credential-card">
+          <div style="margin-bottom: 20px;">
+            <span class="label">Portal ID / Email</span>
+            <span class="value">{email.lower()}</span>
+          </div>
+          <div>
+            <span class="label">Temporary Security Password</span>
+            <div class="password-box">{temporary_password}</div>
+          </div>
+        </div>
+
+        <div class="scope-box">
+          <h4>🛰️ Operation Scope</h4>
+          <p>You are authorized to monitor and manage reports for the <strong>{department}</strong> within ZIP context <strong>{zip_code}</strong>. This dashboard is strictly for official use.</p>
+        </div>
+
+        <div class="cta-block">
+          <a href="{GOV_PORTAL_URL}" class="cta-button">Access Gov Dashboard →</a>
+        </div>
+      </div>
+      <div class="footer">
+        <p>© 2026 EAiSER AI • Intelligent Civic Infrastructure</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+        text_content = f"""
+Official Clearance Granted — EAiSER Gov
+
+Hello {name},
+Your credentials for the EAiSER Government Portal are ready.
+
+Department: {department}
+ZIP Context: {zip_code}
+
+Portal ID: {email.lower()}
+Temporary Password: {temporary_password}
+
+Access the dashboard at: {GOV_PORTAL_URL}
+"""
+        return await send_email(email.lower(), subject, html_content, text_content)
+    except Exception as e:
+        logger.error(f"Failed to send gov welcome email: {e}")
+        return False

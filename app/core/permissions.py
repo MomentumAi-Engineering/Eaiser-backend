@@ -30,6 +30,7 @@ PERMISSIONS = {
     "view_audit": ["super_admin", "admin"],
     "view_mapping": ["super_admin", "admin"],
     "view_authorities": ["super_admin", "admin"],
+    "manage_authorities": ["super_admin"],
     "view_settings": ["super_admin", "admin", "team_member", "viewer"],
 
     # Settings Tabs
