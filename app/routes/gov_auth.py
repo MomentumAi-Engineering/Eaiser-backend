@@ -166,14 +166,16 @@ async def list_gov_accounts(admin: dict = Depends(require_permission("view_autho
     query = {}
     
     if is_gov_super_admin:
-        # Only show accounts in the same city
+        # Gov Super Admin sees ONLY Operations Staff in their city
         query["city"] = admin.get("org")
-        # Hide the requester themselves and other Super Admins for tactical clarity
-        # (They only manage operational accounts)
-        query["role"] = {"$ne": "super_admin"}
+        query["role"] = "operations"
+    elif is_system_admin:
+        # System Admin sees ALL accounts for management
+        # (The frontend will handle grouping by city/manager)
+        pass
     
     cursor = db["government_users"].find(query, {"hashed_password": 0}).sort("created_at", -1)
-    accounts = await cursor.to_list(length=200)
+    accounts = await cursor.to_list(length=1000)
     
     for a in accounts:
         a["id"] = str(a["_id"])

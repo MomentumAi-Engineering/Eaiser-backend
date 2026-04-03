@@ -55,7 +55,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[
             "email": user["email"],
             "role": user.get("role", "admin"),
             "name": user.get("name", "User"),
-            "type": token_type
+            "type": "gov_portal" if token_type == "gov_portal" else "admin"
         }
 
         # Add extra context for gov officials
