@@ -47,6 +47,7 @@ from services.geocode_service import reverse_geocode, geocode_zip_code
 from services.report_generation_service import build_unified_issue_json
 from services.rate_limiter_service import AdvancedRateLimiter, RateLimitTier
 from core.database import get_database
+from app.services.websocket_manager import manager
 
 # Utilities
 from utils.location import get_authority, get_authority_by_zip_code
@@ -765,8 +766,6 @@ async def process_issue_background(
                     redis_service = await get_redis_cluster_service()
                     if redis_service:
                         # Find and delete matching user cache keys
-                        # generate_cache_key uses ':' between key and value
-                        # We use multiple wildcards to be safe against different prefixing/hashing
                         await redis_service.invalidate_pattern(f"*user_issues*user_email:{user_email}*")
                         await redis_service.invalidate_pattern(f"*user_email:{user_email}*user_issues*")
                         # Also invalidate analytics cache for today
@@ -774,6 +773,19 @@ async def process_issue_background(
                         logger.info(f"Cleared cache for user {user_email} after new report.")
                 except Exception as cache_err:
                     logger.warning(f"Failed to invalidate cache: {cache_err}")
+
+            # 🔌 Real-time Broadcast via WebSocket
+            if user_email:
+                try:
+                    await manager.broadcast_to_user(user_email, {
+                        "type": "REPORT_UPDATED",
+                        "status": final_status,
+                        "issue_id": issue_id,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    logger.info(f"📢 Broadcasted WS update for user {user_email}")
+                except Exception as ws_err:
+                    logger.warning(f"Failed to broadcast WS update: {ws_err}")
             
             logger.info(f"Issue {issue_id} processed successfully in background")
             return issue_doc
@@ -919,6 +931,7 @@ async def create_issue_optimized(
 
 @router.get("/issues/my-reports", response_model=List[Issue])
 @router.get("/issues/my-issues", response_model=List[Issue])
+@router.get("/issues/me", response_model=List[Issue])
 async def get_my_issues(
     skip: int = Query(0, ge=0),
     limit: int = Query(200, ge=1, le=500),

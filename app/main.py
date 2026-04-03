@@ -20,12 +20,13 @@ parent_dir = current_dir.parent
 if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Request, Query, WebSocket, WebSocketDisconnect
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from app.services.websocket_manager import manager
 import asyncio
 import logging
 import uvicorn
@@ -141,6 +142,14 @@ except ImportError:
         from app.services.mongodb_optimized_service import init_optimized_mongodb, close_optimized_mongodb
     except ImportError:
         init_optimized_mongodb = close_optimized_mongodb = None
+
+try:
+    from app.gov import gov_operations_router
+except ImportError:
+    try:
+        from gov import gov_operations_router
+    except ImportError:
+        gov_operations_router = None
 
 logger.info("🚀 Eaiser AI logging configuration initialized")
 
@@ -301,6 +310,13 @@ async def log_requests(request: Request, call_next):
 # 🛡️ FINAL WRAPPERS (CORS MUST BE OUTSIDE EVERYTHING)
 # --------------------------------------------------------------------
 
+@app.middleware("http")
+async def debug_cors(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if origin:
+        logger.info(f"🔍 DEBUG CORS: Origin={origin} Path={request.url.path}")
+    return await call_next(request)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -309,28 +325,9 @@ app.add_middleware(
         "https://eaiser.ai",
         "https://admin.eaiser.ai",
         "https://eaiserai.io",
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:5174",
-        "http://localhost:8005",
-        "http://localhost:8081",
-        "http://localhost:19006",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "http://127.0.0.1:8005",
-        "http://127.0.0.1:8081",
-        "http://admin.localhost:5173",
-        "http://admin.localhost:3000",
-        "http://admin.localhost:5174",
-        "http://gov.localhost:3000",
-        "http://gov.localhost:5173",
-        "http://gov.localhost:5174",
-        # Mobile app / Replit origins
         "https://eaiser-backend-u8me.onrender.com",
-        "https://*.replit.dev",
-        "https://*.repl.co",
     ],
+    allow_origin_regex=r"http(s)?://([a-zA-Z0-9-]+\.)?localhost(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -362,6 +359,19 @@ async def proxy_places_details(place_id: str, fields: str, key: str):
 @app.get("/")
 async def read_root():
     return {"message": "Eaiser AI backend is up and running!", "status": "healthy", "timestamp": datetime.now().isoformat()}
+
+@app.websocket("/ws/{user_email}")
+async def websocket_endpoint(websocket: WebSocket, user_email: str):
+    await manager.connect(websocket, user_email)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.handle_message(websocket, data)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, user_email)
+    except Exception as e:
+        logger.error(f"WebSocket error for {user_email}: {e}")
+        manager.disconnect(websocket, user_email)
 
 @app.get("/health")
 async def health_check():
@@ -574,6 +584,9 @@ except ImportError:
 
 if inquiry_router:
     app.include_router(inquiry_router, prefix="/api/inbound", tags=["Inquiries"])
+
+if gov_operations_router:
+    app.include_router(gov_operations_router, prefix="/api")
 
 if analytics_router:
     app.include_router(analytics_router)

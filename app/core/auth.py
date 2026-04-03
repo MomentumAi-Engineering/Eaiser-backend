@@ -73,13 +73,17 @@ async def get_admin_user(current_user: Dict[str, Any] = Depends(get_current_user
     """
     Admin-only authentication dependency - allows all admin roles
     """
-    # Allow all admin roles: super_admin, admin, team_member, viewer
-    valid_roles = ["admin", "super_admin", "team_member", "viewer"]
+    # Allow all admin roles: super_admin, admin, team_member, viewer, operations
+    # Both EAiSER system roles and Gov Portal operational roles are permitted here
+    valid_roles = ["admin", "super_admin", "team_member", "viewer", "operations", "ops_manager"]
     
-    if current_user.get("role") not in valid_roles:
+    current_role = current_user.get("role", "").lower().replace("-", "_").replace(" ", "_")
+    
+    if current_role not in valid_roles:
+        logger.warning(f"🚫 Permission Denied: Role '{current_role}' from {current_user.get('type')} is not in {valid_roles}")
         raise HTTPException(
             status_code=403,
-            detail="Admin access required"
+            detail="Administrative clearance required for this operation"
         )
     return current_user
 
@@ -88,7 +92,8 @@ def require_permission(permission: str):
     Dependency factory to check for specific permission
     """
     async def permission_checker(current_user: Dict[str, Any] = Depends(get_admin_user)):
-        if not has_permission(current_user.get("role"), permission):
+        role = current_user.get("role", "").lower().replace("-", "_").replace(" ", "_")
+        if not has_permission(role, permission):
             raise HTTPException(
                 status_code=403,
                 detail=f"Permission '{permission}' required for this action"

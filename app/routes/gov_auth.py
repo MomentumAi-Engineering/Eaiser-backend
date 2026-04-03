@@ -24,6 +24,7 @@ class GovAccountCreate(BaseModel):
     department: str
     zip_code: str
     city: str
+    role: Optional[str] = "operations" # "super_admin" or "operations"
 
 class GovLoginRequest(BaseModel):
     email: str
@@ -45,6 +46,23 @@ async def setup_gov_account(
     Super Admin only: Create a new government official account for the Gov Portal.
     Generates a temporary password and sends a welcome email.
     """
+    # 1. AUTHENTICATION & AUTHORITY CHECK
+    # Only allow System Admin OR Gov Super Admin to create accounts
+    is_system_admin = admin.get("type") == "admin"
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") == "super_admin"
+
+    if not is_system_admin and not is_gov_super_admin:
+        raise HTTPException(status_code=403, detail="Only System Admins or Government Super Admins can provision accounts")
+
+    # Gov Super Admins can only create accounts for their own City
+    if is_gov_super_admin and account.city != admin.get("org"):
+        raise HTTPException(status_code=403, detail="You can only provision accounts for your own city")
+    
+    # Gov Super Admins cannot create other Super Admins (Security safeguard)
+    target_role = account.role if account.role else "operations"
+    if is_gov_super_admin and target_role == "super_admin":
+        raise HTTPException(status_code=403, detail="Only System Admins can provision new Super Admin accounts")
+
     db = await get_db()
     # Check if exists in government_users
     if await db["government_users"].find_one({"email": account.email.lower()}):
@@ -61,8 +79,7 @@ async def setup_gov_account(
         "zip_code": account.zip_code,
         "city": account.city,
         "hashed_password": hashed_password,
-        # Role mapping for RBAC in Gov Portal
-        "role": account.department.lower().replace(" ", "_"), 
+        "role": target_role, 
         "created_at": datetime.utcnow(),
         "created_by": admin.get("email"),
         "is_active": True,
@@ -136,14 +153,32 @@ Please change your password after logging in.
 @router.get("/accounts")
 async def list_gov_accounts(admin: dict = Depends(require_permission("view_authorities"))):
     """
-    List all created government official accounts.
+    List government official accounts. 
+    HIERARCHICAL FILTERING:
+    - System Admin sees ALL.
+    - Gov Super Admin sees ONLY their city and skips other Super Admins.
     """
     db = await get_db()
-    cursor = db["government_users"].find({}, {"hashed_password": 0}).sort("created_at", -1)
-    accounts = await cursor.to_list(length=100)
+    
+    is_system_admin = admin.get("type") in ["admin", "access"]
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") in ["super_admin", "ops_manager"]
+    
+    query = {}
+    
+    if is_gov_super_admin:
+        # Only show accounts in the same city
+        query["city"] = admin.get("org")
+        # Hide the requester themselves and other Super Admins for tactical clarity
+        # (They only manage operational accounts)
+        query["role"] = {"$ne": "super_admin"}
+    
+    cursor = db["government_users"].find(query, {"hashed_password": 0}).sort("created_at", -1)
+    accounts = await cursor.to_list(length=200)
+    
     for a in accounts:
         a["id"] = str(a["_id"])
         del a["_id"]
+        
     return accounts
 
 @router.post("/toggle-account")
@@ -154,15 +189,31 @@ async def toggle_gov_account(
     """
     Activate/Deactivate a government account.
     """
+    is_system_admin = admin.get("type") in ["admin", "access"]
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") in ["super_admin", "ops_manager"]
+
+    if not is_system_admin and not is_gov_super_admin:
+        logger.warning(f"🚫 Unauthorized toggle attempt. Type: {admin.get('type')}, Role: {admin.get('role')}")
+        raise HTTPException(status_code=403, detail="Unauthorized: High-level administrative clearance required.")
+
     db = await get_db()
-    result = await db["government_users"].update_one(
+    target = await db["government_users"].find_one({"_id": ObjectId(update.account_id)})
+    if not target:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Scope check for Gov Super Admin
+    if is_gov_super_admin and target.get("city") != admin.get("org"):
+        raise HTTPException(status_code=403, detail="Out of jurisdiction")
+    
+    # Cannot toggle other super admins
+    if is_gov_super_admin and target.get("role") == "super_admin" and str(target["_id"]) != admin.get("id"):
+        raise HTTPException(status_code=403, detail="Cannot modify another Super Admin")
+
+    await db["government_users"].update_one(
         {"_id": ObjectId(update.account_id)},
         {"$set": {"is_active": update.is_active, "updated_at": datetime.utcnow()}}
     )
     
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Account not found")
-        
     return {"success": True, "is_active": update.is_active}
 
 @router.post("/login")
@@ -216,15 +267,67 @@ async def delete_gov_account(
     admin: dict = Depends(require_permission("manage_authorities"))
 ):
     """
-    Super Admin only: Delete a government official account.
+    Delete a government official account.
+    """
+    is_system_admin = admin.get("type") in ["admin", "access"]
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") in ["super_admin", "ops_manager"]
+
+    if not is_system_admin and not is_gov_super_admin:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    db = await get_db()
+    
+    # 🛡️ Safety check for ID format
+    try:
+        obj_id = ObjectId(account_id)
+    except Exception:
+         # Try finding by external 'id' field if stored (fallback)
+         target = await db["government_users"].find_one({"id": account_id})
+         obj_id = target["_id"] if target else None
+
+    if not obj_id:
+        raise HTTPException(status_code=400, detail="Invalid account signature")
+
+    target = await db["government_users"].find_one({"_id": obj_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="Identity not found in database")
+
+    # Scope check: System Admin can do everything. Gov Super Admin only their city.
+    if is_gov_super_admin:
+        if target.get("city") != admin.get("org"):
+            raise HTTPException(status_code=403, detail="Target is out of regional jurisdiction")
+        
+        # Prevent self-deletion via this endpoint (safety)
+        if target.get("email") == admin.get("sub"):
+            raise HTTPException(status_code=400, detail="Self-decommission must be handled via security settings")
+
+    await db["government_users"].delete_one({"_id": obj_id})
+    return {"success": True, "message": "Identity successfully purged from command node"}
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    password: Optional[str] = None
+
+@router.put("/profile")
+async def update_gov_profile(
+    update: ProfileUpdate,
+    user: dict = Depends(require_permission("change_password"))
+):
+    """
+    Allow gov user to update their own profile and password.
     """
     db = await get_db()
-    result = await db["government_users"].delete_one({"_id": ObjectId(account_id)})
-    
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Account not found")
-        
-    return {"success": True, "message": "Account deleted successfully"}
+    upd = {"updated_at": datetime.utcnow()}
+    if update.name: upd["name"] = update.name
+    if update.password:
+        upd["hashed_password"] = get_password_hash(update.password)
+        upd["require_password_change"] = False
+
+    await db["government_users"].update_one(
+        {"email": user["email"]},
+        {"$set": upd}
+    )
+    return {"success": True, "message": "Profile updated"}
 
 @router.post("/reset-password/{account_id}")
 async def reset_gov_password(
@@ -294,3 +397,74 @@ async def reset_gov_password(
         "message": "Password reset successfully. Official has been notified.",
         "temp_password": temp_password
     }
+
+# --- Department Management ---
+
+class DepartmentCreate(BaseModel):
+    name: str
+    description: str
+    icon: Optional[str] = "🏗️"
+
+@router.post("/departments")
+async def create_gov_department(
+    dept: DepartmentCreate,
+    admin: dict = Depends(require_permission("manage_authorities"))
+):
+    """
+    Create a new department in the city.
+    """
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") == "super_admin"
+    is_system_admin = admin.get("type") == "admin"
+
+    if not is_system_admin and not is_gov_super_admin:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    db = await get_db()
+    city = admin.get("org")
+    
+    # Check if exists
+    if await db["gov_departments"].find_one({"city": city, "name": dept.name}):
+        raise HTTPException(status_code=400, detail="Department already exists in this city")
+
+    new_dept = {
+        "name": dept.name,
+        "description": dept.description,
+        "icon": dept.icon,
+        "city": city,
+        "created_at": datetime.utcnow(),
+        "created_by": admin.get("email")
+    }
+    
+    result = await db["gov_departments"].insert_one(new_dept)
+    return {"success": True, "id": str(result.inserted_id)}
+
+@router.get("/departments")
+async def list_gov_departments(admin: dict = Depends(require_permission("view_authorities"))):
+    """
+    List all departments for the city.
+    """
+    db = await get_db()
+    city = admin.get("org")
+    cursor = db["gov_departments"].find({"city": city}).sort("name", 1)
+    depts = await cursor.to_list(length=100)
+    for d in depts:
+        d["id"] = str(d["_id"])
+        del d["_id"]
+    return depts
+
+@router.delete("/departments/{dept_id}")
+async def delete_gov_department(
+    dept_id: str,
+    admin: dict = Depends(require_permission("manage_authorities"))
+):
+    """
+    Delete a department.
+    """
+    db = await get_db()
+    city = admin.get("org")
+    result = await db["gov_departments"].delete_one({"_id": ObjectId(dept_id), "city": city})
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Department not found or unauthorized")
+        
+    return {"success": True}
