@@ -323,6 +323,7 @@ app.add_middleware(
         "http://easier-frontend.vercel.app",
         "https://www.eaiser.ai",
         "https://eaiser.ai",
+        "https://gov.eaiser.ai",
         "https://admin.eaiser.ai",
         "https://eaiserai.io",
         "https://eaiser-backend-u8me.onrender.com",
