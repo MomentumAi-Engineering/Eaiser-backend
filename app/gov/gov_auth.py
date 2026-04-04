@@ -295,7 +295,8 @@ async def gov_login(creds: GovLoginRequest):
             "department": user.get("department"),
             "zip": user.get("zip_code"),
             "org": user.get("city"),
-            "initials": "".join([n[0] for n in user["name"].split() if n]).upper()
+            "initials": "".join([n[0] for n in user["name"].split() if n]).upper(),
+            "avatar_url": user.get("avatar_url")
         }
     }
 
