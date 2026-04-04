@@ -328,7 +328,7 @@ app.add_middleware(
         "https://eaiserai.io",
         "https://eaiser-backend-u8me.onrender.com",
     ],
-    allow_origin_regex=r"http(s)?://([a-zA-Z0-9-]+\.)?localhost(:\d+)?",
+    allow_origin_regex=r"http(s)?://(([a-zA-Z0-9-]+\.)?localhost|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -532,11 +532,11 @@ if admin_users_router:
 
 # Include Gov Auth Router
 try:
-    import app.routes.gov_auth as gov_auth_mod
+    import app.gov.gov_auth as gov_auth_mod
     gov_auth_router = gov_auth_mod.router
 except ImportError:
     try:
-        import routes.gov_auth as gov_auth_mod
+        import gov.gov_auth as gov_auth_mod
         gov_auth_router = gov_auth_mod.router
     except ImportError:
         gov_auth_router = None
@@ -546,11 +546,11 @@ if gov_auth_router:
 
 # Include Gov Portal Content Router (Reports/Stats)
 try:
-    import app.routes.gov_portal as gov_portal_mod
+    import app.gov.gov_portal as gov_portal_mod
     gov_portal_router = gov_portal_mod.router
 except ImportError:
     try:
-        import routes.gov_portal as gov_portal_mod
+        import gov.gov_portal as gov_portal_mod
         gov_portal_router = gov_portal_mod.router
     except ImportError:
         gov_portal_router = None

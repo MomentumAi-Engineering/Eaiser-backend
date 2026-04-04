@@ -20,3 +20,15 @@ certs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Local Dev Scripts / Logs
+app/check_*.py
+app/find_*.py
+app/list_*.py
+app/reset_*.py
+app/*output*.txt

@@ -57,8 +57,10 @@ async def upload_file_to_cloudinary(file: Optional[UploadFile] = None, contents:
             logger.error("No file or contents provided for Cloudinary upload")
             return None
 
-        # Upload using the raw file content bytes
-        upload_result = cloudinary.uploader.upload(
+        import asyncio
+        # Upload using the raw file content bytes in a separate thread because it is blocking I/O!
+        upload_result = await asyncio.to_thread(
+            cloudinary.uploader.upload,
             contents,
             folder=f"eaiser/{folder}",
             resource_type=resource_type

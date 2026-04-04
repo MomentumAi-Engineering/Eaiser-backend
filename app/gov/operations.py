@@ -67,30 +67,142 @@ async def send_municipal_message(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Workable: Send a message to a citizen via their chosen channel.
+    Workable: Send a message to/from a citizen/crew via their chosen channel.
     """
     db = await get_db()
     
+    sender = current_user.get("email", current_user.get("sub", "unknown"))
+    is_staff = current_user.get("role") in ["admin", "staff", "superadmin", "super_admin"]
+    
+    # Very important: thread_id represents the "External/Field" person's email, to group the chat.
+    thread_id = recipient_email if is_staff else sender
+    
     # Log the outbound communication
     communication = {
-        "sender": current_user.get("sub"),
+        "sender": sender,
         "recipient": recipient_email,
+        "thread_id": thread_id,
         "content": message_content,
         "channel": channel.upper(),
-        "timestamp": datetime.utcnow(),
-        "status": "delivered"
+        "timestamp": datetime.utcnow().isoformat(),
+        "status": "delivered",
+        "is_staff": is_staff
     }
     
     await db["gov_communications"].insert_one(communication)
     
-    # If SMS or Email, trigger external providers here
-    # (Simplified for now - returns success)
-    
     return {
         "success": True, 
-        "message": f"Message delivered successfully via {channel.upper()}",
-        "sent_at": datetime.utcnow().isoformat()
+        "message": f"Message delivered successfully",
+        "sent_at": communication["timestamp"]
     }
+
+@router.get("/messages/conversations")
+async def get_conversations(current_user: dict = Depends(get_current_user)):
+    """
+    Get unique chat threads. For staff, returns all. For field crew, returns only their thread.
+    """
+    db = await get_db()
+    is_staff = current_user.get("role") in ["admin", "staff", "superadmin", "super_admin"]
+    user_email = current_user.get("email")
+    
+    match_stage = {} if is_staff else {"thread_id": user_email}
+    
+    # Group by thread_id to find distinct conversations
+    pipeline = [
+        {"$match": match_stage},
+        {"$sort": {"timestamp": -1}}, # newest first
+        {"$group": {
+            "_id": "$thread_id",
+            "last_message": {"$first": "$content"},
+            "timestamp": {"$first": "$timestamp"},
+            "channel": {"$first": "$channel"}
+        }},
+        {"$sort": {"timestamp": -1}}
+    ]
+    cursor = db["gov_communications"].aggregate(pipeline)
+    results = await cursor.to_list(length=50)
+    
+    conversations = []
+    for r in results:
+        # Determine channel styling
+        ch = r.get("channel", "IN-APP").upper()
+        if ch == "SMS": color = "text-blue-400 bg-blue-500/10 border-blue-500/20"
+        elif ch == "EMAIL": color = "text-green-400 bg-green-500/10 border-green-500/20"
+        elif ch == "PUSH": color = "text-purple-400 bg-purple-500/10 border-purple-500/20"
+        else: color = "text-[#D4A017] bg-[#D4A017]/10 border-[#D4A017]/20"
+        
+        # Calculate time string
+        try:
+            ts = r.get("timestamp")
+            if ts:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+                mins = int((datetime.utcnow() - dt).total_seconds() / 60)
+                if mins < 60: time_str = f"{mins} min ago" if mins > 0 else "Just now"
+                elif mins < 1440: time_str = f"{mins//60}h ago"
+                else: time_str = f"{mins//1440}d ago"
+            else:
+                time_str = "Recently"
+        except:
+            time_str = "Recently"
+            
+        # Handle cases where thread_id is missing, fallback to _id
+        tid = r["_id"] or "Unknown"
+            
+        conversations.append({
+            "email": tid,
+            "name": tid.split('@')[0].title().replace('.', ' '),
+            "subject": r.get("last_message", "")[:40] + "..." if len(r.get("last_message", "")) > 40 else r.get("last_message", ""),
+            "time": time_str,
+            "channel": ch,
+            "channelColor": color
+        })
+        
+    return {"conversations": conversations}
+
+@router.get("/messages/history/{email}")
+async def get_message_history(email: str, current_user: dict = Depends(get_current_user)):
+    """
+    Get full chat history for a specific thread_id (email).
+    """
+    db = await get_db()
+    # Support backward compatibility by checking either thread_id matches or recipient matches
+    cursor = db["gov_communications"].find({
+        "$or": [{"thread_id": email}, {"recipient": email, "thread_id": {"$exists": False}}]
+    }).sort("timestamp", 1)
+    
+    results = await cursor.to_list(length=100)
+    
+    messages = []
+    for r in results:
+        # Time formatting
+        try:
+            ts = r.get("timestamp")
+            if ts:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+                
+                # Format to actual time instead of "X min ago" for better reading
+                hour = dt.hour
+                ampm = "AM" if hour < 12 else "PM"
+                formatted_hour = hour % 12 or 12
+                time_str = f"{formatted_hour}:{dt.minute:02d} {ampm}"
+            else:
+                time_str = ""
+        except:
+            time_str = ""
+            
+        is_staff = r.get("is_staff", False)
+        sender_name = "Staff" if is_staff else r.get("sender", email).split('@')[0].title().replace('.', ' ')
+        
+        messages.append({
+            "sender": sender_name,
+            "text": r.get("content"),
+            "time": time_str,
+            "isStaff": is_staff,
+            "status": r.get("status", "read")
+        })
+        
+    return {"messages": messages}
 
 # --- Crew Management ---
 

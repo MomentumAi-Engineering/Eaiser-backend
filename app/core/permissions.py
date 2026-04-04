@@ -10,7 +10,7 @@ PERMISSIONS = {
     "manage_users": ["super_admin"],
 
     # Issue Actions
-    "assign_issue": ["super_admin", "admin"],
+    "assign_issue": ["super_admin", "admin", "operations", "ops_manager"],
     "view_all_issues": ["super_admin", "admin"],
     "view_assigned_issues": ["super_admin", "admin", "team_member"],
     "approve_all": ["super_admin", "admin"],
@@ -42,7 +42,7 @@ PERMISSIONS = {
     # System
     "change_system_settings": ["super_admin"],
     "maintenance_mode": ["super_admin"],
-    "change_password": ["super_admin", "admin", "team_member", "viewer"],
+    "change_password": ["super_admin", "admin", "team_member", "viewer", "operations", "ops_manager"],
     "enable_2fa": ["super_admin", "admin", "team_member"],
     
     # Legacy

@@ -1,9 +1,9 @@
-from fastapi import APIRouter, HTTPException, Depends, Body, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, Body, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from datetime import datetime, timedelta
 from services.mongodb_service import get_db
-from core.auth import get_admin_user, require_permission
+from core.auth import get_admin_user, require_permission, get_current_user
 from utils.security import get_password_hash, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 import logging
 import secrets
@@ -29,10 +29,19 @@ class GovAccountCreate(BaseModel):
 class GovLoginRequest(BaseModel):
     email: str
     password: str
+    platform: Optional[str] = None # 'app' or 'portal'
 
 class AccountStatusUpdate(BaseModel):
     account_id: str
     is_active: bool
+
+class ContractorCreate(BaseModel):
+    company: str
+    contact: str
+    dept: str
+    value: float
+    rating: float
+    status: str
 
 # --- Endpoints ---
 
@@ -50,16 +59,26 @@ async def setup_gov_account(
     # Only allow System Admin OR Gov Super Admin to create accounts
     is_system_admin = admin.get("type") == "admin"
     is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") == "super_admin"
+    is_operations = admin.get("type") == "gov_portal" and admin.get("role") == "operations"
 
-    if not is_system_admin and not is_gov_super_admin:
-        raise HTTPException(status_code=403, detail="Only System Admins or Government Super Admins can provision accounts")
+    if not is_system_admin and not is_gov_super_admin and not is_operations:
+        raise HTTPException(status_code=403, detail="Unauthorized to provision accounts")
+
+    target_role = account.role if account.role else "operations"
+
+    # Operations Staff can ONLY create Crew Members (for their own department)
+    if is_operations:
+        if target_role != "crew_member":
+            raise HTTPException(status_code=403, detail="Operations staff can only create Crew Members")
+        if account.department != admin.get("dept"):
+            raise HTTPException(status_code=403, detail=f"Can only create Crew Members for your assigned department ({admin.get('dept')})")
+        account.city = admin.get("org", account.city) # Force same city
 
     # Gov Super Admins can only create accounts for their own City
     if is_gov_super_admin and account.city != admin.get("org"):
         raise HTTPException(status_code=403, detail="You can only provision accounts for your own city")
     
     # Gov Super Admins cannot create other Super Admins (Security safeguard)
-    target_role = account.role if account.role else "operations"
     if is_gov_super_admin and target_role == "super_admin":
         raise HTTPException(status_code=403, detail="Only System Admins can provision new Super Admin accounts")
 
@@ -128,13 +147,13 @@ async def setup_gov_account(
     """
     
     text_content = f"""
-Welcome to EAiSER Government Portal
+Welcome to EAiSER Platform
 
 Hello {account.name},
 
-An official account has been created for you for {account.city} - {account.department}.
+An official account has been created for you ("{target_role.replace('_', ' ').title()}") for {account.city} - {account.department}.
 
-Login at: https://gov.eaiser.ai
+Login via EAiSER App/Portal.
 Email: {account.email.lower()}
 Temporary Password: {temp_password}
 
@@ -162,17 +181,24 @@ async def list_gov_accounts(admin: dict = Depends(require_permission("view_autho
     
     is_system_admin = admin.get("type") in ["admin", "access"]
     is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") in ["super_admin", "ops_manager"]
+    is_operations = admin.get("type") == "gov_portal" and admin.get("role") == "operations"
     
     query = {}
     
     if is_gov_super_admin:
-        # Gov Super Admin sees ONLY Operations Staff in their city
+        # Gov Super Admin sees Operations Staff & Crew Members in their city
         query["city"] = admin.get("org")
-        query["role"] = "operations"
+        query["role"] = {"$in": ["operations", "crew_member"]}
+    elif is_operations:
+        # Operations Staff sees ONLY Crew Members in their specific city AND department
+        query["city"] = admin.get("org")
+        query["department"] = admin.get("dept")
+        query["role"] = "crew_member"
     elif is_system_admin:
         # System Admin sees ALL accounts for management
-        # (The frontend will handle grouping by city/manager)
         pass
+    else:
+        return [] # Safe fallback
     
     cursor = db["government_users"].find(query, {"hashed_password": 0}).sort("created_at", -1)
     accounts = await cursor.to_list(length=1000)
@@ -232,7 +258,17 @@ async def gov_login(creds: GovLoginRequest):
     
     if not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Account is deactivated. Please contact EAiSER Admin.")
+        
+    role = user.get("role", "viewer")
+    req_platform = creds.platform or "unknown"
+        
+    # Enforce strict cross-platform boundaries with NO exceptions
+    if role == "crew_member" and req_platform != "app":
+        raise HTTPException(status_code=403, detail="Login Blocked: Crew members must log in via the Mobile Field App.")
     
+    if role in ["operations", "super_admin", "ops_manager"] and req_platform != "portal":
+        raise HTTPException(status_code=403, detail="Login Blocked: Operations/Admin staff must log in via the Web Command Center.")
+        
     # Generate token with department and zip context
     role = user.get("role", "viewer")
     token_data = {
@@ -309,18 +345,31 @@ async def delete_gov_account(
 class ProfileUpdate(BaseModel):
     name: Optional[str] = None
     password: Optional[str] = None
+    current_password: Optional[str] = None
+    zip_code: Optional[str] = None
 
 @router.put("/profile")
 async def update_gov_profile(
     update: ProfileUpdate,
-    user: dict = Depends(require_permission("change_password"))
+    user: dict = Depends(get_current_user)
 ):
     """
     Allow gov user to update their own profile and password.
     """
     db = await get_db()
+    
+    # If the user is trying to change password, verify the current one
+    if update.password:
+        if not update.current_password:
+             raise HTTPException(status_code=400, detail="Current password is required to set a new password")
+        
+        gov_user = await db["government_users"].find_one({"email": user["email"]})
+        if not verify_password(update.current_password, gov_user.get("hashed_password", "")):
+             raise HTTPException(status_code=401, detail="Incorrect current password")
+             
     upd = {"updated_at": datetime.utcnow()}
     if update.name: upd["name"] = update.name
+    if update.zip_code: upd["zip_code"] = update.zip_code
     if update.password:
         upd["hashed_password"] = get_password_hash(update.password)
         upd["require_password_change"] = False
@@ -330,6 +379,25 @@ async def update_gov_profile(
         {"$set": upd}
     )
     return {"success": True, "message": "Profile updated"}
+
+@router.post("/profile/avatar")
+async def update_gov_avatar(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user)
+):
+    from services.cloudinary_service import upload_file_to_cloudinary
+    db = await get_db()
+    contents = await file.read()
+    result = await upload_file_to_cloudinary(contents=contents, folder="gov_avatars")
+    
+    if result and result.get("url"):
+        url = result.get("url")
+        await db["government_users"].update_one(
+            {"email": user["email"]},
+            {"$set": {"avatar_url": url, "updated_at": datetime.utcnow()}}
+        )
+        return {"success": True, "avatar_url": url}
+    raise HTTPException(status_code=500, detail="Failed to upload avatar")
 
 @router.post("/reset-password/{account_id}")
 async def reset_gov_password(
@@ -468,5 +536,65 @@ async def delete_gov_department(
     
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Department not found or unauthorized")
+        
+    return {"success": True}
+
+# --- Contractor Management --
+
+@router.post("/contractors")
+async def create_contractor(
+    contractor: ContractorCreate,
+    admin: dict = Depends(require_permission("manage_authorities"))
+):
+    """
+    Super Admin only: Register a new Contractor company.
+    """
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") in ["super_admin", "ops_manager"]
+    if not is_gov_super_admin:
+        raise HTTPException(status_code=403, detail="Only Super Admins can onboard contractors")
+
+    db = await get_db()
+    
+    new_con = contractor.dict()
+    new_con["city"] = admin.get("org")
+    new_con["created_at"] = datetime.utcnow()
+    
+    result = await db["gov_contractors"].insert_one(new_con)
+    return {"id": str(result.inserted_id), "status": "Active Contractor Registered"}
+
+@router.get("/contractors")
+async def get_contractors(
+    admin: dict = Depends(require_permission("view_authorities"))
+):
+    """
+    List all contractors for the city. Can be viewed by Ops Staff and Super Admins.
+    """
+    db = await get_db()
+    city = admin.get("org")
+    
+    cursor = db["gov_contractors"].find({"city": city}).sort("created_at", -1)
+    contractors = await cursor.to_list(length=100)
+    
+    for c in contractors:
+        c["id"] = str(c["_id"])
+        del c["_id"]
+        
+    return contractors
+
+@router.delete("/contractors/{contractor_id}")
+async def delete_contractor(
+    contractor_id: str,
+    admin: dict = Depends(require_permission("manage_authorities"))
+):
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") in ["super_admin", "ops_manager"]
+    if not is_gov_super_admin:
+        raise HTTPException(status_code=403, detail="Only Super Admins can remove contractors")
+
+    db = await get_db()
+    city = admin.get("org")
+    
+    result = await db["gov_contractors"].delete_one({"_id": ObjectId(contractor_id), "city": city})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Contractor not found or unauthorized")
         
     return {"success": True}
