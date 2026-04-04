@@ -498,6 +498,25 @@ async def assign_incident(
                 "assignment": str(issue["_id"])
             }}
         )
+        # Check for push application token and trigger alert
+        user_auth = await db["gov_users"].find_one({"email": payload.staff_email})
+        if user_auth and user_auth.get("push_token"):
+            push_payload = {
+                "to": user_auth["push_token"],
+                "sound": "default",
+                "title": "EAiSER Command Center",
+                "body": f"Incident {payload.issue_id} has been dispatched to you. Acknowledge immediately.",
+                "data": {"type": "assignment", "issue_id": str(issue["_id"])}
+            }
+            try:
+                import httpx
+                import asyncio
+                async def fire_push():
+                    async with httpx.AsyncClient() as client:
+                        await client.post("https://exp.host/--/api/v2/push/send", json=push_payload)
+                asyncio.create_task(fire_push())
+            except Exception as e:
+                logger.error(f"Failed to kick off dispatch push: {e}")
     
     logger.info(f"✅ DEPLOYMENT: Incident {payload.issue_id} assigned to {payload.staff_email} by {current_user.get('email')}")
     

@@ -5,6 +5,8 @@ from typing import List, Optional
 from bson import ObjectId
 from datetime import datetime
 import logging
+import httpx
+import asyncio
 
 router = APIRouter(
     prefix="/gov/v2",
@@ -59,11 +61,27 @@ async def update_report_status(
 
 # --- Messaging & Notifications ---
 
+@router.post("/set-expo-push-token")
+async def save_push_token(
+    push_token: str = Body(..., embed=True),
+    current_user: dict = Depends(get_current_user)
+):
+    db = await get_db()
+    user_email = current_user.get("email", current_user.get("sub"))
+    
+    await db["gov_users"].update_one(
+        {"email": user_email},
+        {"$set": {"push_token": push_token}}
+    )
+    return {"success": True}
+
+
 @router.post("/message")
 async def send_municipal_message(
     recipient_email: str = Body(..., embed=True),
     message_content: str = Body(..., embed=True),
     channel: str = Body("in-app", embed=True),
+    reply_to_text: str = Body(None, embed=True),
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -72,7 +90,7 @@ async def send_municipal_message(
     db = await get_db()
     
     sender = current_user.get("email", current_user.get("sub", "unknown"))
-    is_staff = current_user.get("role") in ["admin", "staff", "superadmin", "super_admin"]
+    is_staff = current_user.get("role") in ["admin", "staff", "superadmin", "super_admin", "operations", "ops_manager"]
     
     # Very important: thread_id represents the "External/Field" person's email, to group the chat.
     thread_id = recipient_email if is_staff else sender
@@ -83,6 +101,7 @@ async def send_municipal_message(
         "recipient": recipient_email,
         "thread_id": thread_id,
         "content": message_content,
+        "reply_to_text": reply_to_text,
         "channel": channel.upper(),
         "timestamp": datetime.utcnow().isoformat(),
         "status": "delivered",
@@ -91,11 +110,36 @@ async def send_municipal_message(
     
     await db["gov_communications"].insert_one(communication)
     
+    # ⚡ EXPO PUSH NOTIFICATION (If recipient is on mobile and has registered a push token)
+    if is_staff:
+        # Meaning a Command Center staff is sending to the field worker.
+        target_user = await db["gov_users"].find_one({"email": recipient_email})
+        if target_user and target_user.get("push_token"):
+            push_payload = {
+                "to": target_user["push_token"],
+                "sound": "default",
+                "title": f"EAiSER Command Center",
+                "body": message_content,
+                "data": {"type": "message", "sender": sender}
+            }
+            try:
+                # Fire and forget asynchronously
+                asyncio.create_task(send_push(push_payload))
+            except Exception as e:
+                logger.error(f"Error kicking off push notification: {e}")
+
     return {
         "success": True, 
         "message": f"Message delivered successfully",
         "sent_at": communication["timestamp"]
     }
+
+async def send_push(payload: dict):
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.post("https://exp.host/--/api/v2/push/send", json=payload)
+        except Exception as e:
+            logger.error(f"Expo Push failed: {e}")
 
 @router.get("/messages/conversations")
 async def get_conversations(current_user: dict = Depends(get_current_user)):
@@ -103,7 +147,7 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
     Get unique chat threads. For staff, returns all. For field crew, returns only their thread.
     """
     db = await get_db()
-    is_staff = current_user.get("role") in ["admin", "staff", "superadmin", "super_admin"]
+    is_staff = current_user.get("role") in ["admin", "staff", "superadmin", "super_admin", "operations", "ops_manager"]
     user_email = current_user.get("email")
     
     match_stage = {} if is_staff else {"thread_id": user_email}
@@ -197,6 +241,7 @@ async def get_message_history(email: str, current_user: dict = Depends(get_curre
         messages.append({
             "sender": sender_name,
             "text": r.get("content"),
+            "reply_to_text": r.get("reply_to_text"),
             "time": time_str,
             "isStaff": is_staff,
             "status": r.get("status", "read")
