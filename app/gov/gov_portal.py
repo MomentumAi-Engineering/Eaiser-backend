@@ -625,3 +625,88 @@ async def upload_evidence(
     else:
         raise HTTPException(status_code=500, detail="Failed to upload image")
 
+@router.get("/schedule")
+async def get_gov_schedule(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Real-time schedule derived from live assignments.
+    """
+    db = await get_db()
+    user_zip = current_user.get("zip")
+    
+    query_users = {"role": {"$in": ["crew_member", "operations"]}}
+    if user_zip and user_zip != "ALL":
+        query_users["zip_code"] = user_zip
+        
+    cursor_users = db["government_users"].find(query_users)
+    users = await cursor_users.to_list(length=100)
+    
+    crew_names = [u.get("name", "Unknown Official") for u in users]
+    if not crew_names:
+        users = await db["government_users"].find({"role": {"$ne": "super_admin"}}).to_list(100)
+        crew_names = [u.get("name", "Unknown Official") for u in users]
+    
+    crew_names = sorted(list(set(crew_names)))
+    
+    query_issues = {"assigned_to": {"$exists": True, "$ne": None}}
+    if user_zip and user_zip != "ALL":
+        query_issues["zip_code"] = user_zip
+        
+    issues = await db["issues"].find(query_issues).sort("assigned_at", -1).to_list(100)
+    
+    assignments = []
+    
+    for iss in issues:
+        assigned_to_email = iss.get("assigned_to")
+        crew_name = None
+        for u in users:
+            if u.get("email") == assigned_to_email:
+                crew_name = u.get("name")
+                break
+                
+        if not crew_name or crew_name not in crew_names:
+            continue
+            
+        status = iss.get("status")
+        mapped_status = "upcoming"
+        if status in ["resolved", "completed"]: mapped_status = "completed"
+        elif status in ["in_progress", "assigned", "pending_verification"]: mapped_status = "in-progress"
+        
+        ts = iss.get("assigned_at") or iss.get("timestamp")
+        if isinstance(ts, str):
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except:
+                dt = datetime.utcnow()
+        elif isinstance(ts, datetime):
+            dt = ts
+        else:
+            dt = datetime.utcnow()
+            
+        hour = dt.hour
+        idx = hour - 6
+        if idx < 0: idx = max(0, hour)
+        if idx > 12: idx = 11
+        
+        start = idx
+        end = min(start + 2, 12)
+        
+        issue_type = iss.get("issue_type", "Task").replace("_", " ").title()
+        street = iss.get("address", "").split(",")[0][:15] if iss.get("address") else "Location hidden"
+        task_label = f"{issue_type} - {street}"
+        
+        assignments.append({
+            "crew": crew_name,
+            "start": start,
+            "end": end,
+            "task": task_label,
+            "status": mapped_status,
+            "id": str(iss.get("_id"))
+        })
+
+    return {
+        "crew": crew_names,
+        "assignments": assignments
+    }
+
