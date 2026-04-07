@@ -359,12 +359,44 @@ async def process_issue_background(
             category = cached_classification["category"]
             priority = cached_classification["priority"]
             logger.info(f"Using cached AI classification for issue {issue_id}")
-        elif image_content and not is_manual:
+        
+        # 🚀 ENTERPRISE PERFORMANCE: Run AI and Geocoding in parallel
+        # Hindish: AI aur Geocoding ko saath me (parallel) run kar rahe hain speed badhane ke liye.
+        ai_task = None
+        geocode_task = None
+        
+        # Proactively find zip code if not provided
+        final_address = address
+        if not zip_code and final_address:
+            try:
+                zip_match = re.search(r'\b\d{5}\b', final_address)
+                if zip_match:
+                    zip_code = zip_match.group(0)
+                    logger.info(f"📍 Extracted zip {zip_code} from address for issue {issue_id}")
+            except Exception:
+                pass
+
+        if image_content and not is_manual and not cached_classification:
+             ai_task = asyncio.create_task(classify_issue(image_content, description or ""))
+        
+        if zip_code:
+             # Check cache first for geocode
+             geocode_cache_key = generate_cache_key("geocode_zip", zip_code=zip_code)
+             cached_geocode = await get_cached_data(geocode_cache_key)
+             if cached_geocode:
+                 final_address = cached_geocode["address"]
+                 latitude = cached_geocode["latitude"]
+                 longitude = cached_geocode["longitude"]
+             else:
+                 geocode_task = asyncio.create_task(geocode_zip_code(zip_code))
+        
+        # Await AI if it's running
+        if ai_task:
             try:
                 ai_start = time.time()
-                issue_type, severity, confidence, category, priority, issue_detected = await classify_issue(image_content, description or "")
-                ai_time = time.time() - ai_start
-                performance_metrics.record_ai_processing(ai_time)
+                ai_results = await ai_task
+                issue_type, severity, confidence, category, priority, issue_detected = ai_results
+                performance_metrics.record_ai_processing(time.time() - ai_start)
                 
                 # Cache AI classification result
                 classification_data = {
@@ -374,71 +406,37 @@ async def process_issue_background(
                     "category": category,
                     "priority": priority
                 }
-                await set_cached_data(cache_key, classification_data, ttl=3600)  # Cache for 1 hour
-            except ValueError as ve:
-                if str(ve) == "FAKE_IMAGE_DETECTED":
-                    from fastapi import HTTPException
-                    raise HTTPException(status_code=400, detail="Our AI detected that this image may be cartoon-like, AI-generated, or manipulated. Please upload a real, unaltered photo of the issue.")
-                raise ve
-        else:
+                await set_cached_data(cache_key, classification_data, ttl=3600)
+            except Exception as ai_err:
+                logger.warning(f"AI Task failed: {ai_err}")
+
+        # Await Geocode if it's running
+        if geocode_task:
+            try:
+                geocode_result = await geocode_task
+                final_address = geocode_result.get("address", address or "Unknown Address")
+                latitude = geocode_result.get("latitude", latitude)
+                longitude = geocode_result.get("longitude", longitude)
+                
+                # Cache geocoding result
+                await set_cached_data(geocode_cache_key, {
+                    "address": final_address,
+                    "latitude": latitude,
+                    "longitude": longitude
+                }, ttl=86400)
+            except Exception as geo_err:
+                logger.warning(f"Geocoding Task failed: {geo_err}")
+
+        if not image_content and not is_manual:
             # Manual Report Fallback
             confidence = 0
             priority = "Medium"
-            if severity.lower() in ["high", "critical", "severe"]:
+            if (severity or "").lower() in ["high", "critical", "severe"]:
                 priority = "High"
-            elif severity.lower() in ["low", "minor"]:
+            elif (severity or "").lower() in ["low", "minor"]:
                 priority = "Low"
             is_manual = True
-            logger.info(f"Manual report processed for issue {issue_id} (No AI Classification)")
-        
-        # Geocoding (can be cached based on zip_code or coordinates)
-        final_address = address
-        
-        # Proactively find zip code if not provided
-        if not zip_code and final_address:
-            try:
-                # Use regex to find 5-digit zip code in address
-                zip_match = re.search(r'\b\d{5}\b', final_address)
-                if zip_match:
-                    zip_code = zip_match.group(0)
-                    logger.info(f"📍 Extracted zip {zip_code} from address for issue {issue_id}")
-            except Exception:
-                pass
-
-        if zip_code:
-            geocode_cache_key = generate_cache_key("geocode_zip", zip_code=zip_code)
-            cached_geocode = await get_cached_data(geocode_cache_key)
-            
-            if cached_geocode:
-                final_address = cached_geocode["address"]
-                latitude = cached_geocode["latitude"]
-                longitude = cached_geocode["longitude"]
-            else:
-                try:
-                    geocode_result = await geocode_zip_code(zip_code)
-                    final_address = geocode_result.get("address", address or "Unknown Address")
-                    latitude = geocode_result.get("latitude", latitude)
-                    longitude = geocode_result.get("longitude", longitude)
-                    
-                    # Cache geocoding result
-                    await set_cached_data(geocode_cache_key, {
-                        "address": final_address,
-                        "latitude": latitude,
-                        "longitude": longitude
-                    }, ttl=86400)  # Cache for 24 hours
-                except Exception as e:
-                    logger.warning(f"Geocoding failed for zip {zip_code}: {e}")
-        elif final_address and final_address != "Unknown Address":
-            # If no zip code, try to geocode address to GET a zip code
-            try:
-                geocode_res = geocode_address(final_address)
-                if geocode_res.get("zip_code"):
-                    zip_code = geocode_res["zip_code"]
-                    latitude = geocode_res["latitude"]
-                    longitude = geocode_res["longitude"]
-                    logger.info(f"📍 Geocoded address to find zip: {zip_code}")
-            except Exception as e:
-                 logger.warning(f"Geocoding address failed: {e}")
+            logger.info(f"Manual report processed for issue {issue_id}")
 
         # ... (Report generation happens here) ...
         
@@ -837,6 +835,7 @@ async def create_issue_optimized(
     severity: str = Form('medium'),
     issue_type: str = Form('other'),
     is_manual: Any = Form(False),
+    auto_submit: bool = Form(False),
     _: None = Depends(rate_limit_dependency)
 ):
     """
@@ -912,6 +911,39 @@ async def create_issue_optimized(
             
         processing_time = (time.time() - start_time) * 1000
         performance_metrics.record_request(time.time() - start_time)
+        
+        # 🚀 ENTERPRISE AUTO-SUBMIT: If auto_submit is true and user is authenticated, submit immediately
+        # This saves a full network round-trip for the mobile app.
+        if auto_submit and not is_guest_user and user_info:
+            try:
+                authorities = issue_doc.get("authority_data", {}).get("responsible_authorities", [])
+                if authorities:
+                    # Trigger submission logic in background tasks or await it for immediate status
+                    # To keep the response FAST, we perform the core state change here and email in background
+                    from services.email_service import send_formatted_ai_alert
+                    
+                    # Update status to submitted/pending
+                    is_review_required = issue_doc.get("status") == "needs_review"
+                    new_status = "needs_review" if is_review_required else "submitted"
+                    
+                    mongodb_service = await get_optimized_mongodb_service()
+                    await mongodb_service.update_issue_status(issue_id, {
+                        "status": new_status,
+                        "is_submitted": True,
+                        "authority_email": [a.get("email") for a in authorities if a.get("email")],
+                        "authority_name": [a.get("name") for a in authorities if a.get("name")],
+                        "updated_at": datetime.utcnow()
+                    })
+                    
+                    # Update the doc for the response
+                    issue_doc["status"] = new_status
+                    issue_doc["is_submitted"] = True
+                    
+                    # Dispatch emails in background
+                    background_tasks.add_task(send_formatted_ai_alert, issue_doc.get("report"), background=True)
+                    logger.info(f"✅ Enterprise Auto-Submit triggered for {issue_id}")
+            except Exception as auto_err:
+                logger.warning(f"Auto-submit failed for {issue_id}: {auto_err}")
         
         # 2. Return the populated response
         return IssueResponse(

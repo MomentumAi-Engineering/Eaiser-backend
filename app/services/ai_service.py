@@ -218,7 +218,7 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
         category = issue_category_map.get(issue_type, "public")
         priority = "High" if severity == "High" or confidence > 90 else "Medium"
         logger.info(f"Heuristic classification (no Gemini): {issue_type}, severity {severity}, confidence {confidence}")
-        return issue_type, severity, confidence, category, priority
+        return issue_type, severity, confidence, category, priority, True
     
     for attempt in range(1):  # Retry reduced to 1 to cut latency
         try:
@@ -439,16 +439,16 @@ Return JSON:
                 priority = "Low"
 
             logger.info(f"Issue classified as {issue_type} with severity {severity} (confidence: {confidence}, category: {category}, priority: {priority})")
-            return issue_type, severity, confidence, category, priority
+            return issue_type, severity, confidence, category, priority, True
         except ValueError as ve:
             if str(ve) == "FAKE_IMAGE_DETECTED":
                 raise ve
             logger.warning(f"Attempt {attempt + 1} failed to classify issue: {str(ve)}")
-            return "unknown", "Medium", 50.0, "public", "Medium"
+            return "unknown", "Medium", 50.0, "public", "Medium", True
         except Exception as e:
             logger.warning(f"Attempt {attempt + 1} failed to classify issue: {str(e)}")
             # Immediate fallback to avoid multiple retries
-            return "unknown", "Medium", 50.0, "public", "Medium"
+            return "unknown", "Medium", 50.0, "public", "Medium", True
 
 async def generate_report(
     image_content: bytes,
