@@ -779,9 +779,10 @@ async def create_issue(
     category: str = Form('public'),
     
     severity: str = Form('medium'),
-    issue_type: str = Form('other')
+    issue_type: str = Form('other'),
+    report_source: str = Form('automatic')
 ):
-    logger.debug(f"Creating issue with address: {address}, zip: {zip_code}, lat: {latitude}, lon: {longitude}")
+    logger.debug(f"Creating issue with address: {address}, zip: {zip_code}, lat: {latitude}, lon: {longitude}, source: {report_source}")
     try:
         db = await get_db()
         fs = await get_fs()
@@ -789,11 +790,25 @@ async def create_issue(
         logger.error(f"Failed to initialize database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
+    # Process image if one was uploaded, regardless of auto/manual flow
+    image_content = b''
+    image_id_str = None
+    if image is not None:
+        if not image.content_type.startswith("image/"):
+            logger.error(f"Invalid image format: {image.content_type}")
+            raise HTTPException(status_code=400, detail="Invalid image format")
+        try:
+            image_content = await image.read()
+            logger.debug(f"Image read, size: {len(image_content)} bytes")
+            # Basic optimization could go here if needed...
+        except Exception as e:
+            logger.error(f"Failed to read image: {str(e)}", exc_info=True)
+
     # -------------------------------------------------------------
-    # 1. MANUAL REPORT FLOW (No Image)
+    # 1. MANUAL REPORT FLOW (Always hits if report_source == 'manual' OR image is missing entirely)
     # -------------------------------------------------------------
-    if image is None:
-        logger.info("📝 Processing MANUAL REPORT (No Image Provided)")
+    if image_content == b'' or report_source == 'manual':
+        logger.info(f"📝 Processing MANUAL REPORT (Source: {report_source})")
         
         issue_id = generate_short_id()
         
@@ -868,12 +883,12 @@ async def create_issue(
             issue_t = str(_overview.get('issue_type', 'Manual Report'))
             sev_t = str(_overview.get('severity', 'medium'))
 
-        # Save to DB (Status: draft/pending)
+        # Save to DB (Status: needs_review instead of pending)
         await store_issue(
              db,
              fs,
              issue_id,
-             b'', # Empty image content
+             image_content, # Pass whatever image content we have (b'' or actual bytes)
              _m_rep,
              {}, # unified_report
              final_address,
@@ -886,7 +901,8 @@ async def create_issue(
              "Medium", # priority
              user_email,
              [], # responsible_authorities
-             [] # available_authorities
+             [], # available_authorities
+             status="needs_review"
         )
         
         return IssueResponse(
@@ -907,7 +923,10 @@ async def create_issue(
         raise HTTPException(status_code=400, detail="Invalid image format")
     
     try:
-        image_content = await image.read()
+        # We already read image_content at the top
+        if not image_content:
+            await image.seek(0)
+            image_content = await image.read()
         logger.debug(f"Image read successfully, size: {len(image_content)} bytes")
         
         # Performance: Resize/Optimize image before processing
@@ -954,7 +973,7 @@ async def create_issue(
 
     try:
         # Pass reduced image to initial classifier
-        issue_type, severity, confidence, category, priority = await classify_issue(image_content, description or "")
+        issue_type, severity, confidence, category, priority, issue_detected = await classify_issue(image_content, description or "")
         if not issue_type:
             logger.error("Failed to classify issue type")
             raise ValueError("Failed to classify issue type")
@@ -965,7 +984,7 @@ async def create_issue(
         # ---------------------------------------------------------------
         fire_override = apply_fire_detection_override(
             description=description or "",
-            issue_detected=True,  # classify_issue doesn't return issue_detected; default True
+            issue_detected=issue_detected, 
             issue_type=issue_type,
             severity=severity,
             ai_confidence_percent=confidence,
@@ -2199,6 +2218,31 @@ async def update_status(issue_id: str, status_update: IssueStatusUpdate):
     except Exception as e:
         logger.error(f"Failed to update status for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update status: {str(e)}")
+
+from services.mongodb_service import get_report
+
+@router.get("/issues/{issue_id}")
+async def get_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
+    try:
+        issue = await get_report(issue_id)
+        if not issue:
+            raise HTTPException(status_code=404, detail="Issue not found")
+            
+        # Ensure user can only see their own issues unless admin/staff
+        if current_user.get("role") not in ["super_admin", "operations_staff"]:
+            if issue.get("user_email") != current_user.get("sub"):
+                raise HTTPException(status_code=403, detail="Not authorized to view this issue")
+                
+        issue["_id"] = str(issue["_id"])
+        if "_id" in issue.get("report", {}):
+            issue["report"]["_id"] = str(issue["report"]["_id"])
+            
+        return issue
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get issue {issue_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve issue: {str(e)}")
 
 @router.get("/issues/{issue_id}/image")
 async def get_issue_image(issue_id: str):

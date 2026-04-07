@@ -321,7 +321,8 @@ async def store_issue(
     priority: str,
     user_email: Optional[str],
     responsible_authorities: List[Dict[str, Any]],
-    available_authorities: List[Dict[str, Any]]
+    available_authorities: List[Dict[str, Any]],
+    status: str = "pending"
 ) -> str:
     """
     Store an issue in MongoDB with zip code and return the image ID.
@@ -391,8 +392,8 @@ async def store_issue(
             "longitude": longitude or 0.0,
             "issue_type": issue_type,
             "severity": severity,
-            "image_id": str(image_id),  # Convert ObjectId to string
-            "status": "pending",
+            "image_id": str(image_id) if image_id else None,  # Convert ObjectId to string
+            "status": status,
             "report": report or {"message": "No report generated"},
             "unified_report": unified_report or {},
             "category": category,

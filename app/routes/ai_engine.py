@@ -89,8 +89,8 @@ async def analyze_image(
 
         if is_real:
             # 2. Classification (only if real)
-            # classify_issue returns: issue_type, severity, confidence, category, priority
-            issue_type, severity, conf, category, priority = await classify_issue(image_content, description or "")
+            # classify_issue returns: issue_type, severity, confidence, category, priority, issue_detected
+            issue_type, severity, conf, category, priority, issue_detected = await classify_issue(image_content, description or "")
             
             response_data["category"] = category
             response_data["issue_type"] = issue_type

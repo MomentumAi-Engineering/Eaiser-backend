@@ -79,6 +79,12 @@ SPECIAL HANDLING RULES:
    - Classify as an UNKNOWN ISSUE "Simulated / Non-Realistic Image".
    - Severity MUST be set to "Low".
    - Set confidence to "Low".
+3. NO VISIBLE ISSUE:
+   - If the image does NOT show any public infrastructure or safety problems, do NOT force a known classification.
+   - Classify as an UNKNOWN ISSUE "No Visible Public Infrastructure Issue".
+   - Severity MUST be set to "Low".
+   - Confidence MUST be set to "Low".
+   - Set internal_review_required to true.
 
 STEP 4 — PRIORITY DETERMINATION
 Apply this logic in exact order:

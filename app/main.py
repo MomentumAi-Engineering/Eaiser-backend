@@ -32,7 +32,17 @@ import logging
 import uvicorn
 import json
 from datetime import datetime
-app = FastAPI(title="Eaiser AI Backend")
+app = FastAPI(title="EAiSER AI Engine", version="2.0.0")
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    import time
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = (time.time() - start_time) * 1000
+    if response.status_code == 422:
+        logger.warning(f"422 Error on {request.method} {request.url.path} - Headers: {dict(request.headers)}")
+    return response
 
 # Ensure static directory exists before mounting
 os.makedirs("static", exist_ok=True)
@@ -357,6 +367,21 @@ async def proxy_places_details(place_id: str, fields: str, key: str):
     with urllib.request.urlopen(req) as response:
         return json.loads(response.read().decode())
 
+@app.get("/api/proxy/geocode")
+async def proxy_geocode(latlng: str = "", place_id: str = "", key: str = ""):
+    import urllib.request, json
+    from urllib.parse import quote
+    api_key = key or os.environ.get("GOOGLE_API_KEY", "")
+    if latlng:
+        url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={quote(latlng)}&key={api_key}"
+    elif place_id:
+        url = f"https://maps.googleapis.com/maps/api/geocode/json?place_id={quote(place_id)}&key={api_key}"
+    else:
+        return {"results": [], "status": "INVALID_REQUEST"}
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req) as response:
+        return json.loads(response.read().decode())
+
 @app.get("/")
 async def read_root():
     return {"message": "Eaiser AI backend is up and running!", "status": "healthy", "timestamp": datetime.now().isoformat()}
@@ -592,20 +617,9 @@ if gov_operations_router:
 if analytics_router:
     app.include_router(analytics_router)
 
-# Explicit wrappers to ensure endpoints exist even if router mounting varies
-from fastapi import UploadFile, File
+# Ensure endpoints exist via ai_router (mounted at /api)
+# The redundant app.post wrappers here were causing 422 conflicts with the router definitions.
 
-@app.post("/api/ai/analyze-image")
-async def analyze_image_endpoint(image: UploadFile = File(...)):
-    if analyze_image_fn:
-        return await analyze_image_fn(image=image)
-    raise HTTPException(status_code=503, detail="AI Service unavailable")
-
-@app.post("/api/analyze-image")
-async def analyze_image_alias_endpoint(image: UploadFile = File(...)):
-    if analyze_image_alias_fn:
-        return await analyze_image_alias_fn(image=image)
-    raise HTTPException(status_code=503, detail="AI Service unavailable")
 
 @app.get("/api/debug/routes")
 async def debug_routes():

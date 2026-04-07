@@ -15,6 +15,8 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
+from services.push_notification_service import trigger_push_notification
+
 # --- Reports & Operations ---
 
 @router.patch("/reports/{report_id}/status")
@@ -34,28 +36,48 @@ async def update_report_status(
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of {allowed_statuses}")
 
     # Use 'issues' collection as the source of truth
+    update_data = {
+        "status": status.lower(),
+        "updated_at": datetime.utcnow(),
+        "updated_by": current_user.get("sub")
+    }
+
     result = await db["issues"].update_one(
         {"_id": ObjectId(report_id) if ObjectId.is_valid(report_id) else report_id},
-        {"$set": {
-            "status": status.lower(),
-            "updated_at": datetime.utcnow(),
-            "updated_by": current_user.get("sub")
-        }}
+        {"$set": update_data}
     )
 
     if result.matched_count == 0:
         # Try finding by issue_id string
         result = await db["issues"].update_one(
             {"issue_id": report_id},
-            {"$set": {
-                "status": status.lower(),
-                "updated_at": datetime.utcnow(),
-                "updated_by": current_user.get("sub")
-            }}
+            {"$set": update_data}
         )
 
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Report not found")
+
+    # ⚡ LIVE PUSH NOTIFICATION to reporter
+    try:
+        issue = await db["issues"].find_one({
+            "$or": [
+                {"_id": ObjectId(report_id) if ObjectId.is_valid(report_id) else report_id},
+                {"issue_id": report_id}
+            ]
+        })
+        
+        if issue and issue.get("user_email"):
+            reporter_email = issue.get("user_email")
+            reporter = await db["users"].find_one({"email": reporter_email})
+            if reporter and reporter.get("push_token"):
+                trigger_push_notification(
+                    push_token=reporter["push_token"],
+                    title=f"Report Update 🚀",
+                    body=f"Your report '{issue.get('issue_type', 'item')}' status is now: {status.upper()}",
+                    data={"issue_id": str(issue["_id"]), "status": status.lower()}
+                )
+    except Exception as e:
+        logger.error(f"Failed to trigger push for status change: {e}")
 
     return {"success": True, "new_status": status, "report_id": report_id}
 

@@ -329,7 +329,8 @@ async def process_issue_background(
     description: str,
     category: str,
     severity: str,
-    issue_type: str
+    issue_type: str,
+    is_manual: bool = False
 ):
     """Process issue in background for better performance"""
     start_time = time.time()
@@ -350,6 +351,7 @@ async def process_issue_background(
         )
         
         cached_classification = await get_cached_data(cache_key)
+        
         if cached_classification:
             issue_type = cached_classification["issue_type"]
             severity = cached_classification["severity"]
@@ -357,10 +359,10 @@ async def process_issue_background(
             category = cached_classification["category"]
             priority = cached_classification["priority"]
             logger.info(f"Using cached AI classification for issue {issue_id}")
-        elif image_content:
+        elif image_content and not is_manual:
             try:
                 ai_start = time.time()
-                issue_type, severity, confidence, category, priority = await classify_issue(image_content, description or "")
+                issue_type, severity, confidence, category, priority, issue_detected = await classify_issue(image_content, description or "")
                 ai_time = time.time() - ai_start
                 performance_metrics.record_ai_processing(ai_time)
                 
@@ -386,6 +388,7 @@ async def process_issue_background(
                 priority = "High"
             elif severity.lower() in ["low", "minor"]:
                 priority = "Low"
+            is_manual = True
             logger.info(f"Manual report processed for issue {issue_id} (No AI Classification)")
         
         # Geocoding (can be cached based on zip_code or coordinates)
@@ -657,6 +660,16 @@ async def process_issue_background(
             decision = None
             final_status = "reported"
 
+        # === 🛡️ TICKET 1: FORCE REVIEW ON AI UNCERTAINTY ===
+        # If the AI service flagged this report for manual review (Scenario B, D, E or 'No Issue')
+        # we MUST route it to 'needs_review' status immediately.
+        try:
+            if report and report.get("_manual_review_required"):
+                logger.info(f"🛡️ AI flagged issue {issue_id} for mandatory manual review (Admin Verification)")
+                final_status = "needs_review"
+        except Exception:
+            pass
+
         # Determine if it's already considered "submitted"
         # 🛡️ FIX: No report is submitted initially anymore, must wait for user approval.
         is_submitted_initially = False 
@@ -750,6 +763,7 @@ async def process_issue_background(
                 "timestamp": datetime.utcnow(),
                 "processing_time_ms": (time.time() - start_time) * 1000,
                 "image_hash": image_hash,
+                "is_manual": is_manual,
                 "is_submitted": is_submitted_initially
             }
             
@@ -822,6 +836,7 @@ async def create_issue_optimized(
     category: str = Form('public'),
     severity: str = Form('medium'),
     issue_type: str = Form('other'),
+    is_manual: Any = Form(False),
     _: None = Depends(rate_limit_dependency)
 ):
     """
@@ -861,6 +876,13 @@ async def create_issue_optimized(
             if len(image_content) > 10 * 1024 * 1024:  # 10MB limit
                 raise HTTPException(status_code=400, detail="Image too large (max 10MB)")
         
+        # Robust parsing of manual flag from Form
+        is_manual_bool = False
+        if isinstance(is_manual, bool):
+            is_manual_bool = is_manual
+        elif isinstance(is_manual, str):
+            is_manual_bool = is_manual.lower() in ("true", "1", "yes")
+            
         # Generate unique issue ID
         issue_id = generate_short_id()
         
@@ -879,7 +901,8 @@ async def create_issue_optimized(
             description=description,
             category=category,
             severity=severity,
-            issue_type=issue_type
+            issue_type=issue_type,
+            is_manual=is_manual_bool
         )
         
         if not issue_doc:
@@ -1484,13 +1507,20 @@ async def submit_issue_optimized(
         # Policy conflict: e.g., controlled fire
         policy_conflict = issue.get("policy_conflict", False)
         
+        # 🛡️ MANUAL REPORT GUARD: If user specifically chose manual/skipped AI
+        is_manual_report = issue.get("is_manual", False) or (conf_val == 0.0 and not issue.get("image_id"))
+        
         # Strictly follow the 75% rule requested by the user
-        # If confidence >= 75, NOT restricted, and NOT a policy conflict -> direct dispatch
         is_high_confidence = conf_val >= 75.0
         
-        logger.info(f"Submit Decision for {issue_id}: Conf={conf_val}%, HighConf={is_high_confidence}, Restricted={is_restricted}, Conflict={policy_conflict}")
+        # 🛡️ EXPLICIT MANUAL CHECK: Handle issue_type directly too
+        is_manual_type = issue_type in ["manual_submission", "manual", "manual_verification_required"]
+        if "Manual Submission" in (issue.get("issue_type") or ""):
+             is_manual_type = True
+
+        logger.info(f"Submit Decision for {issue_id}: Conf={conf_val}%, HighConf={is_high_confidence}, ManualType={is_manual_type}, ManualDoc={issue.get('is_manual')}")
         
-        needs_review = (not is_high_confidence) or is_restricted or policy_conflict
+        needs_review = (not is_high_confidence) or is_restricted or policy_conflict or is_manual_report or is_manual_type
         
         # 🔑 ADMIN REVIEW ROUTING: If routed to Admin Review Team (no mapped authority),
         # always force needs_review=True AND insert into authority_mapping_review queue

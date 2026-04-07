@@ -20,6 +20,7 @@ from datetime import timedelta
 from fastapi import status
 from services.security_service import SecurityService
 from models.security_models import PasswordChangeRequest, TwoFactorSetup, TwoFactorVerify
+from services.push_notification_service import trigger_push_notification
 
 
 # Configure logging
@@ -2392,6 +2393,18 @@ async def resolve_mapping(review_id: str, request: ResolveMappingRequest, admin:
                         "admin_approved_at": datetime.utcnow().isoformat(),
                         "updated_at": datetime.utcnow()
                     })
+
+                    # ⚡ LIVE PUSH NOTIFICATION
+                    reporter_email = issue.get("reporter_email")
+                    if reporter_email:
+                        reporter = await db.users.find_one({"email": reporter_email})
+                        if reporter and reporter.get("push_token"):
+                            trigger_push_notification(
+                                push_token=reporter["push_token"],
+                                title="Report Approved ✅",
+                                body=f"Your report for {request.issue_type} has been dispatched to authorities.",
+                                data={"issue_id": issue_id, "status": "submitted"}
+                            )
         
         return {
             'status': 'approved',
@@ -2450,6 +2463,18 @@ async def reject_mapping(review_id: str, request: RejectMappingRequest, admin: d
                     "admin_rejected_at": datetime.utcnow().isoformat(),
                     "updated_at": datetime.utcnow()
                 })
+
+                # ⚡ LIVE PUSH NOTIFICATION
+                reporter_email = issue.get("reporter_email")
+                if reporter_email:
+                    reporter = await db.users.find_one({"email": reporter_email})
+                    if reporter and reporter.get("push_token"):
+                        trigger_push_notification(
+                            push_token=reporter["push_token"],
+                            title="Report Declined 🔴",
+                            body=f"Your report for '{issue.get('issue_type', 'item')}' was declined by the EAiSER team: {request.reason}",
+                            data={"issue_id": issue_id, "status": "screened_out"}
+                        )
         
         logger.info(f"❌ Admin rejected mapping review {review_id} (issue: {issue_id}) | reason: {request.reason}")
         

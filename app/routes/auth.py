@@ -89,6 +89,9 @@ class NotificationUpdate(BaseModel):
     push: Optional[bool] = None
     updates: Optional[bool] = None
 
+class PushTokenUpdate(BaseModel):
+    token: str
+
 # Schema definitions
 class UserCreate(BaseModel):
     firstName: str
@@ -292,6 +295,7 @@ async def login(user_data: UserLogin):
                 "username": user.get("username", ""),
                 "email": user.get("email"),
                 "role": user.get("role", "user"),
+                "push_token": user.get("push_token"),
                 "email_verified": True
             }
         }
@@ -792,6 +796,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             "email": user.get("email"),
             "role": user.get("role", "user"),
             "avatar": user.get("avatar"),
+            "push_token": user.get("push_token"),
             "notifications": user.get("notifications", {"email": True, "push": False, "updates": True}),
             "email_verified": True,
             "tos_accepted": user.get("tos_accepted", False),
@@ -867,6 +872,23 @@ async def update_notifications(data: NotificationUpdate, current_user: dict = De
     except Exception as e:
         logger.error(f"Error updating notifications: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.post("/push-token")
+async def register_push_token(data: PushTokenUpdate, current_user: dict = Depends(get_current_user)):
+    """Store the device's push token for mobile alerts."""
+    try:
+        db = await get_db()
+        email = current_user.get("sub")
+        
+        await db["users"].update_one(
+            {"email": email},
+            {"$set": {"push_token": data.token, "updated_at": datetime.utcnow()}}
+        )
+        logger.info(f"📲 Registered push token for user: {email}")
+        return {"message": "Push token registered successfully"}
+    except Exception as e:
+        logger.error(f"Error registering push token for {current_user.get('sub')}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register push token")
 
 from fastapi import File, UploadFile
 

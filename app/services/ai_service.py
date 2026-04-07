@@ -39,7 +39,7 @@ else:
 _MODEL = None
 
 def get_gemini_model():
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     global _MODEL
     if _MODEL is not None:
         return _MODEL
@@ -108,23 +108,41 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
                 primary_type = ordered[0].get("type", "Known")
                 tier_or_severity = ordered[0].get("tier_or_severity", "Tier 2")
             
+            # 🛡️ GUARD: If the AI specifically says 'No Visible Public Infrastructure Issue', block it.
+            # This matches the Website's 'No Issue Detected' guard.
+            issue_detected = True
+            if primary_issue == "No Visible Public Infrastructure Issue" or not ordered:
+                issue_detected = False
+                confidence = 0.0
+                primary_issue = "none"
+                logger.warning(f"🚫 AI Guard: No civic issue detected in image. Blocking auto-submission.")
+                return primary_issue, "Low", 0.0, "none", "Low", False 
+
             # Final mappings
             priority = meta.get("final_priority", "Medium")
             severity = "High" if priority == "High" else ("Medium" if priority == "Medium" else "Low")
             
-            # Confidence logic
+            # Confidence logic from V3
             confidence = 85.0
             known = data.get("known_issues", [])
+            unknown = data.get("unknown_issues", [])
+            
             for k in known:
                 if k.get("issue") == primary_issue:
                     conf_map = {"High": 95.0, "Medium": 75.0, "Low": 45.0}
                     confidence = conf_map.get(k.get("confidence", "High"), 85.0)
                     break
+            else:
+                for u in unknown:
+                    if u.get("issue") == primary_issue:
+                        conf_map = {"High": 90.0, "Medium": 65.0, "Low": 35.0} # Lower defaults for unknown
+                        confidence = conf_map.get(u.get("confidence", "Medium"), 65.0)
+                        break
             
             category = "infrastructure" if "Tier 2" in tier_or_severity else ("public_health" if "Tier 3" in tier_or_severity else "safety")
             
             logger.info(f"✅ Classify V3: {primary_issue} ({confidence}%) - {priority}")
-            return primary_issue, severity, confidence, category, priority
+            return primary_issue, severity, confidence, category, priority, True
 
     except Exception as e:
         logger.warning(f"V3 classification failed, using built-in legacy: {e}")

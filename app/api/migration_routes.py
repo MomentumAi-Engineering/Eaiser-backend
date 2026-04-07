@@ -63,12 +63,16 @@ async def analyze_report(
         
         if is_real:
             # Classify
-            c_issue, c_severity, c_conf, c_category, c_priority = await classify_issue(image_content, description)
+            c_issue, c_severity, c_conf, c_category, c_priority, c_detected = await classify_issue(image_content, description)
             category = c_category
             issue_type = c_issue
             severity = c_severity
             priority = c_priority
-            final_confidence = c_conf / 100.0 if c_conf > 1 else c_conf # Normalize to 0-1
+            # If not detected, force confidence to 0
+            if not c_detected:
+                final_confidence = 0.0
+            else:
+                final_confidence = c_conf / 100.0 if c_conf > 1 else c_conf # Normalize to 0-1
         else:
             # It is fake
             # If fake_confidence is 90%, then real confidence is 10% (0.1)
