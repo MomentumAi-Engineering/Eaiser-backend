@@ -66,10 +66,10 @@ class RateLimitConfig:
 # Predefined rate limit configurations
 RATE_LIMIT_CONFIGS = {
     RateLimitTier.FREE: RateLimitConfig(
-        requests_per_minute=30,
-        requests_per_hour=500,
-        requests_per_day=2000,
-        burst_limit=5
+        requests_per_minute=300, # 🚀 INCREASED: 10x throughput for enterprise users
+        requests_per_hour=5000,
+        requests_per_day=50000,
+        burst_limit=50
     ),
     RateLimitTier.PREMIUM: RateLimitConfig(
         requests_per_minute=100,
@@ -157,7 +157,23 @@ class AdvancedRateLimiter:
     
     def _get_client_identifier(self, request: Request) -> str:
         """Get unique client identifier for rate limiting."""
-        # Priority: User ID > API Key > IP Address
+        # 🚀 ENTERPRISE: Priority: JWT Sub > User ID > API Key > IP Address
+        
+        # 1. Try to extract from Authorization Header (JWT)
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            try:
+                from jose import jwt
+                from utils.security import SECRET_KEY, ALGORITHM
+                token = auth_header.split(" ")[1]
+                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                email = payload.get("sub")
+                if email:
+                    return f"user:{email}"
+            except Exception:
+                pass # Fallback if JWT is invalid/expired
+
+        # 2. Manual User ID header
         user_id = request.headers.get("X-User-ID")
         if user_id:
             return f"user:{user_id}"
@@ -166,7 +182,7 @@ class AdvancedRateLimiter:
         if api_key:
             return f"api_key:{hashlib.md5(api_key.encode()).hexdigest()[:12]}"
         
-        # Fallback to IP address
+        # 3. Fallback to IP address
         client_ip = request.client.host if request.client else "unknown"
         forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:

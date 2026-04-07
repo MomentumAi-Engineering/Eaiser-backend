@@ -25,7 +25,19 @@ def generate_short_id():
 router = APIRouter()
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-logger.info(f"Google Auth Configured with Client ID: {GOOGLE_CLIENT_ID[:10]}..." if GOOGLE_CLIENT_ID else "GOOGLE_CLIENT_ID NOT SET")
+GOOGLE_CLIENT_ID_ANDROID = os.environ.get("GOOGLE_CLIENT_ID_ANDROID", GOOGLE_CLIENT_ID)
+GOOGLE_CLIENT_ID_IOS = os.environ.get("GOOGLE_CLIENT_ID_IOS", GOOGLE_CLIENT_ID)
+
+# Combined list of allowed audiences for Google Auth
+ALLOWED_GOOGLE_CLIENT_IDS = [
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_ID_ANDROID,
+    GOOGLE_CLIENT_ID_IOS
+]
+# Remove None/Empty strings
+ALLOWED_GOOGLE_CLIENT_IDS = [cid for cid in ALLOWED_GOOGLE_CLIENT_IDS if cid]
+
+logger.info(f"Google Auth Configured with {len(ALLOWED_GOOGLE_CLIENT_IDS)} Client IDs")
 
 from fastapi.responses import JSONResponse
 
@@ -109,8 +121,12 @@ class GoogleLogin(BaseModel):
     credential: str
 
 class AppleLogin(BaseModel):
-    user: Optional[Any] = None # Can be dict or stringified JSON
-    authorization: Dict[str, Any]
+    user: Optional[Any] = None
+    authorization: Optional[Dict[str, Any]] = None
+    # Support for simple flat schema from mobile frontend
+    identity_token: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -424,11 +440,15 @@ async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTask
             raise HTTPException(status_code=500, detail="Server configuration error: Missing Google Client ID")
 
         try:
-             id_info = id_token.verify_oauth2_token(login_data.credential, requests.Request(), GOOGLE_CLIENT_ID)
+             # 🚀 ENTERPRISE: Support multiple audiences for cross-platform apps
+             id_info = id_token.verify_oauth2_token(
+                 login_data.credential, 
+                 requests.Request(), 
+                 audience=ALLOWED_GOOGLE_CLIENT_IDS
+             )
         except ValueError as ve:
              logger.error(f"Google Token Verification ValueError: {ve}")
-             # Detailed error for debugging (remove in prod if needed, but useful now)
-             raise HTTPException(status_code=400, detail=f"Invalid Token: {str(ve)}")
+             raise HTTPException(status_code=401, detail=f"Invalid Token: {str(ve)}")
         
         if not id_info:
             raise HTTPException(status_code=400, detail="Invalid Google Token")
@@ -543,33 +563,29 @@ async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTask
 @router.post("/apple", response_model=Token)
 async def apple_login(login_data: AppleLogin, background_tasks: BackgroundTasks):
     try:
-        # 1. Extensive Logging for Debugging
-        logger.info(f"--- Apple Login Request ---")
-        auth_info = login_data.authorization
-        id_token_jwt = auth_info.get("id_token")
+        # Support for both nested and flat schemas
+        auth_info = login_data.authorization or {}
+        id_token_jwt = auth_info.get("id_token") or login_data.identity_token
         
+        if not id_token_jwt:
+            raise HTTPException(status_code=400, detail="Missing Apple Identity Token")
+
         # User info only comes on the very FIRST authorization by user
-        # Apple sometimes sends this as a stringified JSON
         user_info = login_data.user
         if isinstance(user_info, str):
             try:
                 import json
                 user_info = json.loads(user_info)
-                logger.info("Successfully parsed stringified user_info")
-            except Exception as e:
-                logger.error(f"Failed to parse stringified user_info: {e}")
+            except:
                 user_info = {}
         elif not user_info:
             user_info = {}
             
-        logger.info(f"Final User Info: {user_info}")
-        
-        # 3. Extract Name from user_info (if provided)
+        # Extract Name (Nested or Flat)
         name_info = user_info.get("name", {})
-        first_name = name_info.get("firstName", "")
-        last_name = name_info.get("lastName", "")
-        logger.info(f"Extracted Names: first='{first_name}', last='{last_name}'")
-
+        first_name = name_info.get("firstName", "") or login_data.first_name or ""
+        last_name = name_info.get("lastName", "") or login_data.last_name or ""
+        
         # Decode id_token for email
         try:
             token_payload = jwt.get_unverified_claims(id_token_jwt)
@@ -578,7 +594,7 @@ async def apple_login(login_data: AppleLogin, background_tasks: BackgroundTasks)
                 raise ValueError("Apple token missing email")
         except Exception as e:
             logger.error(f"Failed to decode Apple id_token: {e}")
-            raise HTTPException(status_code=400, detail="Invalid Apple Token")
+            raise HTTPException(status_code=401, detail="Invalid Apple Token")
 
         db = await get_db()
         email_lower = email.lower()
