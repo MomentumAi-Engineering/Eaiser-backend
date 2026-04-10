@@ -1012,10 +1012,17 @@ async def get_my_issues(
         cached_issues = await get_cached_data(cache_key)
         if cached_issues is not None:
             processing_time = (time.time() - start_time) * 1000
-            return [
-                Issue(**{**issue_data, 'processing_time_ms': processing_time})
-                for issue_data in cached_issues
-            ]
+            safe_cached = []
+            for issue_data in cached_issues:
+                try:
+                    # Ensure _id is handled correctly for Pydantic (cached data might already be strings)
+                    if '_id' in issue_data and not isinstance(issue_data['_id'], str):
+                        issue_data['_id'] = str(issue_data['_id'])
+                    safe_cached.append(Issue(**{**issue_data, 'processing_time_ms': processing_time}))
+                except Exception as e:
+                    logger.warning(f"⚠️ Cache parse error for issue {issue_data.get('_id', 'unknown')}: {e}")
+                    continue
+            return safe_cached
             
         mongodb_service = await get_optimized_mongodb_service()
             
@@ -1026,7 +1033,12 @@ async def get_my_issues(
             "user_email": {"$in": emails_to_check},
             "$or": [
                 {"is_submitted": True},
-                {"status": {"$in": ["reported", "assigned", "in_progress", "working", "resolved", "needs_review", "submitted", "pending", "pending_review"]}}
+                {"status": {"$in": [
+                    "reported", "assigned", "in_progress", "working", "resolved", 
+                    "needs_review", "submitted", "pending", "pending_review",
+                    "rejected", "failed", "declined", "under_review", "investigating",
+                    "approved", "completed", "accepted"
+                ]}}
             ]
         }
         issues_data = await mongodb_service.get_issues_optimized(
@@ -1038,26 +1050,39 @@ async def get_my_issues(
         processing_time = (time.time() - start_time) * 1000
         
         # Format for response and cache
+        clean_issues_data = []
         for issue_data in issues_data:
-            current_id = str(issue_data.get('_id') or issue_data.get('id') or '')
-            if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
-                # Ensure it's treated as UTC by appending 'Z'
-                issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
-            elif 'timestamp' in issue_data and isinstance(issue_data['timestamp'], datetime):
-                 issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
-            
-            # Ensure image_url is present if image_id or hash exists
-            if not issue_data.get('image_url'):
-                if issue_data.get('image_id') or (issue_data.get('image_hash') and issue_data.get('image_hash') != f"manual_{current_id}"):
-                    issue_data['image_url'] = f"/api/issues/{current_id}/image"
+            try:
+                current_id = str(issue_data.get('_id') or issue_data.get('id') or '')
+                issue_data['_id'] = current_id # Force ID to string
+                
+                if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
+                    # Ensure it's treated as UTC by appending 'Z'
+                    issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
+                elif 'timestamp' in issue_data and isinstance(issue_data['timestamp'], datetime):
+                     issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
+                
+                # Ensure image_url is present if image_id or hash exists
+                if not issue_data.get('image_url'):
+                    if issue_data.get('image_id') or (issue_data.get('image_hash') and issue_data.get('image_hash') != f"manual_{current_id}"):
+                        issue_data['image_url'] = f"/api/issues/{current_id}/image"
+                
+                clean_issues_data.append(issue_data)
+            except Exception as fmt_err:
+                logger.warning(f"Formatting error for issue {issue_data.get('_id')}: {fmt_err}")
 
         # Cache for user (shorter TTL for dashboard responsiveness)
-        await set_cached_data(cache_key, issues_data, ttl=30)
+        await set_cached_data(cache_key, clean_issues_data, ttl=30)
         
-        return [
-            Issue(**{**issue_data, 'processing_time_ms': processing_time})
-            for issue_data in issues_data
-        ]
+        final_issues = []
+        for issue_data in clean_issues_data:
+            try:
+                final_issues.append(Issue(**{**issue_data, 'processing_time_ms': processing_time}))
+            except Exception as pydantic_err:
+                logger.error(f"❌ Pydantic validation failed for issue {issue_data.get('_id')}: {pydantic_err}")
+                continue
+                
+        return final_issues
         
     except Exception as e:
         logger.error(f"Failed to get user issues for {user_email}: {e}")

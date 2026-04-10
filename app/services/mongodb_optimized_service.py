@@ -169,12 +169,13 @@ class OptimizedMongoDBService:
                     connectTimeoutMS=45000,
                     socketTimeoutMS=45000,
                     maxPoolSize=100,                 # Optimization for concurrent users
-                    minPoolSize=0,                   # Reduced to 0 to avoid startup hang
+                    minPoolSize=2,                   # Increased to 2 so we always have a hot connection
                     maxIdleTimeMS=30000,
                     waitQueueTimeoutMS=10000,
                     retryWrites=True,
                     compressors=['zlib'],
-                    tlsAllowInvalidCertificates=True
+                    tlsAllowInvalidCertificates=True,
+                    appName="EAiSER-Backend-Write"
                 )
                 
                 # Secondary client for reads (prefer secondary)
@@ -184,12 +185,13 @@ class OptimizedMongoDBService:
                     connectTimeoutMS=45000,
                     socketTimeoutMS=45000,
                     maxPoolSize=100,                 # Optimization for concurrent users
-                    minPoolSize=0,                   # Reduced to 0 to avoid startup hang
+                    minPoolSize=2,                   # Increased to 2 so we always have a hot connection
                     maxIdleTimeMS=45000,
                     waitQueueTimeoutMS=10000,
                     compressors=['zlib'],
                     read_preference=ReadPreference.SECONDARY_PREFERRED,
-                    tlsAllowInvalidCertificates=True
+                    tlsAllowInvalidCertificates=True,
+                    appName="EAiSER-Backend-Read"
                 )
                 
                 # Test connections
@@ -203,8 +205,8 @@ class OptimizedMongoDBService:
                 # Initialize GridFS
                 self.fs = motor.motor_asyncio.AsyncIOMotorGridFSBucket(self.db)
                 
-                # Create indexes for optimal performance
-                await self._create_indexes()
+                # Create indexes for optimal performance in background to speed up startup
+                asyncio.create_task(self._create_indexes())
                 
                 logger.info(f"✅ MongoDB optimized connections established")
                 logger.info(f"📊 Database: {self.db_name}")
@@ -782,71 +784,75 @@ class OptimizedMongoDBService:
     
     async def store_issue_optimized(self, issue_doc: Dict[str, Any], image_content: bytes) -> str:
         """
-        Store issue with optimized batch operation.
+        Store issue with optimized concurrent local and cloud storage.
         
         Args:
-            issue_doc: Issue document to store
+            issue_doc: Issue document to store (must contain '_id')
             image_content: Image binary content
             
         Returns:
-            str: Inserted document ID
+            str: Inserted issue ID
         """
         try:
             from services.cloudinary_service import upload_file_to_cloudinary
             import asyncio
             import io
             
-            # Store image in GridFS as a backup and for intermediate serving
-            if image_content and self.fs:
-                try:
-                    # motor-asyncio upload_from_stream works with streams
-                    # However, open_upload_stream is often easier for bytes buffer
-                    grid_id = await self.fs.upload_from_stream(
-                        f"issue_{issue_doc['_id']}",
-                        image_content,
-                        metadata={"issue_id": issue_doc['_id']}
-                    )
-                    issue_doc['image_id'] = str(grid_id)
-                    logger.info(f"✅ Image stored in GridFS for {issue_doc['_id']}")
-                except Exception as fs_e:
-                    logger.warning(f"⚠️ Failed to store image to GridFS: {fs_e}")
+            issue_id = issue_doc.get('_id')
+            if not issue_id:
+                # Should not happen if generate_short_id was called
+                issue_id = str(uuid.uuid4())[:8].upper()
+                issue_doc['_id'] = issue_id
 
-            # Store image in Cloudinary as a BACKGROUND task to avoid blocking the main API response
+            # 1. Spawn GridFS backup in background if available
+            if image_content and self.fs:
+                async def _gridfs_backup():
+                    try:
+                        # Wrap bytes in a stream for GridFS
+                        # Note: Motor's upload_from_stream expects a file-like object
+                        # We use a wrapper or just write it ourselves
+                        await self.fs.upload_from_stream(
+                            f"issue_{issue_id}.jpg",
+                            io.BytesIO(image_content),
+                            metadata={"issue_id": issue_id}
+                        )
+                        logger.info(f"💾 [Background] GridFS backup complete for {issue_id}")
+                    except Exception as fs_e:
+                        logger.warning(f"⚠️ [Background] GridFS backup failed: {fs_e}")
+                
+                asyncio.create_task(_gridfs_backup())
+
+            # 2. Spawn Cloudinary upload in background
             if image_content:
-                async def _background_cloudinary_storage():
+                async def _cloudinary_upload():
                     try:
                         # Upload bytes to Cloudinary
                         result = await upload_file_to_cloudinary(contents=image_content, folder="report_images")
                         if result and result.get("url"):
-                            # Update issue document with Cloudinary URL
+                            # Update issue document with cloud URL
                             await self.update_one_optimized(
                                 'issues',
-                                {"_id": issue_doc['_id']},
+                                {"_id": issue_id},
                                 {"$set": {
                                     "image_url": result.get("url"),
-                                    "image_stored": True, 
+                                    "image_stored": True,
                                     "image_size": len(image_content)
                                 }}
                             )
-                            logger.info(f"📸 [Background] Image stored in Cloudinary for issue {issue_doc['_id']}")
-                    except Exception as bg_e:
-                        logger.warning(f"⚠️ [Background] Failed to store image to Cloudinary for {issue_doc['_id']}: {bg_e}")
+                            logger.info(f"📸 [Background] Cloudinary storage complete for {issue_id}")
+                    except Exception as cl_e:
+                        logger.warning(f"⚠️ [Background] Cloudinary upload failed: {cl_e}")
                 
-                # Fire and forget (it will run on the current event loop)
-                asyncio.create_task(_background_cloudinary_storage())
-                logger.info(f"⚡ Image upload task to Cloudinary for issue {issue_doc['_id']} spawned in background")
-                
-                # Immediately set a default loading image_url because Cloudinary may take 1-2 sec to process
-                # If you prefer keeping it empty until upload finishes, we leave it out here.
+                asyncio.create_task(_cloudinary_upload())
+
+            # 3. Store metadata immediately to get the response back to user FAST
+            inserted_id = await self.insert_one_optimized('issues', issue_doc)
             
-            # Store the main issue document with or without the image_url
-            issue_id = await self.insert_one_optimized('issues', issue_doc)
-            
-            logger.info(f"✅ Metadata stored for issue {issue_doc['_id']} via optimized operation")
-            return issue_id
+            logger.info(f"✅ Metadata saved for issue {issue_id}. Returning to client...")
+            return inserted_id
             
         except Exception as e:
-            logger.error(f"❌ Failed to store issue metadata: {str(e)}")
+            logger.error(f"❌ Failed to store issue {issue_doc.get('_id')}: {str(e)}")
             raise e
     
     async def get_issue_image_stream(self, issue_id: str):

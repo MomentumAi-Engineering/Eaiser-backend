@@ -40,8 +40,16 @@ async def log_requests(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
     process_time = (time.time() - start_time) * 1000
-    if response.status_code == 422:
-        logger.warning(f"422 Error on {request.method} {request.url.path} - Headers: {dict(request.headers)}")
+    
+    # Logic to capture technical failures for debugging
+    if response.status_code >= 400:
+        # For 400/422, log headers to check Content-Type and field errors
+        headers = dict(request.headers)
+        logger.warning(f"❌ HTTP {response.status_code} on {request.method} {request.url.path}")
+        logger.warning(f"   Headers: {headers}")
+        if "content-type" in headers and "multipart" in headers["content-type"]:
+            logger.info(f"   Note: This was a Multipart request (likely a file upload)")
+            
     return response
 
 # Ensure static directory exists before mounting

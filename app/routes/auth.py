@@ -702,35 +702,40 @@ async def forgot_password(request: ForgotPasswordRequest, background_tasks: Back
         # 1. Check if user exists
         user = await db["users"].find_one({"email": email})
         
-        if user:
-            # 2. Generate secure token
-            raw_token = secrets.token_urlsafe(32)
-            token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-            
-            # 3. Store hashed token in DB with 15-min expiry
-            await db["users"].update_one(
-                {"_id": user["_id"]},
-                {
-                    "$set": {
-                        "reset_password_token": token_hash,
-                        "reset_password_expires": datetime.utcnow() + timedelta(minutes=15)
-                    }
-                }
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No account found with this email address."
             )
-            
-            # 4. Send email in background
-            from services.email_service import send_password_reset_email
-            background_tasks.add_task(send_password_reset_email, user["email"], raw_token)
-            
-            logger.info(f"🔑 Password reset initiated for {email}")
+        
+        # 2. Generate secure token
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        
+        # 3. Store hashed token in DB with 15-min expiry
+        await db["users"].update_one(
+            {"_id": user["_id"]},
+            {
+                "$set": {
+                    "reset_password_token": token_hash,
+                    "reset_password_expires": datetime.utcnow() + timedelta(minutes=15)
+                }
+            }
+        )
+        
+        # 4. Send email in background
+        from services.email_service import send_password_reset_email
+        background_tasks.add_task(send_password_reset_email, user["email"], raw_token)
+        
+        logger.info(f"🔑 Password reset initiated for {email}")
 
-        # Always return generic success message
-        return {"message": "If an account exists with this email, you will receive a password reset link shortly."}
+        return {"message": "Password reset link sent to your email."}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Forgot password error: {e}")
-        # Still return success to prevent enumeration
-        return {"message": "If an account exists with this email, you will receive a password reset link shortly."}
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")
 
 @router.post("/reset-password")
 async def reset_password(request: ResetPasswordRequest):
@@ -803,9 +808,9 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         raw_id = str(user["_id"])
         short_id = raw_id[-7:].upper()
 
-        return {
+        user_data = {
             "id": short_id,
-            "full_id": raw_id, # Keep full ID for internal use if needed
+            "full_id": raw_id,
             "first_name": first_name,
             "last_name": last_name,
             "username": username,
@@ -818,6 +823,12 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             "tos_accepted": user.get("tos_accepted", False),
             "created_at": user.get("created_at")
         }
+        
+        # Ensure created_at is string if it's a datetime
+        if isinstance(user_data.get("created_at"), datetime):
+            user_data["created_at"] = user_data["created_at"].isoformat() + "Z"
+            
+        return user_data
     except Exception as e:
         logger.error(f"Error fetching user: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

@@ -133,7 +133,7 @@ async def init_db():
 
             # Connection pooling for high performance
             "maxPoolSize": int(os.getenv("MONGO_POOL_MAXSIZE", "50")),
-            "minPoolSize": int(os.getenv("MONGO_POOL_MINSIZE", "10")), # Increased default min pool to 10
+            "minPoolSize": 2,                    # Reduced from 10 to avoid startup hang on slow networks
             "maxIdleTimeMS": 120000,
             "waitQueueTimeoutMS": 30000,         # Wait 30s in queue before error
 
@@ -141,6 +141,7 @@ async def init_db():
             "retryWrites": True,
             "w": "majority",
             "readPreference": "primaryPreferred",
+            "appName": "EAiSER-Backend-Standard",
 
             # Additional performance settings
             "compressors": "snappy,zlib",
@@ -650,7 +651,8 @@ async def get_user_issues(user_email: str, limit: int = 50, skip: int = 0) -> Li
         valid_statuses = [
             "needs_review", "waiting_review", "pending", "under_review",
             "submitted", "approved", "completed", "resolved", "rejected", 
-            "declined", "pending_ai", "investigating", "accepted", "failed"
+            "declined", "pending_ai", "investigating", "accepted", "failed",
+            "reported", "assigned", "working", "in_progress"
         ]
         
         # Filter by user_email AND valid status
