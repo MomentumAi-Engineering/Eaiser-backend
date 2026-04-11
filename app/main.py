@@ -64,6 +64,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress noisy pymongo background reconnect logs (DNS glitches are auto-retried)
+logging.getLogger("pymongo.client").setLevel(logging.CRITICAL)
+logging.getLogger("pymongo.topology").setLevel(logging.WARNING)
+logging.getLogger("pymongo.connection").setLevel(logging.WARNING)
+
 # --- MIDDLEWARE & ROUTER IMPORTS ---
 # We use 'app.x' as the primary import path for IDE/Linter compatibility.
 # The project root in the IDE is 'EAiSER Ai - V2', and 'Eaiser-backend' is a subfolder.
@@ -719,9 +724,9 @@ async def load_authority_mappings():
 try:
     import uvloop
     uvloop.install()
-    print("🚀 Using uvloop for high-performance networking.")
+    logger.info("Using uvloop for high-performance networking.")
 except ImportError:
-    print("ℹ️ uvloop not installed or not supported (Windows). Using standard asyncio loop.")
+    logger.info("uvloop not available (Windows). Using standard asyncio loop.")
 
 if __name__ == "__main__":
     import multiprocessing

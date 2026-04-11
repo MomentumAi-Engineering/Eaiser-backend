@@ -257,6 +257,11 @@ async def create_indexes() -> None:
         await issues.create_index([("zip_code", 1)], name="zip_code")
         await issues.create_index([("issue_type", 1)], name="issue_type")
         await issues.create_index([("user_email", 1)], name="user_email")
+        # Compound index for my-issues query: filter by email + status, sort by timestamp
+        await issues.create_index(
+            [("user_email", 1), ("status", 1), ("timestamp", -1)],
+            name="user_email_status_timestamp"
+        )
         await issues.create_index([("latitude", 1), ("longitude", 1)], name="lat_lon")
 
         # Users collection unique email

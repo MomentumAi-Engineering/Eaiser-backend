@@ -1,22 +1,34 @@
-from services.mongodb_service import get_db
 import asyncio
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+import motor.motor_asyncio
 
 async def check():
-    db = await get_db()
-    count = await db['issues'].count_documents({})
-    print(f"Total issues: {count}")
+    uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URL") or os.getenv("MONGODB_URI")
+    client = motor.motor_asyncio.AsyncIOMotorClient(uri, tls=True, tlsAllowInvalidCertificates=False)
+    db_name = os.getenv("MONGODB_NAME", "eaiser")
+    db = client[db_name]
     
-    cursor = db['issues'].find({}).limit(5)
-    issues = await cursor.to_list(length=5)
-    for i, issue in enumerate(issues):
-        print(f"Issue {i}: {issue.get('issue_type')} - {issue.get('status')} - Assigned to: {issue.get('assigned_to')}")
-        
-    counts = await db['government_users'].count_documents({})
-    print(f"Total government_users: {counts}")
-    cursor = db['government_users'].find({}).limit(5)
-    users = await cursor.to_list(length=5)
-    for u in users:
-        print(f"User: {u.get('name')} - {u.get('email')} - {u.get('dept')} - {u.get('zip_code')}")
+    # Check total issues
+    count = await db["issues"].count_documents({})
+    print(f"Total issues in DB: {count}")
+    
+    # Check sample emails
+    cursor = db["issues"].find({}, {"user_email": 1, "_id": 0}).limit(10)
+    emails = await cursor.to_list(10)
+    print(f"Sample emails: {emails}")
+    
+    # Check for this specific user
+    user_count = await db["issues"].count_documents({"user_email": "chrishabh2002@gmail.com"})
+    print(f"Issues for chrishabh2002@gmail.com: {user_count}")
+    
+    # Check case-insensitive
+    import re
+    user_count_ci = await db["issues"].count_documents({"user_email": re.compile("chrishabh", re.IGNORECASE)})
+    print(f"Issues matching 'chrishabh' (case-insensitive): {user_count_ci}")
+    
+    client.close()
 
-if __name__ == "__main__":
-    asyncio.run(check())
+asyncio.run(check())

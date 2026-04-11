@@ -1026,21 +1026,10 @@ async def get_my_issues(
             
         mongodb_service = await get_optimized_mongodb_service()
             
-        # Filter by user_email with ultra-fast indexed exact match instead of slow regex COLLSCAN
-        # Most emails are stored exactly or perfectly lowercase
-        emails_to_check = [user_email, user_email.lower(), user_email.upper()]
-        filter_query = {
-            "user_email": {"$in": emails_to_check},
-            "$or": [
-                {"is_submitted": True},
-                {"status": {"$in": [
-                    "reported", "assigned", "in_progress", "working", "resolved", 
-                    "needs_review", "submitted", "pending", "pending_review",
-                    "rejected", "failed", "declined", "under_review", "investigating",
-                    "approved", "completed", "accepted"
-                ]}}
-            ]
-        }
+        # Filter by user_email — simple indexed query (fast)
+        email_lower = user_email.lower()
+        filter_query = {"user_email": email_lower}
+        
         issues_data = await mongodb_service.get_issues_optimized(
             filter_query=filter_query,
             skip=skip,

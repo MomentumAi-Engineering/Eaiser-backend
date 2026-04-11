@@ -678,7 +678,7 @@ class OptimizedMongoDBService:
                 
                 # Read per-query list timeout (ms) from environment for client-side guard
                 # Comment: Keeps listing responsive under intermittent network lag
-                LIST_TIMEOUT_MS = int(os.getenv("LIST_TIMEOUT_MS", "5000"))
+                LIST_TIMEOUT_MS = int(os.getenv("LIST_TIMEOUT_MS", "15000"))
                 LIST_TIMEOUT_S = max(1.0, LIST_TIMEOUT_MS / 1000.0)
 
                 # Build optimized query cursor
@@ -694,7 +694,7 @@ class OptimizedMongoDBService:
                     }
                     
                 cursor = collection.find(filter_query, projection)
-                cursor = cursor.max_time_ms(5000).batch_size(500)  # Defensive query options
+                cursor = cursor.max_time_ms(12000).batch_size(100)  # 12s server timeout, smaller batches
                 
                 # Apply sorting by timestamp (newest first)
                 cursor = cursor.sort([('timestamp', DESCENDING)])
