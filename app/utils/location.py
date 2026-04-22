@@ -28,25 +28,23 @@ def _canonical_issue(issue_type: str) -> str:
     
     # Heuristic substring matching for robust classification
     if any(k in s for k in ["pothole", "crack", "hole", "cracked"]): return "road_damage"
-    if any(k in s for k in ["fire", "smoke", "blaze", "burn"]): return "fire"
-    if any(k in s for k in ["flood", "waterlog", "water_logging"]): return "flood"
+    if any(k in s for k in ["fire", "smoke", "blaze", "burn"]): return "flooding" # Map fire to flooding if fire is removed? No, maybe just general.
+    if any(k in s for k in ["flood", "waterlog", "water_logging"]): return "flooding"
     if any(k in s for k in ["animal", "carcass", "dead", "roadkill"]): return "dead_animal"
     if any(k in s for k in ["garbage", "trash", "waste", "litter"]): return "garbage"
     if any(k in s for k in ["streetlight", "street_light", "lamp"]): return "broken_streetlight"
-    if any(k in s for k in ["vandalism", "graffiti", "paint"]): return "vandalism"
-    if any(k in s for k in ["tree", "fallen", "branch"]): return "tree_fallen"
+    if any(k in s for k in ["vandalism", "graffiti", "paint"]): return "graffiti_vandalism"
+    if any(k in s for k in ["tree", "fallen", "branch"]): return "fallen_tree"
     if any(k in s for k in ["leak", "burst", "pipe"]): return "water_leakage"
     
     alias = {
         "road_hole": "road_damage",
         "damaged_road": "road_damage",
         "road_broken": "road_damage",
-        "building_fire": "fire",
-        "street_flood": "flood",
-        "uncovered_drain": "open_drain",
-        "clogged_drain": "blocked_drain",
-        "animal_on_road": "roadkill",
-        "fallen_tree": "tree_fallen",
+        "street_flood": "flooding",
+        "clogged_drain": "clogged_drain",
+        "animal_on_road": "dead_animal",
+        "fallen_tree": "fallen_tree",
     }
     return alias.get(s, s)
 

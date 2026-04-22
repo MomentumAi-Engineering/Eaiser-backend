@@ -334,6 +334,13 @@ async def process_issue_background(
 ):
     """Process issue in background for better performance"""
     start_time = time.time()
+    
+    # Initialize issue variables to prevent UnboundLocalError
+    confidence = 0.0
+    issue_detected = False
+    priority = "Medium"
+    # category, severity, issue_type are passed as arguments, but we'll ensure they are used/updated correctly
+    
     try:
         # === Dispatch Guard import (local to function to avoid cold-start cost) ===
         # Hinglish: Yeh guard prank/false reports ko rokne me help karta hai.
@@ -808,6 +815,8 @@ async def process_issue_background(
     except Exception as e:
         logger.error(f"Background processing failed for issue {issue_id}: {e}", exc_info=True)
         performance_metrics.record_request(time.time() - start_time, error=True)
+        # Re-raise so the endpoint can return the actual error to the client
+        raise HTTPException(status_code=500, detail=f"Report processing failed: {str(e)[:200]}")
     finally:
         # record request processing time (even on failure)
         try:
