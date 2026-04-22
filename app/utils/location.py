@@ -28,7 +28,7 @@ def _canonical_issue(issue_type: str) -> str:
     
     # Heuristic substring matching for robust classification
     if any(k in s for k in ["pothole", "crack", "hole", "cracked"]): return "road_damage"
-    if any(k in s for k in ["fire", "smoke", "blaze", "burn"]): return "flooding" # Map fire to flooding if fire is removed? No, maybe just general.
+    if any(k in s for k in ["fire", "smoke", "blaze", "burn"]): return "fire"
     if any(k in s for k in ["flood", "waterlog", "water_logging"]): return "flooding"
     if any(k in s for k in ["animal", "carcass", "dead", "roadkill"]): return "dead_animal"
     if any(k in s for k in ["garbage", "trash", "waste", "litter"]): return "garbage"
