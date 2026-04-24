@@ -1036,8 +1036,16 @@ async def get_my_issues(
         mongodb_service = await get_optimized_mongodb_service()
             
         # Filter by user_email — simple indexed query (fast)
+        # 🛡️ ONLY show reports that the user has explicitly submitted (clicked Submit button)
+        # Legacy support: old reports without is_submitted field but with submitted/dispatched status are also included
         email_lower = user_email.lower()
-        filter_query = {"user_email": email_lower}
+        filter_query = {
+            "user_email": email_lower,
+            "$or": [
+                {"is_submitted": True},
+                {"status": {"$in": ["submitted", "needs_review", "dispatched", "approved", "resolved", "completed", "assigned", "in_progress", "working", "closed"]}}
+            ]
+        }
         
         issues_data = await mongodb_service.get_issues_optimized(
             filter_query=filter_query,
@@ -1280,13 +1288,29 @@ async def get_issues_optimized(
         performance_metrics.record_db_query()
         
         # Build filter query
-        filter_query = {}
+        # 🛡️ ONLY show reports that have been explicitly submitted by users
+        # Legacy support: old reports without is_submitted field but with submitted/dispatched status are also included
+        submitted_filter = {
+            "$or": [
+                {"is_submitted": True},
+                {"status": {"$in": ["submitted", "needs_review", "dispatched", "approved", "resolved", "completed", "assigned", "in_progress", "working", "closed"]}}
+            ]
+        }
+        
+        # Build additional user-specified filters
+        extra_filters = {}
         if status:
-            filter_query["status"] = status
+            extra_filters["status"] = status
         if issue_type:
-            filter_query["issue_type"] = issue_type
+            extra_filters["issue_type"] = issue_type
         if severity:
-            filter_query["severity"] = severity
+            extra_filters["severity"] = severity
+        
+        # Combine with $and if extra filters exist
+        if extra_filters:
+            filter_query = {"$and": [submitted_filter, extra_filters]}
+        else:
+            filter_query = submitted_filter
         
         issues_data = await mongodb_service.get_issues_optimized(
             filter_query=filter_query,
