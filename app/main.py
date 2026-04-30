@@ -395,9 +395,14 @@ async def proxy_geocode(latlng: str = "", place_id: str = "", key: str = ""):
     with urllib.request.urlopen(req) as response:
         return json.loads(response.read().decode())
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def read_root():
     return {"message": "Eaiser AI backend is up and running!", "status": "healthy", "timestamp": datetime.now().isoformat()}
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health_check():
+    """Dedicated health check endpoint for Render/load balancers."""
+    return {"status": "healthy"}
 
 # 🚀 Gemini Key Pool Monitoring Endpoint
 @app.get("/api/ai/pool-stats")
