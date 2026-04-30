@@ -103,7 +103,7 @@ Output MUST be:
 
 --------------------------------------------------
 
-UNCONTROLLED / DANGEROUS FIRE → CIVIC ISSUE
+UNCONTROLLED / DANGEROUS FIRE → CIVIC ISSUE (TIER 0 EMERGENCY)
 
 Examples:
 - Building or house fire
@@ -113,8 +113,10 @@ Examples:
 - Smoke damaging structures
 
 Only then:
-- detected_issue_type = "fire"
+- detected_issue_type = "fire_hazard"
 - severity = "High"
+- issue_detected = true
+- EMERGENCY: This is a Tier 0 issue. Set confidence >= 85.
 
 If there is ANY doubt → classify as CONTROLLED, not dangerous.
 
@@ -149,20 +151,28 @@ If description contradicts the image → TRUST IMAGE.
 VALID ISSUE TYPES
 ==================================================
 Choose ONE from this list only:
+
+Tier 0 — Emergency (ALWAYS set issue_detected=true, confidence>=85):
+- fire_hazard (ONLY uncontrolled/dangerous fire, wildfire, building fire)
+- car_accident (vehicle collision, car crash, wreckage)
+- downed_power_line (fallen electrical wire, sparking line)
+
+Tier 1-3 — Standard Issues:
 - pothole
 - road_damage
 - garbage (trash, waste, debris)
-- graffiti (vandalism)
-- waterlogging (flood, standing water)
-- tree_fallen (fallen tree, broken branch blocking path)
+- graffiti_vandalism (vandalism)
+- flooding (flood, standing water, waterlogging)
+- fallen_tree (fallen tree, broken branch blocking path)
 - broken_streetlight (damaged pole, hanging light, not working)
 - dead_animal (carcass, roadkill, animal carcass only)
-- animal_accident (vehicle hits animal, both visible)
-- stray_animals (livestock on road)
-- fire (ONLY uncontrolled/dangerous)
-- structural_damage (wall collapse, bridge damage)
-- property_damage (broken fence, public property)
-- car_accident (vehicle collision, car crash)
+- broken_traffic_signal
+- damaged_sidewalk
+- damaged_traffic_sign
+- open_manhole
+- water_leakage
+- clogged_drain
+- park_playground_damage
 - abandoned_vehicle
 - other (for real public issues not listed above)
 

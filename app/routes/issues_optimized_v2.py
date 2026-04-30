@@ -52,6 +52,10 @@ from app.services.websocket_manager import manager
 # Utilities
 from utils.location import get_authority, get_authority_by_zip_code
 from utils.timezone import get_timezone_name
+from utils.v4_tables import (
+    get_tier, is_emergency, get_emergency_advisory,
+    reconcile_and_enrich, determine_scenario
+)
 from utils.validators import validate_email, validate_zip_code
 from utils.helpers import generate_report_id
 from bson.objectid import ObjectId
@@ -168,6 +172,7 @@ class IssueResponse(BaseModel):
     severity: Optional[str] = None
     severity: Optional[str] = None
     image_url: Optional[str] = None
+    image_urls: Optional[List[str]] = []
     cached: Optional[bool] = False
     is_guest: bool = False
     is_submitted: bool = False
@@ -321,15 +326,16 @@ async def rate_limit_dependency(request: Request):
 async def process_issue_background(
     issue_id: str,
     image_content: bytes,
-    address: str,
-    zip_code: Optional[str],
-    latitude: float,
-    longitude: float,
-    user_email: Optional[str],
-    description: str,
-    category: str,
-    severity: str,
-    issue_type: str,
+    all_image_contents: List[bytes] = None,
+    address: str = '',
+    zip_code: Optional[str] = None,
+    latitude: float = 0.0,
+    longitude: float = 0.0,
+    user_email: Optional[str] = None,
+    description: str = '',
+    category: str = 'public',
+    severity: str = 'medium',
+    issue_type: str = 'other',
     is_manual: bool = False
 ):
     """Process issue in background for better performance"""
@@ -383,8 +389,40 @@ async def process_issue_background(
             except Exception:
                 pass
 
+        # 🔍 CROSS-IMAGE CONSISTENCY CHECK + AI CLASSIFICATION (PARALLEL)
+        # Both tasks run concurrently to halve total latency
+        consistency_task = None
+        if all_image_contents and len(all_image_contents) > 1 and not is_manual:
+            from services.ai_service_v3 import get_ai_service_v3
+            v3_service = get_ai_service_v3()
+            consistency_task = asyncio.create_task(v3_service.validate_image_consistency(all_image_contents))
+
         if image_content and not is_manual and not cached_classification:
              ai_task = asyncio.create_task(classify_issue(image_content, description or ""))
+        
+        # Await consistency result (if started) — this runs IN PARALLEL with classify
+        if consistency_task:
+            try:
+                consistency_result = await consistency_task
+                if not consistency_result.get("match", True):
+                    consistency_reason = consistency_result.get("reason", "The uploaded images appear to show different issues.")
+                    detected_issues = consistency_result.get("detected_issues", [])
+                    
+                    detail_msg = f"Images do not match: {consistency_reason}"
+                    if detected_issues:
+                        detail_msg += f" (Detected: {', '.join(detected_issues[:3])})"
+                    
+                    logger.warning(f"❌ Image consistency FAILED for issue {issue_id}: {consistency_reason}")
+                    # Cancel the AI classification task since images don't match
+                    if ai_task and not ai_task.done():
+                        ai_task.cancel()
+                    raise HTTPException(status_code=400, detail=detail_msg)
+                else:
+                    logger.info(f"✅ Image consistency PASSED for issue {issue_id} ({len(all_image_contents)} images)")
+            except HTTPException:
+                raise
+            except Exception as consistency_err:
+                logger.warning(f"⚠️ Image consistency check failed (non-blocking): {consistency_err}")
         
         if zip_code:
              # Check cache first for geocode
@@ -667,11 +705,18 @@ async def process_issue_background(
 
         # === 🛡️ TICKET 1: FORCE REVIEW ON AI UNCERTAINTY ===
         # If the AI service flagged this report for manual review (Scenario B, D, E or 'No Issue')
-        # we MUST route it to 'needs_review' status immediately.
+        # Save as 'draft' — it will ONLY become 'needs_review' when user explicitly clicks
+        # "Request Manual Review". This prevents phantom issues appearing in admin dashboard.
+        # V4 FIX: High-confidence Tier 0 detections skip this entirely.
         try:
             if report and report.get("_manual_review_required"):
-                logger.info(f"🛡️ AI flagged issue {issue_id} for mandatory manual review (Admin Verification)")
-                final_status = "needs_review"
+                # Check confidence — only gate if genuinely low
+                report_confidence = float(confidence or 0)
+                if report_confidence < 50:
+                    logger.info(f"📋 AI flagged issue {issue_id} as draft (confidence={report_confidence}%) — awaiting user action")
+                    final_status = "draft"
+                else:
+                    logger.info(f"✅ Issue {issue_id} has _manual_review_required but confidence={report_confidence}% — keeping as 'reported'")
         except Exception:
             pass
 
@@ -748,6 +793,28 @@ async def process_issue_background(
             except Exception:
                 pass
 
+            # 🆕 V4: Compute tier, emergency, and scenario data
+            try:
+                v4_data = reconcile_and_enrich(
+                    issue_type or "unknown",
+                    severity or "Medium",
+                    confidence or 0.0,
+                    category or "public",
+                    priority or "Medium"
+                )
+                v4_tier = v4_data.get("tier", -1)
+                v4_emergency_911 = v4_data.get("emergency_911", False)
+                v4_emergency_advisory = v4_data.get("emergency_advisory")
+                v4_scenario = v4_data.get("scenario", "A")
+                v4_review_required = v4_data.get("internal_review_required", False)
+            except Exception as v4_err:
+                logger.warning(f"V4 enrichment failed: {v4_err}")
+                v4_tier = -1
+                v4_emergency_911 = False
+                v4_emergency_advisory = None
+                v4_scenario = "A"
+                v4_review_required = False
+
             issue_doc = {
                 "_id": issue_id,
                 "address": final_address,
@@ -769,7 +836,14 @@ async def process_issue_background(
                 "processing_time_ms": (time.time() - start_time) * 1000,
                 "image_hash": image_hash,
                 "is_manual": is_manual,
-                "is_submitted": is_submitted_initially
+                "is_submitted": is_submitted_initially,
+                # V4 Fields
+                "tier": v4_tier,
+                "emergency_911": v4_emergency_911,
+                "emergency_advisory": v4_emergency_advisory,
+                "scenario": v4_scenario,
+                "internal_review_required": v4_review_required,
+                "image_count": len(all_image_contents) if all_image_contents else (1 if image_content else 0),
             }
             
             # Store issue with optimized batch operation
@@ -777,7 +851,7 @@ async def process_issue_background(
             if unified_report:
                 logger.info(f"📄 Unified Report Summary: {unified_report.get('summary_text')[:100]}...")
             
-            await mongodb_service.store_issue_optimized(issue_doc, image_content)
+            await mongodb_service.store_issue_optimized(issue_doc, image_content, all_image_contents=all_image_contents)
             
             # 🧹 Invalidate user's personal issues cache to show new report immediately
             if user_email:
@@ -834,6 +908,7 @@ async def create_issue_optimized(
     background_tasks: BackgroundTasks,
     request: Request,
     image: Optional[UploadFile] = File(None),
+    images: List[UploadFile] = File(default=[]),
     address: str = Form(''),
     zip_code: Optional[str] = Form(None),
     latitude: float = Form(0.0),
@@ -848,7 +923,8 @@ async def create_issue_optimized(
     _: None = Depends(rate_limit_dependency)
 ):
     """
-    🚀 Ultra-optimized issue creation endpoint with Guest Limits
+    🚀 Ultra-optimized issue creation endpoint with multi-image support.
+    Accepts 'images' (List[UploadFile]) for multiple files, or 'image' (single) for backward compat.
     """
     start_time = time.time()
     is_guest_user = False
@@ -873,16 +949,29 @@ async def create_issue_optimized(
         logger.info("👤 Guest user generating report (login required to submit)")
 
     try:
-        image_content = b""
-        if image:
-            # Validate image format
-            if not image.content_type.startswith("image/"):
-                raise HTTPException(status_code=400, detail="Invalid image format")
-            
-            # Read image content
-            image_content = await image.read()
-            if len(image_content) > 10 * 1024 * 1024:  # 10MB limit
-                raise HTTPException(status_code=400, detail="Image too large (max 10MB)")
+        # === IMAGE HANDLING (production-safe) ===
+        # FastAPI natively parses both 'image' and 'images' from multipart.
+        # No request.form() call needed — avoids stream conflict.
+        all_image_contents = []
+        
+        # 1. Read from 'images' list (multi-image, preferred)
+        if images:
+            for img_file in images:
+                if img_file and img_file.content_type and img_file.content_type.startswith("image/"):
+                    content = await img_file.read()
+                    if content and len(content) <= 10 * 1024 * 1024:
+                        all_image_contents.append(content)
+        
+        # 2. Fallback: read single 'image' if no 'images' provided
+        if not all_image_contents and image and image.content_type and image.content_type.startswith("image/"):
+            content = await image.read()
+            if content and len(content) <= 10 * 1024 * 1024:
+                all_image_contents.append(content)
+        
+        # Cap at 6 images
+        all_image_contents = all_image_contents[:6]
+        image_content = all_image_contents[0] if all_image_contents else b""
+        logger.info(f"📸 Received {len(all_image_contents)} image(s) for processing")
         
         # Robust parsing of manual flag from Form
         is_manual_bool = False
@@ -901,6 +990,7 @@ async def create_issue_optimized(
         issue_doc = await process_issue_background(
             issue_id=issue_id,
             image_content=image_content,
+            all_image_contents=all_image_contents,
             address=address,
             zip_code=zip_code,
             latitude=latitude,
@@ -932,8 +1022,13 @@ async def create_issue_optimized(
                     from services.email_service import send_formatted_ai_alert
                     
                     # Update status to submitted/pending
-                    is_review_required = issue_doc.get("status") == "needs_review"
-                    new_status = "needs_review" if is_review_required else "submitted"
+                    # Draft issues (AI uncertain) → needs_review on submit
+                    # Reported issues (AI confident) → submitted on submit
+                    current_status = issue_doc.get("status", "reported")
+                    if current_status == "draft":
+                        new_status = "needs_review"
+                    else:
+                        new_status = "submitted"
                     
                     mongodb_service = await get_optimized_mongodb_service()
                     await mongodb_service.update_issue_status(issue_id, {
@@ -967,7 +1062,12 @@ async def create_issue_optimized(
                 "report": issue_doc.get("report"),
                 "confidence": issue_doc.get("confidence", 0.0),
                 "address": issue_doc.get("address"),
-                "zip_code": issue_doc.get("zip_code")
+                "zip_code": issue_doc.get("zip_code"),
+                # V4 Fields for frontend emergency rendering
+                "emergency_911": issue_doc.get("emergency_911", False),
+                "emergency_advisory": issue_doc.get("emergency_advisory"),
+                "tier": issue_doc.get("tier", -1),
+                "scenario": issue_doc.get("scenario", "A"),
             },
             authority_data=issue_doc.get("authority_data"),
             processing_time_ms=processing_time,
@@ -975,6 +1075,7 @@ async def create_issue_optimized(
             issue_type=issue_doc.get("issue_type", issue_type),
             severity=issue_doc.get("severity", severity),
             image_url=f"/api/issues/{issue_id}/image" if issue_doc.get("image_hash") != f"manual_{issue_id}" else None,
+            image_urls=issue_doc.get("image_urls", []),
             is_guest=is_guest_user,
             is_submitted=issue_doc.get("is_submitted", False),
             address=issue_doc.get("address"),
@@ -1904,7 +2005,7 @@ async def get_issue_image_optimized(
     _: None = Depends(rate_limit_dependency)
 ):
     """
-    🖼️ Serve issue evidence image from GridFS
+    🖼️ Serve issue evidence image from GridFS or Cloudinary
     """
     try:
         from fastapi.responses import StreamingResponse, RedirectResponse
@@ -1919,21 +2020,37 @@ async def get_issue_image_optimized(
             if str(issue["image_url"]).startswith("http"):
                 return RedirectResponse(url=issue["image_url"])
         
-        # Fallback for old GridFS streams
-        image_stream = await mongodb_service.get_issue_image_stream(issue_id)
+        # Try GridFS by image_id first
+        if issue and issue.get("image_id"):
+            image_stream = await mongodb_service.get_issue_image_stream(issue_id)
+            if image_stream:
+                return StreamingResponse(
+                    image_stream,
+                    media_type="image/jpeg",
+                    headers={
+                        "Cache-Control": "public, max-age=86400",
+                        "Content-Disposition": f"inline; filename=issue_{issue_id}.jpg"
+                    }
+                )
         
-        if not image_stream:
-            # Return a default placeholder or 404
-            raise HTTPException(status_code=404, detail="Image not found for this issue")
+        # Fallback: Search GridFS directly by filename pattern (handles async upload race)
+        if mongodb_service.fs:
+            try:
+                gridout = await mongodb_service.fs.open_download_stream_by_name(f"issue_{issue_id}.jpg")
+                if gridout:
+                    return StreamingResponse(
+                        gridout,
+                        media_type="image/jpeg",
+                        headers={
+                            "Cache-Control": "public, max-age=86400",
+                            "Content-Disposition": f"inline; filename=issue_{issue_id}.jpg"
+                        }
+                    )
+            except Exception as gridfs_err:
+                logger.debug(f"GridFS filename lookup failed for issue_{issue_id}.jpg: {gridfs_err}")
         
-        return StreamingResponse(
-            image_stream,
-            media_type="image/jpeg",
-            headers={
-                "Cache-Control": "public, max-age=86400",
-                "Content-Disposition": f"inline; filename=issue_{issue_id}.jpg"
-            }
-        )
+        # Return a default placeholder or 404
+        raise HTTPException(status_code=404, detail="Image not found for this issue")
     except HTTPException:
         raise
     except Exception as e:

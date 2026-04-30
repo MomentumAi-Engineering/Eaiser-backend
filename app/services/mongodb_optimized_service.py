@@ -782,13 +782,15 @@ class OptimizedMongoDBService:
             logger.error(f"❌ Failed to soft delete issue {issue_id}: {str(e)}")
             raise e
     
-    async def store_issue_optimized(self, issue_doc: Dict[str, Any], image_content: bytes) -> str:
+    async def store_issue_optimized(self, issue_doc: Dict[str, Any], image_content: bytes, all_image_contents: list = None) -> str:
         """
         Store issue with optimized concurrent local and cloud storage.
+        Supports multiple images via all_image_contents list.
         
         Args:
             issue_doc: Issue document to store (must contain '_id')
-            image_content: Image binary content
+            image_content: Primary image binary content (for backward compat)
+            all_image_contents: List of all image binary contents
             
         Returns:
             str: Inserted issue ID
@@ -800,55 +802,71 @@ class OptimizedMongoDBService:
             
             issue_id = issue_doc.get('_id')
             if not issue_id:
-                # Should not happen if generate_short_id was called
                 issue_id = str(uuid.uuid4())[:8].upper()
                 issue_doc['_id'] = issue_id
 
-            # 1. Spawn GridFS backup in background if available
-            if image_content and self.fs:
-                async def _gridfs_backup():
+            # Determine the full set of images to store
+            images_to_store = all_image_contents if all_image_contents else ([image_content] if image_content else [])
+
+            # 1. GridFS backup for ALL images in background
+            if images_to_store and self.fs:
+                async def _gridfs_backup_all():
                     try:
-                        # Wrap bytes in a stream for GridFS
-                        # Note: Motor's upload_from_stream expects a file-like object
-                        # We use a wrapper or just write it ourselves
-                        await self.fs.upload_from_stream(
-                            f"issue_{issue_id}.jpg",
-                            io.BytesIO(image_content),
-                            metadata={"issue_id": issue_id}
-                        )
-                        logger.info(f"💾 [Background] GridFS backup complete for {issue_id}")
+                        for idx, img_bytes in enumerate(images_to_store):
+                            suffix = f"_{idx}" if idx > 0 else ""
+                            await self.fs.upload_from_stream(
+                                f"issue_{issue_id}{suffix}.jpg",
+                                io.BytesIO(img_bytes),
+                                metadata={"issue_id": issue_id, "image_index": idx}
+                            )
+                        logger.info(f"💾 [Background] GridFS backup complete for {issue_id} ({len(images_to_store)} images)")
                     except Exception as fs_e:
                         logger.warning(f"⚠️ [Background] GridFS backup failed: {fs_e}")
                 
-                asyncio.create_task(_gridfs_backup())
+                asyncio.create_task(_gridfs_backup_all())
 
-            # 2. Spawn Cloudinary upload in background
-            if image_content:
-                async def _cloudinary_upload():
+            # 2. Cloudinary upload for ALL images in background
+            if images_to_store:
+                async def _cloudinary_upload_all():
                     try:
-                        # Upload bytes to Cloudinary
-                        result = await upload_file_to_cloudinary(contents=image_content, folder="report_images")
-                        if result and result.get("url"):
-                            # Update issue document with cloud URL
+                        uploaded_urls = []
+                        # Upload all images concurrently
+                        upload_tasks = []
+                        for idx, img_bytes in enumerate(images_to_store):
+                            upload_tasks.append(upload_file_to_cloudinary(contents=img_bytes, folder="report_images"))
+                        
+                        results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+                        
+                        for idx, result in enumerate(results):
+                            if isinstance(result, Exception):
+                                logger.warning(f"⚠️ Cloudinary upload failed for image {idx} of {issue_id}: {result}")
+                            elif result and result.get("url"):
+                                uploaded_urls.append(result.get("url"))
+                        
+                        if uploaded_urls:
+                            # Update issue document with ALL cloud URLs
+                            update_fields = {
+                                "image_urls": uploaded_urls,
+                                "image_url": uploaded_urls[0],  # Backward compat: first image
+                                "image_stored": True,
+                                "image_count": len(uploaded_urls),
+                                "image_size": sum(len(img) for img in images_to_store)
+                            }
                             await self.update_one_optimized(
                                 'issues',
                                 {"_id": issue_id},
-                                {"$set": {
-                                    "image_url": result.get("url"),
-                                    "image_stored": True,
-                                    "image_size": len(image_content)
-                                }}
+                                {"$set": update_fields}
                             )
-                            logger.info(f"📸 [Background] Cloudinary storage complete for {issue_id}")
+                            logger.info(f"📸 [Background] Cloudinary storage complete for {issue_id} ({len(uploaded_urls)} images)")
                     except Exception as cl_e:
                         logger.warning(f"⚠️ [Background] Cloudinary upload failed: {cl_e}")
                 
-                asyncio.create_task(_cloudinary_upload())
+                asyncio.create_task(_cloudinary_upload_all())
 
             # 3. Store metadata immediately to get the response back to user FAST
             inserted_id = await self.insert_one_optimized('issues', issue_doc)
             
-            logger.info(f"✅ Metadata saved for issue {issue_id}. Returning to client...")
+            logger.info(f"✅ Metadata saved for issue {issue_id} ({len(images_to_store)} images). Returning to client...")
             return inserted_id
             
         except Exception as e:

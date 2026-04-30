@@ -13,16 +13,12 @@ import google.generativeai as genai
 # Setup logging
 logger = logging.getLogger(__name__)
 
-# Load environment variables and configure Gemini
+# Load environment variables
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent.parent / '.env')
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        logger.error(f"Failed to configure Gemini API: {e}")
+# 🚀 Key Pool: Use multi-key rotation instead of single GEMINI_API_KEY
+from services.gemini_key_pool import get_key_pool
 
 class AIServiceV3:
     """
@@ -54,22 +50,14 @@ class AIServiceV3:
             logger.error(f"Error loading V3 prompt: {e}")
             return "Analyze this civic incident image and return a structured report."
 
-    def _get_model(self):
-        """Get or initialize the generative model"""
-        try:
-            # Note: Using system_instruction parameter for the new SDK pattern
-            prompt = asyncio.run(self._get_prompt_v3()) # Synchronous access for init
-            return genai.GenerativeModel(
-                model_name=self.model_name,
-                system_instruction=prompt
-            )
-        except Exception as e:
-            logger.warning(f"Failed to load {self.model_name}, falling back to gemini-2.0-flash: {e}")
-            self.model_name = "gemini-2.0-flash"
-            return genai.GenerativeModel(
-                model_name=self.model_name,
-                system_instruction=prompt
-            )
+    def _get_model(self, system_instruction: str = None):
+        """Get a generative model from the key pool (auto-rotates API keys)."""
+        pool = get_key_pool()
+        model, slot = pool.get_model(
+            model_name=self.model_name,
+            system_instruction=system_instruction
+        )
+        return model, slot
 
     async def analyze_single_image(self, image_content: bytes) -> Dict[str, Any]:
         """
@@ -83,27 +71,33 @@ class AIServiceV3:
             if img.width > 1024 or img.height > 1024:
                 img.thumbnail((1024, 1024))
             
-            # 2. Setup Model
+            # 2. Setup Model (from Key Pool — auto-rotates across 10+ keys)
             prompt = await self._get_prompt_v3()
-            model = genai.GenerativeModel(
+            pool = get_key_pool()
+            model, slot = pool.get_model(
                 model_name=self.model_name,
                 system_instruction=prompt
             )
             
             # 3. Generate Content
             # We use generation_config for temperature=0.0 and response_mime_type="application/json"
-            response = await asyncio.to_thread(
-                model.generate_content,
-                [
-                    { "text": "Image 1:" },
-                    img,
-                    { "text": "Analyze this civic incident image and return a structured report." }
-                ],
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.0,
-                    response_mime_type="application/json",
+            try:
+                response = await asyncio.to_thread(
+                    model.generate_content,
+                    [
+                        { "text": "Image 1:" },
+                        img,
+                        { "text": "Analyze this civic incident image and return a structured report." }
+                    ],
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.0,
+                        response_mime_type="application/json",
+                    )
                 )
-            )
+                pool.report_success(slot, estimated_tokens=5000)
+            except Exception as gen_err:
+                pool.report_error(slot, str(gen_err))
+                raise gen_err
             
             if not response or not response.text:
                 raise ValueError("Empty response from Gemini")
@@ -129,6 +123,115 @@ class AIServiceV3:
                 "error": str(e),
                 "data": None
             }
+
+    async def validate_image_consistency(self, image_contents: List[bytes]) -> Dict[str, Any]:
+        """
+        🔍 Cross-Image Validation: Sends ALL images to Gemini to verify they depict 
+        the SAME civic/infrastructure issue from different angles.
+        
+        Returns:
+            {
+                "match": True/False,
+                "confidence": float (0-100),
+                "reason": str (explanation),
+                "detected_issues": list (what each image shows)
+            }
+        """
+        if len(image_contents) < 2:
+            return {"match": True, "confidence": 100.0, "reason": "Only one image provided.", "detected_issues": []}
+        
+        try:
+            # 1. Prepare all images
+            pil_images = []
+            for idx, content in enumerate(image_contents[:6]):
+                try:
+                    img = Image.open(io.BytesIO(content))
+                    if img.width > 768 or img.height > 768:
+                        img.thumbnail((768, 768))
+                    pil_images.append(img)
+                except Exception as img_err:
+                    logger.warning(f"Failed to open image {idx}: {img_err}")
+            
+            if len(pil_images) < 2:
+                return {"match": True, "confidence": 100.0, "reason": "Could not parse enough images for comparison.", "detected_issues": []}
+            
+            # 2. Build multi-image prompt
+            validation_prompt = """You are an AI image consistency validator for a civic issue reporting platform.
+
+The user has uploaded multiple photos that are supposed to show the SAME infrastructure/civic issue from different angles.
+
+Your job is to determine if ALL images show the same issue or if they are of DIFFERENT subjects.
+
+RULES:
+- "Same issue" means: same pothole, same garbage pile, same broken streetlight, same flooded area, etc. from different viewpoints/angles/distances.
+- "Different issues" means: one photo shows a pothole and another shows garbage, or one shows a road and another shows a completely different location.
+- Minor variations in lighting, angle, zoom, or framing are ACCEPTABLE — they are expected for multi-angle documentation.
+- If images show the same TYPE of issue but at CLEARLY different locations (different streets, buildings, surroundings), they are NOT a match.
+
+Respond ONLY with this exact JSON format:
+{
+  "match": true or false,
+  "confidence": 0-100 (how confident you are in your decision),
+  "reason": "Brief explanation of why images match or don't match",
+  "detected_issues": ["what image 1 shows", "what image 2 shows", ...]
+}"""
+
+            # 3. Build content parts: interleave images with labels
+            content_parts = [{"text": validation_prompt}]
+            for idx, img in enumerate(pil_images):
+                content_parts.append({"text": f"\nImage {idx + 1}:"})
+                content_parts.append(img)
+            content_parts.append({"text": "\nAnalyze whether all images above show the same civic issue. Return JSON only."})
+            
+            # 4. Call Gemini (using Key Pool)
+            pool = get_key_pool()
+            model, slot = pool.get_model(model_name=self.model_name)
+            try:
+                response = await asyncio.to_thread(
+                    model.generate_content,
+                    content_parts,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.0,
+                        response_mime_type="application/json",
+                    )
+                )
+                pool.report_success(slot, estimated_tokens=8000)
+            except Exception as gen_err:
+                pool.report_error(slot, str(gen_err))
+                raise gen_err
+            
+            if not response or not response.text:
+                logger.warning("Empty response from Gemini for image consistency check")
+                return {"match": True, "confidence": 50.0, "reason": "AI validation unavailable, proceeding.", "detected_issues": []}
+            
+            # 5. Parse response
+            result = json.loads(response.text)
+            
+            is_match = result.get("match", True)
+            confidence = result.get("confidence", 50.0)
+            reason = result.get("reason", "No explanation provided.")
+            detected = result.get("detected_issues", [])
+            
+            if is_match:
+                logger.info(f"✅ Image consistency check PASSED ({confidence}%): {reason}")
+            else:
+                logger.warning(f"❌ Image consistency check FAILED ({confidence}%): {reason}")
+                logger.warning(f"   Detected issues: {detected}")
+            
+            return {
+                "match": is_match,
+                "confidence": confidence,
+                "reason": reason,
+                "detected_issues": detected
+            }
+        
+        except json.JSONDecodeError as je:
+            logger.warning(f"Failed to parse Gemini consistency response as JSON: {je}")
+            return {"match": True, "confidence": 30.0, "reason": "AI response parsing failed, proceeding.", "detected_issues": []}
+        except Exception as e:
+            logger.error(f"Image consistency validation error: {e}", exc_info=True)
+            # On error, don't block the user — allow submission
+            return {"match": True, "confidence": 30.0, "reason": f"Validation error: {str(e)[:100]}", "detected_issues": []}
 
     def map_v3_to_legacy(self, v3_report: Dict[str, Any], meta_overrides: Dict[str, Any] = None) -> Dict[str, Any]:
         """

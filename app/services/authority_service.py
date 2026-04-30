@@ -119,6 +119,8 @@ async def resolve_authorities(issue_type: str, zip_code: str, ai_json: Dict[str,
             departments = ["general"]
         elif category == "private":
             departments = ["property_management"]
+        elif category == "emergency":
+            departments = ["emergency", "police"]
         else:
             departments = ["general"]
             

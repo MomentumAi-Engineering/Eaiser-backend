@@ -103,6 +103,14 @@
         "type": "general",
         "timezone": "America/Chicago"
       }
+    ],
+    "electric_utility": [
+      {
+        "name": "Fairview Electric / Utility Services",
+        "email": "joel@momntumai.com",
+        "type": "electric_utility",
+        "timezone": "America/Chicago"
+      }
     ]
   },
   "default": {

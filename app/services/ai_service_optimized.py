@@ -20,15 +20,12 @@ logger = logging.getLogger(__name__)
 # Load environment variables and configure Gemini
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent.parent / '.env')
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# 🚀 Key Pool: Use multi-key rotation instead of single GEMINI_API_KEY
+from services.gemini_key_pool import get_key_pool
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Kept for fallback check
 if not GEMINI_API_KEY:
-    logger.warning("GEMINI_API_KEY is not set; disabling AI features.")
-else:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        logger.warning(f"Failed to configure Gemini API: {e}. Disabling AI features.")
-        GEMINI_API_KEY = None
+    logger.warning("GEMINI_API_KEY is not set; heuristic fallback may be used.")
 
 # Simple data loader function
 async def load_json_data(filename: str) -> dict:
@@ -112,33 +109,14 @@ CACHE_TTL = {
     'ai_report': 300             # 5 minutes for similar reports
 }
 
-# Add a safe model getter with fallbacks
-_MODEL = None
-
+# 🚀 Model getter now uses key pool for automatic key rotation
 def get_gemini_model():
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-    global _MODEL
-    if _MODEL is not None:
-        return _MODEL
-    try:
-        _MODEL = genai.GenerativeModel(model_name)
-        return _MODEL
-    except Exception as e:
-        logger.warning(f"{model_name} not available; attempting fallbacks: {e}")
-        for alt in [
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-pro",
-            "gemini-1.0-pro-vision",
-        ]:
-            try:
-                logger.info(f"Trying fallback model: {alt}")
-                _MODEL = genai.GenerativeModel(alt)
-                return _MODEL
-            except Exception as e2:
-                logger.warning(f"Fallback model {alt} failed: {e2}")
-        raise
+    """Get a Gemini model from the key pool (auto-rotates API keys)."""
+    pool = get_key_pool()
+    model, slot = pool.get_model(
+        model_name=os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    )
+    return model, slot
 
 async def get_cached_data(cache_key: str, ttl: int = 300) -> Optional[Any]:
     """Get cached data from Redis with TTL check"""
@@ -245,8 +223,9 @@ async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: i
     
     def _generate_report():
         try:
-            # Use model with fallbacks
-            model = get_gemini_model()
+            # 🚀 Use key pool for automatic key rotation
+            pool = get_key_pool()
+            model, slot = pool.get_model()
             # Open image in a context manager to avoid resource leaks
             with Image.open(io.BytesIO(image_content)) as img:
                 # OPTIMIZATION: Resize image if too large to speed up upload/processing
@@ -255,9 +234,14 @@ async def generate_ai_report_async(prompt: str, image_content: bytes, timeout: i
                     logger.info(f"Resizing image from {img.size} to max 1024px for speed optimization")
                     img.thumbnail((1024, 1024))
                 response = model.generate_content([prompt, img])
+            pool.report_success(slot, estimated_tokens=8000)
             return response.text
         except Exception as e:
-            # Log and propagate to trigger fallback upstream
+            # Report error to pool and propagate to trigger fallback upstream
+            try:
+                pool.report_error(slot, str(e))
+            except Exception:
+                pass
             logger.warning(f"Gemini API error: {str(e)}")
             raise
     

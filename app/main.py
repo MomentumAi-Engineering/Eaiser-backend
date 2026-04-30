@@ -399,6 +399,34 @@ async def proxy_geocode(latlng: str = "", place_id: str = "", key: str = ""):
 async def read_root():
     return {"message": "Eaiser AI backend is up and running!", "status": "healthy", "timestamp": datetime.now().isoformat()}
 
+# 🚀 Gemini Key Pool Monitoring Endpoint
+@app.get("/api/ai/pool-stats")
+async def gemini_pool_stats():
+    """Live monitoring of the Gemini API key pool distribution."""
+    try:
+        from services.gemini_key_pool import get_key_pool
+        pool = get_key_pool()
+        stats = pool.get_stats()
+        return {
+            "status": "healthy",
+            "pool": stats,
+            "capacity_summary": {
+                "total_keys": stats["pool_size"],
+                "paid_keys": stats["paid_keys"],
+                "free_keys": stats["free_keys"],
+                "available_now": stats["available_keys"],
+                "total_rpm_capacity": stats["total_capacity_rpm"],
+                "total_active_calls": stats["total_active_calls"],
+                "total_requests_served": stats["total_requests_served"],
+                "estimated_reports_per_min": stats["total_capacity_rpm"] // 2,
+                "note": "Free tier keys auto-detected via 429 errors. Enable billing to upgrade."
+            }
+        }
+    except Exception as e:
+        logger.error(f"Pool stats error: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 @app.websocket("/ws/{user_email}")
 async def websocket_endpoint(websocket: WebSocket, user_email: str):
     await manager.connect(websocket, user_email)
