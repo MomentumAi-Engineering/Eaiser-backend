@@ -281,6 +281,32 @@ async def create_indexes() -> None:
         await authority_mapping_review.create_index([("flagged_at", -1)], name="flagged_at_desc")
         await authority_mapping_review.create_index([("case_id", 1)], name="case_id")
 
+        # 🚀 Gov Portal high-traffic indexes (added for 10K user scaling)
+        try:
+            # Dashboard filtering: severity + timestamp sort
+            await issues.create_index(
+                [("severity", 1), ("timestamp", -1)],
+                name="severity_timestamp", background=True
+            )
+            # Operations: status + priority sorting
+            await issues.create_index(
+                [("status", 1), ("priority", 1), ("timestamp", -1)],
+                name="status_priority_timestamp", background=True
+            )
+            # Analytics: category + status grouping
+            await issues.create_index(
+                [("category", 1), ("status", 1)],
+                name="category_status", background=True
+            )
+            # Notification tracking
+            await issues.create_index(
+                [("email_status", 1)],
+                name="email_status", background=True
+            )
+            logger.info("✅ Gov Portal scaling indexes created/verified")
+        except Exception as e:
+            logger.warning(f"⚠️ Gov Portal index creation issue (non-fatal): {e}")
+
         logger.info("✅ Core MongoDB indexes created/verified")
     except Exception as e:
         logger.warning(f"⚠️ Index creation encountered an issue: {str(e)}")
