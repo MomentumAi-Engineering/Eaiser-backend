@@ -1,10 +1,6 @@
 
 import logging
 from datetime import datetime, timedelta
-import pandas as pd
-import numpy as np
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import PolynomialFeatures
 from services.mongodb_optimized_service import get_optimized_mongodb_service
 
 logger = logging.getLogger(__name__)
@@ -13,6 +9,9 @@ class PredictiveAnalyticsService:
     """
     Advanced AI Service for generating issue forecasts and trend analysis.
     Uses generic regression models (Polynomial Regression) to predict future issue volume based on historical data.
+    
+    NOTE: pandas/numpy/sklearn are lazy-imported inside methods to save ~300MB RAM at startup.
+    This is critical for Render's 512MB free-tier memory limit.
     """
 
     @staticmethod
@@ -40,6 +39,12 @@ class PredictiveAnalyticsService:
                 # But labeled as "Calibration Mode"
                 logger.warning("Not enough data for prediction model. Using calibration fallback.")
                 return PredictiveAnalyticsService._get_fallback_data()
+
+            # 🚀 LAZY IMPORT: Only load heavy ML libs when actually needed (~300MB saved at startup)
+            import pandas as pd
+            import numpy as np
+            from sklearn.linear_model import LinearRegression
+            from sklearn.preprocessing import PolynomialFeatures
 
             # 2. Process Data into Time Series (Daily counts)
             df = pd.DataFrame(issues)
@@ -134,3 +139,4 @@ class PredictiveAnalyticsService:
             "trend_direction": "up",
             "model_status": "calibration"
         }
+
