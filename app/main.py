@@ -333,35 +333,46 @@ async def log_requests(request: Request, call_next):
 # 🛡️ FINAL WRAPPERS (CORS MUST BE OUTSIDE EVERYTHING)
 # --------------------------------------------------------------------
 
-@app.middleware("http")
-async def debug_cors(request: Request, call_next):
-    origin = request.headers.get("origin")
-    if origin:
-        logger.info(f"🔍 DEBUG CORS: Origin={origin} Path={request.url.path}")
-    return await call_next(request)
+# Production CORS origins
+CORS_ORIGINS = [
+    "https://www.eaiser.ai",
+    "https://eaiser.ai",
+    "https://gov.eaiser.ai",
+    "https://admin.eaiser.ai",
+    "https://eaiserai.io",
+    "https://easier-frontend.vercel.app",
+    "http://easier-frontend.vercel.app",
+    "https://eaiser-backend-u8me.onrender.com",
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://easier-frontend.vercel.app",
-        "https://www.eaiser.ai",
-        "https://eaiser.ai",
-        "https://gov.eaiser.ai",
-        "https://admin.eaiser.ai",
-        "https://eaiserai.io",
-        "https://eaiser-backend-u8me.onrender.com",
-    ],
+    allow_origins=CORS_ORIGINS,
     allow_origin_regex=r"http(s)?://(([a-zA-Z0-9-]+\.)?localhost|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["*"],
+    max_age=86400,
 )
 
 @app.exception_handler(Exception)
 async def custom_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception in {request.method} {request.url}: {str(exc)}", exc_info=True)
-    return JSONResponse(status_code=500, content={"detail": f"Internal server error: {str(exc)}"})
+    # 🛡️ CRITICAL: Include CORS headers in error responses
+    # Without this, browser blocks error responses and shows "Failed to fetch"
+    origin = request.headers.get("origin", "")
+    headers = {}
+    if origin in CORS_ORIGINS or origin.startswith("http://localhost"):
+        headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        }
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {str(exc)}"},
+        headers=headers
+    )
 
 @app.get("/api/proxy/places/autocomplete")
 async def proxy_places_autocomplete(input: str, key: str):
