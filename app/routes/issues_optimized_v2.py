@@ -1830,14 +1830,15 @@ async def submit_issue_optimized(
                 )
                 
                 # Update status based on email success
-                final_status = "submitted" if email_success else "failed"
+                # If email fails, fallback to needs_review (not "failed") so admin can still process it
+                final_status = "submitted" if email_success else "needs_review"
                 await mongodb_service.update_issue_status(issue_id, {
                     "status": final_status,
                     "issue_type": issue_type,
                     "report": report,
                     "authority_email": [a.get("email") for a in selected_authorities or []],
                     "authority_name": [a.get("name") for a in selected_authorities or []],
-                    "email_status": "sent" if email_success else "failed",
+                    "email_status": "sent" if email_success else "pending_retry",
                     "is_submitted": True
                 })
                 
@@ -1848,6 +1849,19 @@ async def submit_issue_optimized(
                 
                 logger.info(f"✅ Background email task for {issue_id} completed. Success: {email_success}")
             except Exception as e:
+                # Even on crash, move to needs_review so it doesn't stay as "failed"
+                try:
+                    await mongodb_service.update_issue_status(issue_id, {
+                        "status": "needs_review",
+                        "email_status": "error",
+                        "email_error": str(e)[:200],
+                        "is_submitted": True
+                    })
+                    user_email = issue.get("user_email")
+                    if user_email:
+                        await invalidate_user_issues_cache(user_email)
+                except:
+                    pass
                 logger.error(f"❌ Background email task failed for {issue_id}: {e}")
         
         background_tasks.add_task(background_email_task)

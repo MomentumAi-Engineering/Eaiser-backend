@@ -1,0 +1,18 @@
+{
+  "cities": {
+    "37062": {
+      "name": "Fairview, TN",
+      "status": "LIVE",
+      "ai_enabled": true,
+      "ai_sidecar_enabled": false,
+      "ai_confidence_threshold": 80
+    }
+  },
+  "default": {
+    "name": "Unknown City",
+    "status": "NOT_LIVE",
+    "ai_enabled": true,
+    "ai_sidecar_enabled": false,
+    "ai_confidence_threshold": 80
+  }
+}

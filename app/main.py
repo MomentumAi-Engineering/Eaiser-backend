@@ -584,6 +584,19 @@ if admin_assignment_router:
 if admin_settings_router:
     app.include_router(admin_settings_router, prefix="/api") # Mounted at /api/admin/settings
 
+# Include V5 Routing Engine Router
+try:
+    from app.routes.routing_v5 import router as routing_v5_router
+except ImportError:
+    try:
+        from routes.routing_v5 import router as routing_v5_router
+    except ImportError:
+        routing_v5_router = None
+
+if routing_v5_router:
+    app.include_router(routing_v5_router, prefix="/api")
+    logger.info("✅ V5 Routing Engine router mounted at /api/v5")
+
 # Include Auth Router
 try:
     import app.routes.auth as auth_mod
