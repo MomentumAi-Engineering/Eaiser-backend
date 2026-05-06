@@ -406,6 +406,51 @@ async def proxy_geocode(latlng: str = "", place_id: str = "", key: str = ""):
     with urllib.request.urlopen(req) as response:
         return json.loads(response.read().decode())
 
+@app.post("/api/audit/log")
+async def log_audit_event(request: Request):
+    """
+    Lightweight audit log endpoint for frontend security events (e.g. auto-logout).
+    Intentionally unauthenticated — the user's token may already be expired.
+    Validates event type server-side to prevent abuse.
+    """
+    try:
+        body = await request.json()
+        event = body.get("event", "unknown")
+        
+        # Only accept known event types to prevent abuse
+        ALLOWED_EVENTS = {"auto_logout", "session_timeout", "idle_logout"}
+        if event not in ALLOWED_EVENTS:
+            return {"status": "ignored", "reason": "unknown_event_type"}
+        
+        # Build audit record
+        audit_record = {
+            "event": event,
+            "reason": body.get("reason", "unknown"),
+            "context": body.get("context", "unknown"),         # "admin" | "resident"
+            "user_email": body.get("user_email", "unknown"),
+            "user_id": body.get("user_id", "unknown"),
+            "timeout_minutes": body.get("timeout_minutes", 0),
+            "client_ip": request.client.host if request.client else "unknown",
+            "user_agent": request.headers.get("user-agent", "unknown"),
+            "timestamp": datetime.utcnow(),
+            "client_timestamp": body.get("timestamp", None),
+        }
+        
+        # Store in audit_logs collection
+        try:
+            from services.mongodb_service import get_db
+            db = await get_db()
+            await db.audit_logs.insert_one(audit_record)
+            logger.info(f"📋 Audit: {event} | {audit_record['user_email']} | ctx={audit_record['context']} | timeout={audit_record['timeout_minutes']}min")
+        except Exception as db_err:
+            logger.warning(f"Audit DB write failed: {db_err}")
+            # Still return success — don't break the client logout flow
+        
+        return {"status": "logged"}
+    except Exception as e:
+        logger.warning(f"Audit log endpoint error: {e}")
+        return {"status": "error"}
+
 @app.api_route("/", methods=["GET", "HEAD"])
 async def read_root():
     return {"message": "Eaiser AI backend is up and running!", "status": "healthy", "timestamp": datetime.now().isoformat()}
