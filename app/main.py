@@ -203,6 +203,8 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
 
         if path.startswith("/api/issues"):
             timeout = issues_timeout
+        elif path.startswith("/api/admin/"):
+            timeout = issues_timeout  # Admin review loads 100+ reports, needs same timeout
         elif path.startswith("/api/ai/"):
             timeout = ai_timeout
         else:

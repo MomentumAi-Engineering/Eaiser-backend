@@ -34,9 +34,10 @@ class IssueItem(BaseModel):
     observations: Optional[List[str]] = []
 
 class BuildRecipientsRequest(BaseModel):
-    issues: List[IssueItem]
+    issues: List[IssueItem] = []
     zip_code: str
     user_continued_out_of_area: bool = False
+    issue_id: Optional[str] = None  # 🆕 SIMI: If provided, auto-fetch detected issues from DB
 
 class RecipientToggle(BaseModel):
     email: str
@@ -78,6 +79,9 @@ async def build_recipients(req: BuildRecipientsRequest):
     """
     Build the recipient list from AI-detected issues.
     Returns toggleable recipient list for the iOS app.
+    
+    🆕 SIMI Level 3: If issue_id is provided, auto-fetches ALL detected
+    issues from the stored report and routes to ALL relevant departments.
     """
     try:
         from app.services.routing_engine_v5 import run_routing_pipeline
@@ -85,6 +89,44 @@ async def build_recipients(req: BuildRecipientsRequest):
         from services.routing_engine_v5 import run_routing_pipeline
     
     issues = [item.dict() for item in req.issues]
+    
+    # 🆕 SIMI: Auto-fetch detected issues from DB if issue_id provided
+    if req.issue_id and not issues:
+        try:
+            try:
+                from app.services.mongodb_service import get_db
+            except ImportError:
+                from services.mongodb_service import get_db
+            
+            db = await get_db()
+            stored_issue = await db.issues.find_one({"_id": req.issue_id})
+            
+            if stored_issue and stored_issue.get("detected_issues"):
+                # Convert stored detected_issues to routing format
+                for di in stored_issue["detected_issues"]:
+                    issue_label = di.get("issue", "Unknown")
+                    # Map tier to confidence approximation
+                    tier_str = di.get("tier_or_severity", "Tier 2")
+                    confidence = 90.0 if "Tier 0" in tier_str else (85.0 if "Tier 1" in tier_str else 75.0)
+                    
+                    issues.append({
+                        "label": issue_label,
+                        "confidence": confidence,
+                        "severity": tier_str,
+                        "observations": [],
+                    })
+                logger.info(f"🔍 SIMI Routing: Loaded {len(issues)} issues from stored report {req.issue_id}")
+            elif stored_issue:
+                # Fallback: use primary issue_type
+                issues.append({
+                    "label": stored_issue.get("issue_type", "Unknown"),
+                    "confidence": stored_issue.get("confidence", 75.0),
+                    "severity": stored_issue.get("severity", "Medium"),
+                    "observations": [],
+                })
+        except Exception as fetch_err:
+            logger.warning(f"Failed to fetch stored issues for {req.issue_id}: {fetch_err}")
+    
     result = run_routing_pipeline(
         issues=issues,
         zip_code=req.zip_code,

@@ -184,7 +184,7 @@ class RedisClusterService:
         except Exception as e:
             # In dev, don't spam logs; provide a succinct note
             if self.env == 'production':
-                logger.error(f"❌ All Redis connections failed: {str(e)}")
+                logger.info(f"ℹ️ Redis not available (production) — running without cache. Error: {str(e)[:100]}")
             else:
                 logger.info(f"ℹ️ Redis not connected (env={self.env}): {str(e)}")
             self.is_connected = False

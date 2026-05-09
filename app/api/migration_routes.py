@@ -63,7 +63,7 @@ async def analyze_report(
         
         if is_real:
             # Classify
-            c_issue, c_severity, c_conf, c_category, c_priority, c_detected = await classify_issue(image_content, description)
+            c_issue, c_severity, c_conf, c_category, c_priority, c_detected, *_simi_extra = await classify_issue(image_content, description)
             category = c_category
             issue_type = c_issue
             severity = c_severity

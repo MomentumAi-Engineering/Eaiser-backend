@@ -41,6 +41,7 @@ def _canonical_issue(issue_type: str) -> str:
         "broken_traffic_signal", "abandoned_vehicle", "dead_animal",
         "water_leakage", "open_manhole", "flooding", "fire", "police",
         "fire_hazard", "car_accident", "downed_power_line",
+        "vehicle_damage", "tree_on_vehicle", "tree_on_car",
         "general", "other", "unknown"
     ]
     if s in direct_keys:
@@ -49,7 +50,7 @@ def _canonical_issue(issue_type: str) -> str:
     # ═══ TIER 0 — EMERGENCY (must be checked FIRST, before generic keywords) ═══
     
     # Car Accident (MUST check before "abandoned_vehicle" which matches "vehicle")
-    if any(k in s for k in ["car_accident", "vehicle_collision", "vehicle_crash", "collision", "crash", "wreck"]):
+    if any(k in s for k in ["car_accident", "vehicle_collision", "vehicle_crash", "vehicle_damage", "collision", "crash", "wreck", "tree_on_vehicle", "tree_on_car"]):
         return "car_accident"
     
     # Fire Hazard (MUST check before generic "fire")

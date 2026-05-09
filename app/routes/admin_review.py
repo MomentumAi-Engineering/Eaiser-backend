@@ -881,7 +881,7 @@ async def get_warroom_data(
 @router.get("/pending", response_model=List[dict])
 async def get_pending_reviews(
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 200,
     admin: dict = Depends(get_admin_user)
 ):
     """
@@ -899,15 +899,13 @@ async def get_pending_reviews(
         # Aggregation Pipeline for efficient filtering
         # Logic:
         # 1. Team member: Only assigned issues
-        # 2. Status 'needs_review' etc.
+        # 2. Status 'needs_review' etc. — only include pending-type statuses
         
         match_query = {
             "status": {
                 "$in": ["reported", "pending", "needs_review", "pending_review", "screened_out", "dispatch_decision"]
             }
         }
-        # Filter exclusions
-        match_query["status"]["$nin"] = ["assigned", "in_progress", "working", "approved", "submitted", "declined", "rejected", "completed", "resolved"]
         
         # TEAM MEMBER FILTER: Only see assigned issues
         if admin.get("role") == "team_member":
@@ -934,8 +932,15 @@ async def get_pending_reviews(
             }
         ]
         
-        # Execute Aggregation
-        recent_issues = await collection.aggregate(pipeline).to_list(length=limit)
+        # Execute Aggregation with timeout protection
+        try:
+            recent_issues = await asyncio.wait_for(
+                collection.aggregate(pipeline).to_list(length=limit),
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"⚠️ Pending reviews aggregation timed out after 15s")
+            recent_issues = []
         
         final_reviews = []
         reporter_emails = set()
@@ -969,21 +974,29 @@ async def get_pending_reviews(
 
             final_reviews.append(issue)
 
-        # Bulk user fetch
+        # Bulk user fetch with timeout protection
         user_stats_map = {}
         if reporter_emails:
-            users_coll = await mongo_service.get_collection("users")
-            users = await users_coll.find(
-                {"email": {"$in": list(reporter_emails)}},
-                {"email": 1, "rejected_reports_count": 1, "is_active": 1, "name": 1, "full_name": 1}
-            ).to_list(None)
-            
-            for u in users:
-                user_stats_map[u["email"]] = {
-                    "rejected_count": u.get("rejected_reports_count", 0),
-                    "is_active": u.get("is_active", True),
-                    "name": u.get("name") or u.get("full_name") or "User"
-                }
+            try:
+                users_coll = await mongo_service.get_collection("users")
+                users = await asyncio.wait_for(
+                    users_coll.find(
+                        {"email": {"$in": list(reporter_emails)}},
+                        {"email": 1, "rejected_reports_count": 1, "is_active": 1, "name": 1, "full_name": 1}
+                    ).to_list(None),
+                    timeout=5.0
+                )
+                
+                for u in users:
+                    user_stats_map[u["email"]] = {
+                        "rejected_count": u.get("rejected_reports_count", 0),
+                        "is_active": u.get("is_active", True),
+                        "name": u.get("name") or u.get("full_name") or "User"
+                    }
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ Bulk user fetch timed out after 5s, skipping user reputation data")
+            except Exception as e:
+                logger.warning(f"⚠️ Bulk user fetch failed: {e}")
 
         # Enrich
         for issue in final_reviews:

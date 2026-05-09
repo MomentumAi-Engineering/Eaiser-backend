@@ -43,7 +43,9 @@ Bad examples:
 "There may have been an accident here."
 
 STEP 3 — ISSUE IDENTIFICATION
-Identify all visible issues. Classify each as Known or Unknown.
+Identify ALL visible issues in the image. You MUST classify each as Known or Unknown.
+RULE: ALWAYS prefer Known issue types from the list below. Only use Unknown for issues that genuinely do not fit ANY known category.
+If an image shows multiple problems (e.g., tree on car with debris on road), list EACH as a SEPARATE known issue.
 
 KNOWN ISSUE LIST:
 
@@ -135,6 +137,16 @@ If ANY Tier 0 issue is detected:
 
 ROOT CAUSE RULE: 
 If one issue is the direct result of another (e.g., a tree falling on a car, or flooding causing a pothole), always prioritize the initiating "Root Cause" issue as Rank 1, even if the result belongs to a higher tier.
+IMPORTANT: You MUST still list ALL consequential/secondary issues as separate entries in ordered_issue_list.
+CRITICAL: Always classify each sub-issue using the KNOWN ISSUE LIST above. Do NOT invent custom unknown labels.
+For example, a fallen tree on a car should produce:
+  - Rank 1: fallen_tree (Known, Tier 1) — Root Cause
+  - Rank 2: car_accident (Known, Tier 0) — Vehicle wreckage/damage is visible
+  - Rank 3: road_damage (Known, Tier 2) — Road/path obstructed by debris
+Another example, flooding that exposed a pothole:
+  - Rank 1: flooding (Known, Tier 1) — Root Cause
+  - Rank 2: pothole (Known, Tier 2) — Visible road hole
+Never collapse multiple visible issues into a single entry. Every distinct visible problem must be its own known issue.
 
 </instructions>
 
@@ -301,6 +313,59 @@ EXAMPLE 3 — Controlled fire (Scenario E):
   ],
   "ordered_issue_list": [
     { "rank": 1, "issue": "Controlled Recreational Fire", "type": "Unknown", "tier_or_severity": "Low" }
+  ],
+  "discrepancy_flag": false,
+  "discrepancy_note": null
+}
+
+EXAMPLE 4 — Fallen tree on car with debris on road (Scenario F — Multi-tier Known Issues):
+
+{
+  "report_meta": {
+    "image_count": 1,
+    "scenario": "F",
+    "final_priority": "Critical",
+    "internal_review_required": true,
+    "emergency_911": true,
+    "emergency_advisory": "Some elements in this image may indicate a recent vehicle collision. If anyone at the scene appears to need medical attention or if the roadway is unsafe, consider contacting emergency services (911) directly, as EAiSER reports are not monitored in real time. You may continue filing this report to document property or infrastructure damage."
+  },
+  "visual_observations": {
+    "image_1": [
+      "A large tree trunk lying horizontally across a dark-colored sedan",
+      "Significant structural damage visible on the vehicle roof and rear passenger side",
+      "Scattered branches and debris on the ground surrounding the vehicle",
+      "Road/pathway partially obstructed by tree trunk and debris"
+    ]
+  },
+  "scene_description": "A large tree has fallen onto a parked sedan, causing significant roof and body damage. The tree trunk rests across the vehicle with branches and debris scattered across the adjacent roadway, partially obstructing passage.",
+  "known_issues": [
+    {
+      "issue": "fallen_tree",
+      "tier": 1,
+      "confidence": "High",
+      "image_source": ["image_1"],
+      "cross_image_confirmed": false
+    },
+    {
+      "issue": "car_accident",
+      "tier": 0,
+      "confidence": "High",
+      "image_source": ["image_1"],
+      "cross_image_confirmed": false
+    },
+    {
+      "issue": "road_damage",
+      "tier": 2,
+      "confidence": "Medium",
+      "image_source": ["image_1"],
+      "cross_image_confirmed": false
+    }
+  ],
+  "unknown_issues": [],
+  "ordered_issue_list": [
+    { "rank": 1, "issue": "fallen_tree", "type": "Known", "tier_or_severity": "Tier 1" },
+    { "rank": 2, "issue": "car_accident", "type": "Known", "tier_or_severity": "Tier 0" },
+    { "rank": 3, "issue": "road_damage", "type": "Known", "tier_or_severity": "Tier 2" }
   ],
   "discrepancy_flag": false,
   "discrepancy_note": null

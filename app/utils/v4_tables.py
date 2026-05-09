@@ -32,6 +32,9 @@ TIER_MAP: Dict[str, int] = {
     "fire_hazard": 0,
     "fire": 0,                    # Alias for fire_hazard
     "car_accident": 0,
+    "vehicle_damage": 0,          # Compound: tree/debris damaged vehicle
+    "tree_on_vehicle": 0,         # Compound: tree fell on car
+    "tree_on_car": 0,             # Alias for tree_on_vehicle
     "downed_power_line": 0,
     
     # Tier 1 — Critical Infrastructure
@@ -349,3 +352,314 @@ def reconcile_and_enrich(
             logger.info(f"  ↳ {fix}")
     
     return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# SIMI LEVEL 3: Multi-Issue Reconciliation
+# ═══════════════════════════════════════════════════════════════
+# When a single image contains MULTIPLE issues (e.g., car accident +
+# pothole + garbage), this function reconciles ALL of them and
+# determines the overall priority from the highest-tier issue.
+
+def reconcile_multi_issue(v3_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    V4 Reconciler for FULL SIMI output (all issues from a single image).
+    
+    Enforces:
+    - Correct tiers on every known issue (from TIER_MAP)
+    - Overall priority = highest-tier issue's priority
+    - Emergency flags if ANY issue is Tier 0
+    - Correct scenario (A-F) based on full issue set
+    - Deterministic ordered_issue_list
+    
+    Args:
+        v3_data: The raw V3 report data with known_issues[], unknown_issues[], etc.
+    
+    Returns:
+        Dict with reconciled data + metadata:
+        {
+            "known_issues": [...],        # Tier-corrected
+            "unknown_issues": [...],
+            "ordered_issue_list": [...],   # Re-sorted deterministically
+            "primary_issue": str,          # Highest priority issue label
+            "primary_tier": int,           # Tier of primary issue
+            "scenario": str,              # A-F
+            "final_priority": str,        # Critical/High/Medium/Low
+            "final_severity": str,        # Based on highest tier
+            "emergency_911": bool,
+            "emergency_advisory": str|None,
+            "internal_review_required": bool,
+            "total_issues": int,
+            "issue_summary": str,         # "Car Accident, Pothole, Garbage"
+            "_soft_fixes": [...]
+        }
+    """
+    soft_fixes = []
+    known = list(v3_data.get("known_issues", []))
+    unknown = list(v3_data.get("unknown_issues", []))
+    
+    # ── Step 1: Fix tiers on all known issues ──
+    for k in known:
+        issue_label = k.get("issue", "")
+        # Normalize for TIER_MAP lookup
+        normalized = issue_label.lower().replace(" ", "_").replace("-", "_").replace("/", "_")
+        correct_tier = TIER_MAP.get(normalized, -1)
+        
+        if correct_tier >= 0:
+            if k.get("tier") != correct_tier:
+                soft_fixes.append(f"Tier corrected for '{issue_label}': {k.get('tier')} → {correct_tier}")
+                k["tier"] = correct_tier
+        else:
+            # Label not in TIER_MAP — move to unknown if it snuck in
+            soft_fixes.append(f"Unknown label '{issue_label}' in known_issues — tier set to -1")
+            k["tier"] = -1
+    
+    # ── Step 1.5: Consequential Issue Inference ──
+    # When the AI detects one issue but the scene clearly shows compound damage,
+    # auto-inject the missing consequential issues so ALL departments are notified.
+    # This is deterministic — based on scene text + known issue combinations.
+    known_labels = {k.get("issue", "").lower().replace(" ", "_").replace("-", "_") for k in known}
+    scene_text = (
+        v3_data.get("scene_description", "") + " " +
+        " ".join(
+            obs
+            for img_obs in v3_data.get("visual_observations", {}).values()
+            if isinstance(img_obs, list)
+            for obs in img_obs
+        )
+    ).lower()
+    
+    # RULE 1: Fallen tree + vehicle damage context → inject car_accident (Tier 0)
+    # Ensures Police + Emergency are notified alongside Public Works
+    vehicle_damage_cues = [
+        "sedan", "vehicle", "car ", "automobile", "truck", "suv",
+        "roof damage", "body damage", "windshield", "crushed",
+        "vehicle's roof", "vehicle damage", "damage to the vehicle",
+        "fallen onto a", "fallen on a", "rests across the vehicle",
+        "resting on", "onto a parked", "penetrated the"
+    ]
+    if ("fallen_tree" in known_labels or "fallen___hazardous_tree" in known_labels) \
+            and "car_accident" not in known_labels:
+        if any(cue in scene_text for cue in vehicle_damage_cues):
+            known.append({
+                "issue": "car_accident",
+                "tier": 0,
+                "confidence": "High",
+                "image_source": ["image_1"],
+                "cross_image_confirmed": False,
+                "_inferred": True
+            })
+            known_labels.add("car_accident")
+            soft_fixes.append("Inferred 'car_accident' from fallen_tree + vehicle damage in scene description")
+            logger.info("🚗 Consequential inference: car_accident added (fallen tree + vehicle damage detected)")
+    
+    # RULE 2: Downed power line + fire context → inject fire_hazard
+    fire_cues = ["spark", "fire", "flame", "smoke", "burning", "smoldering", "charred"]
+    if ("downed_power_line" in known_labels) and "fire_hazard" not in known_labels and "fire" not in known_labels:
+        if any(cue in scene_text for cue in fire_cues):
+            known.append({
+                "issue": "fire_hazard",
+                "tier": 0,
+                "confidence": "Medium",
+                "image_source": ["image_1"],
+                "cross_image_confirmed": False,
+                "_inferred": True
+            })
+            known_labels.add("fire_hazard")
+            soft_fixes.append("Inferred 'fire_hazard' from downed_power_line + fire cues in scene")
+    
+    # RULE 3: Car accident + road debris → inject road_damage
+    road_debris_cues = ["debris", "scattered", "obstructed", "blocked", "wreckage on road", "road surface"]
+    if ("car_accident" in known_labels) and "road_damage" not in known_labels:
+        if any(cue in scene_text for cue in road_debris_cues):
+            known.append({
+                "issue": "road_damage",
+                "tier": 2,
+                "confidence": "Medium",
+                "image_source": ["image_1"],
+                "cross_image_confirmed": False,
+                "_inferred": True
+            })
+            known_labels.add("road_damage")
+            soft_fixes.append("Inferred 'road_damage' from car_accident + road debris cues")
+    
+    # ── Step 2: Dedup known issues by label ──
+    seen_known = {}
+    for k in known:
+        label = k.get("issue", "").strip()
+        if label in seen_known:
+            # Keep higher confidence
+            existing_conf = {"High": 3, "Medium": 2, "Low": 1}.get(seen_known[label].get("confidence", "Low"), 1)
+            new_conf = {"High": 3, "Medium": 2, "Low": 1}.get(k.get("confidence", "Low"), 1)
+            if new_conf > existing_conf:
+                seen_known[label] = k
+            soft_fixes.append(f"Dedup: duplicate known issue '{label}' merged")
+        else:
+            seen_known[label] = k
+    known = list(seen_known.values())
+    
+    # ── Step 3: Dedup unknown issues by normalized label ──
+    seen_unknown = {}
+    for u in unknown:
+        label_norm = u.get("issue", "").strip().lower().replace("  ", " ")
+        if label_norm in seen_unknown:
+            existing_sev = {"High": 3, "Medium": 2, "Low": 1}.get(seen_unknown[label_norm].get("severity", "Low"), 1)
+            new_sev = {"High": 3, "Medium": 2, "Low": 1}.get(u.get("severity", "Low"), 1)
+            if new_sev > existing_sev:
+                seen_unknown[label_norm] = u
+            soft_fixes.append(f"Dedup: duplicate unknown issue '{u.get('issue')}' merged")
+        else:
+            seen_unknown[label_norm] = u
+    unknown = list(seen_unknown.values())
+    
+    # ── Step 4: Determine scenario from FULL issue set ──
+    scenario, review_required, emergency = determine_scenario(known, unknown)
+    
+    # ── Step 5: Compute final priority from ALL issues ──
+    final_priority = compute_final_priority(known, unknown)
+    
+    # ── Step 6: Emergency advisory ──
+    emergency_advisory = None
+    if emergency:
+        # Pick advisory by precedence: Downed Power Line > Fire Hazard > Car Accident
+        for label in ADVISORY_PRECEDENCE:
+            for k in known:
+                norm_label = k.get("issue", "").lower().replace(" ", "_").replace("-", "_").replace("/", "_")
+                if norm_label == label:
+                    emergency_advisory = EMERGENCY_ADVISORIES.get(label)
+                    break
+            if emergency_advisory:
+                break
+        if not emergency_advisory:
+            emergency_advisory = EMERGENCY_ADVISORIES.get("fire_hazard")
+        soft_fixes.append("Emergency 911 flag set due to Tier 0 issue")
+    
+    # ── Step 7: Build deterministic ordered_issue_list ──
+    all_items = []
+    for k in known:
+        tier = k.get("tier", 3)
+        conf_ord = {"High": 3, "Medium": 2, "Low": 1}.get(k.get("confidence", "Low"), 1)
+        all_items.append({
+            "issue": k.get("issue", ""),
+            "type": "Known",
+            "tier_or_severity": f"Tier {tier}",
+            "_sort_tier": tier,
+            "_sort_signal": conf_ord,
+            "_sort_label": k.get("issue", "").lower(),
+        })
+    for u in unknown:
+        sev = u.get("severity", "Low")
+        sev_ord = {"High": 3, "Medium": 2, "Low": 1}.get(sev, 1)
+        all_items.append({
+            "issue": u.get("issue", ""),
+            "type": "Unknown",
+            "tier_or_severity": sev,
+            "_sort_tier": 4,  # Unknown after all tiers
+            "_sort_signal": sev_ord,
+            "_sort_label": u.get("issue", "").lower(),
+        })
+    
+    # Sort: tier asc → signal desc → label asc
+    all_items.sort(key=lambda x: (x["_sort_tier"], -x["_sort_signal"], x["_sort_label"]))
+    
+    ordered_issue_list = []
+    for idx, item in enumerate(all_items):
+        ordered_issue_list.append({
+            "rank": idx + 1,
+            "issue": item["issue"],
+            "type": item["type"],
+            "tier_or_severity": item["tier_or_severity"],
+        })
+    
+    # ── Step 8: Determine primary issue (rank 1) ──
+    primary_issue = ordered_issue_list[0]["issue"] if ordered_issue_list else "unknown"
+    primary_tier = all_items[0]["_sort_tier"] if all_items else -1
+    
+    # ── Step 9: Map priority → severity for backward compat ──
+    severity_map = {"Critical": "High", "High": "High", "Medium": "Medium", "Low": "Low"}
+    final_severity = severity_map.get(final_priority, "Medium")
+    
+    # ── Step 10: Build human-readable issue summary ──
+    issue_labels = [item["issue"] for item in ordered_issue_list]
+    issue_summary = ", ".join(issue_labels) if issue_labels else "Unknown"
+    
+    total_issues = len(ordered_issue_list)
+    
+    if soft_fixes:
+        logger.info(f"V4 SIMI Reconciler applied {len(soft_fixes)} fixes across {total_issues} issues:")
+        for fix in soft_fixes:
+            logger.info(f"  ↳ {fix}")
+    
+    logger.info(
+        f"🔍 SIMI Result: {total_issues} issues detected — "
+        f"Primary='{primary_issue}' (Tier {primary_tier}), "
+        f"Priority={final_priority}, Scenario={scenario}, "
+        f"Emergency={emergency}"
+    )
+    
+    return {
+        "known_issues": known,
+        "unknown_issues": unknown,
+        "ordered_issue_list": ordered_issue_list,
+        "primary_issue": primary_issue,
+        "primary_tier": primary_tier,
+        "scenario": scenario,
+        "final_priority": final_priority,
+        "final_severity": final_severity,
+        "emergency_911": emergency,
+        "emergency_advisory": emergency_advisory,
+        "internal_review_required": review_required,
+        "total_issues": total_issues,
+        "issue_summary": issue_summary,
+        "_soft_fixes": soft_fixes,
+    }
+
+
+def get_departments_for_all_issues(
+    known_issues: List[Dict[str, Any]],
+    unknown_issues: List[Dict[str, Any]]
+) -> List[str]:
+    """
+    Resolve ALL departments that should receive the report based on
+    every detected issue — not just the primary one.
+    
+    Returns a deduplicated list of department keys (e.g., ["emergency", "public_works", "sanitation"]).
+    """
+    # Issue type → department mapping (mirrors issue_department_map.json)
+    # This is a fallback; the actual JSON file is loaded by authority_service.py
+    ISSUE_DEPT_FALLBACK = {
+        "fire_hazard": ["fire", "emergency"],
+        "fire": ["fire", "emergency"],
+        "car_accident": ["police", "emergency"],
+        "downed_power_line": ["electric_utility", "emergency", "fire"],
+        "flooding": ["public_works", "emergency"],
+        "open_manhole": ["public_works"],
+        "broken_traffic_signal": ["transportation"],
+        "fallen_tree": ["public_works", "parks"],
+        "pothole": ["public_works", "transportation"],
+        "road_damage": ["public_works", "transportation"],
+        "broken_streetlight": ["electric_utility", "public_works"],
+        "water_leakage": ["water_utility", "public_works"],
+        "damaged_sidewalk": ["public_works"],
+        "damaged_traffic_sign": ["transportation"],
+        "clogged_drain": ["public_works", "water_utility"],
+        "garbage": ["sanitation"],
+        "dead_animal": ["animal_control", "sanitation"],
+        "abandoned_vehicle": ["police", "parking"],
+        "graffiti_vandalism": ["police", "public_works"],
+        "park_playground_damage": ["parks"],
+    }
+    
+    all_depts = set()
+    
+    for k in known_issues:
+        issue_label = k.get("issue", "")
+        normalized = issue_label.lower().replace(" ", "_").replace("-", "_").replace("/", "_")
+        depts = ISSUE_DEPT_FALLBACK.get(normalized, ["general"])
+        all_depts.update(depts)
+    
+    for u in unknown_issues:
+        # Unknown issues always go to general for review
+        all_depts.add("general")
+    
+    return list(all_depts)

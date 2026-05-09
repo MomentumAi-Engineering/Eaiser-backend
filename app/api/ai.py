@@ -56,10 +56,11 @@ async def analyze_image(request: Request):
         logger.info(f"🧠 AI Preview Analysis (V3 Brain) for {filename}: {len(content)} bytes")
 
         # Call the unified V3 Brain (same as Website)
-        issue_type, severity, confidence, category, priority, issue_detected = await classify_issue(content, str(description))
+        issue_type, severity, confidence, category, priority, issue_detected, *_simi_extra = await classify_issue(content, str(description))
+        simi_data = _simi_extra[0] if _simi_extra else None
 
         # Format for Mobile/Web Preview screen
-        return {
+        response = {
             "issue_type": issue_type,
             "severity": severity,
             "confidence": confidence,
@@ -69,6 +70,17 @@ async def analyze_image(request: Request):
             "description": f"EAiSER AI identified this as a potential {issue_type} with high precision.",
             "status": "success"
         }
+        
+        # 🆕 SIMI Level 3: Include all detected issues for mobile preview
+        if simi_data:
+            response["detected_issues"] = simi_data.get("ordered_issue_list", [])
+            response["total_detected_issues"] = simi_data.get("total_issues", 1)
+            response["scene_description"] = simi_data.get("issue_summary", "")
+            response["emergency_911"] = simi_data.get("emergency_911", False)
+            response["emergency_advisory"] = simi_data.get("emergency_advisory")
+            response["scenario"] = simi_data.get("scenario", "A")
+        
+        return response
     except Exception as e:
         logger.error(f"AI Preview Analysis failed: {str(e)}", exc_info=True)
         # Fallback to manual route

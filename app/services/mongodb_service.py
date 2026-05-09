@@ -132,7 +132,7 @@ async def init_db():
             "socketTimeoutMS": 60000,            # Wait 60s for operations to complete
 
             # Connection pooling for high performance
-            "maxPoolSize": int(os.getenv("MONGO_POOL_MAXSIZE", "50")),
+            "maxPoolSize": int(os.getenv("MONGO_POOL_MAXSIZE", "30")),
             "minPoolSize": 2,                    # Reduced from 10 to avoid startup hang on slow networks
             "maxIdleTimeMS": 120000,
             "waitQueueTimeoutMS": 30000,         # Wait 30s in queue before error

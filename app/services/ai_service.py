@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any
 import asyncio
 from services.ai_service_v3 import get_ai_service_v3
 from utils.v4_tables import (
-    reconcile_and_enrich, get_tier, get_priority_for_issue,
+    reconcile_and_enrich, reconcile_multi_issue, get_tier, get_priority_for_issue,
     is_emergency, get_emergency_advisory, TIER_MAP,
     EMERGENCY_ADVISORIES, ADVISORY_PRECEDENCE
 )
@@ -67,7 +67,7 @@ async def load_json_data(file_name: str) -> dict:
         logger.error(f"Failed to decode JSON from {file_path}: {str(e)}")
         return {}
 
-async def classify_issue(image_content: bytes, description: str) -> tuple[str, str, float, str, str]:
+async def classify_issue(image_content: bytes, description: str) -> tuple:
     """Classify an infrastructure issue based on image and description.
     
     V4 Enhancement: After AI classification, the V4 Reconciler enforces:
@@ -75,6 +75,19 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
     - Emergency 911 detection for Tier 0 issues
     - Scenario determination (A-F)
     - Consistency checks
+    
+    🆕 SIMI Level 3: Returns ALL detected issues from a single image.
+    
+    Returns:
+        tuple: (issue_type, severity, confidence, category, priority, issue_detected, simi_data)
+        - issue_type: Primary (highest priority) issue label
+        - severity: Overall severity based on highest-tier issue
+        - confidence: Confidence of primary issue detection (0-100)
+        - category: Category of primary issue
+        - priority: Overall priority (Critical/High/Medium/Low)
+        - issue_detected: Boolean indicating if any issue was detected
+        - simi_data: Dict with full SIMI analysis (known_issues, unknown_issues, 
+                      ordered_issue_list, etc.) or None if unavailable
     """
     # EAiSER V3 Integration: Use V3 for higher precision and deterministic output
     try:
@@ -86,15 +99,11 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             meta = data.get("report_meta", {})
             ordered = data.get("ordered_issue_list", [])
             
-            # Extract key metrics for legacy compatibility
-            primary_issue = "Other"
-            primary_type = "Known"
-            tier_or_severity = "Tier 2"
+            # 🆕 SIMI LEVEL 3: Reconcile ALL detected issues (not just primary)
+            simi_result = reconcile_multi_issue(data)
             
-            if ordered:
-                primary_issue = ordered[0].get("issue", "Other")
-                primary_type = ordered[0].get("type", "Known")
-                tier_or_severity = ordered[0].get("tier_or_severity", "Tier 2")
+            # Extract primary issue (highest priority) for backward compat
+            primary_issue = simi_result["primary_issue"]
             
             # 🛡️ GUARD: If the AI specifically says 'No Visible Public Infrastructure Issue', block it.
             # This matches the Website's 'No Issue Detected' guard.
@@ -104,16 +113,16 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
                 confidence = 0.0
                 primary_issue = "none"
                 logger.warning(f"🚫 AI Guard: No civic issue detected in image. Blocking auto-submission.")
-                return primary_issue, "Low", 0.0, "none", "Low", False 
+                return primary_issue, "Low", 0.0, "none", "Low", False, None
 
-            # Final mappings
-            priority = meta.get("final_priority", "Medium")
-            severity = "High" if priority == "High" else ("Medium" if priority == "Medium" else "Low")
+            # Priority from SIMI reconciler (uses highest-tier issue)
+            priority = simi_result["final_priority"]
+            severity = simi_result["final_severity"]
             
-            # Confidence logic from V3
+            # Confidence logic: use primary issue's confidence
             confidence = 85.0
-            known = data.get("known_issues", [])
-            unknown = data.get("unknown_issues", [])
+            known = simi_result.get("known_issues", [])
+            unknown = simi_result.get("unknown_issues", [])
             
             for k in known:
                 if k.get("issue") == primary_issue:
@@ -123,26 +132,40 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
             else:
                 for u in unknown:
                     if u.get("issue") == primary_issue:
-                        conf_map = {"High": 90.0, "Medium": 65.0, "Low": 35.0} # Lower defaults for unknown
+                        conf_map = {"High": 90.0, "Medium": 65.0, "Low": 35.0}
                         confidence = conf_map.get(u.get("confidence", "Medium"), 65.0)
                         break
             
-            category = "infrastructure" if "Tier 2" in tier_or_severity else ("public_health" if "Tier 3" in tier_or_severity else "safety")
+            # Category from primary issue tier
+            primary_tier = simi_result["primary_tier"]
+            if primary_tier == 0:
+                category = "emergency"
+            elif primary_tier == 1:
+                category = "safety"
+            elif primary_tier == 2:
+                category = "infrastructure"
+            elif primary_tier == 3:
+                category = "public_health"
+            else:
+                category = "public"
             
-            # 🆕 V4 RECONCILER: Enforce tier-based priority, emergency flags, scenario
-            v4_result = reconcile_and_enrich(primary_issue, severity, confidence, category, priority)
-            severity = v4_result["severity"]
-            priority = v4_result["priority"]
-            confidence = v4_result["confidence"]
+            total_issues = simi_result["total_issues"]
+            issue_summary = simi_result["issue_summary"]
             
-            logger.info(f"✅ Classify V3+V4: {primary_issue} (Tier {v4_result['tier']}, {confidence}%) - {priority} [Scenario {v4_result['scenario']}]")
-            if v4_result["emergency_911"]:
+            logger.info(
+                f"✅ SIMI Level 3: {total_issues} issues detected — "
+                f"Primary='{primary_issue}' (Tier {primary_tier}), "
+                f"All=[{issue_summary}], "
+                f"Priority={priority}, Scenario={simi_result['scenario']}"
+            )
+            if simi_result["emergency_911"]:
                 logger.warning(f"🚨 TIER 0 EMERGENCY: {primary_issue} — 911 advisory triggered")
             
-            return primary_issue, severity, confidence, category, priority, True
+            # 🆕 Return 7th value: full SIMI analysis for downstream pipeline
+            return primary_issue, severity, confidence, category, priority, True, simi_result
 
     except Exception as e:
-        logger.warning(f"V3 classification failed, using built-in legacy: {e}")
+        logger.warning(f"V3 classification failed, using built-in legacy: {e}", exc_info=True)
 
     # Fallback heuristic if Gemini is disabled
     if not GEMINI_API_KEY:
@@ -215,7 +238,7 @@ async def classify_issue(image_content: bytes, description: str) -> tuple[str, s
         category = issue_category_map.get(issue_type, "public")
         priority = "High" if severity == "High" or confidence > 90 else "Medium"
         logger.info(f"Heuristic classification (no Gemini): {issue_type}, severity {severity}, confidence {confidence}")
-        return issue_type, severity, confidence, category, priority, True
+        return issue_type, severity, confidence, category, priority, True, None
     
     last_error = None
     for attempt in range(3):  # V4: 3 attempts with corrective error injection
@@ -439,7 +462,7 @@ Return JSON:
                 priority = "Low"
 
             logger.info(f"Issue classified as {issue_type} with severity {severity} (confidence: {confidence}, category: {category}, priority: {priority})")
-            return issue_type, severity, confidence, category, priority, True
+            return issue_type, severity, confidence, category, priority, True, None
         except ValueError as ve:
             if str(ve) == "FAKE_IMAGE_DETECTED":
                 raise ve
@@ -448,14 +471,14 @@ Return JSON:
             if attempt < 2:
                 await asyncio.sleep(0.25 * (attempt + 1))  # V4: 250ms, 500ms backoff
                 continue
-            return "unknown", "Medium", 50.0, "public", "Medium", True
+            return "unknown", "Medium", 50.0, "public", "Medium", True, None
         except Exception as e:
             last_error = str(e)
             logger.warning(f"Attempt {attempt + 1}/3 failed to classify issue: {last_error}")
             if attempt < 2:
                 await asyncio.sleep(0.25 * (attempt + 1))  # V4: backoff before retry
                 continue
-            return "unknown", "Medium", 50.0, "public", "Medium", True
+            return "unknown", "Medium", 50.0, "public", "Medium", True, None
 
 async def generate_report(
     image_content: bytes,

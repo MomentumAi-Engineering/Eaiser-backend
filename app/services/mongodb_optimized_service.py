@@ -119,6 +119,7 @@ class OptimizedMongoDBService:
                 IndexModel([('latitude', ASCENDING), ('longitude', ASCENDING)], name='lat_lon'),
                 IndexModel([('issue_type', ASCENDING), ('severity', ASCENDING)], name='issue_type_severity'),
                 IndexModel([('user_email', ASCENDING)], name='user_email'),
+                IndexModel([('user_email', ASCENDING), ('is_submitted', ASCENDING), ('status', ASCENDING), ('timestamp', DESCENDING)], name='user_email_submitted_status_ts'),
                 IndexModel([('timestamp', DESCENDING)], name='timestamp_desc'),
                 IndexModel([('report_id', ASCENDING)], name='report_id'),
                 IndexModel([('category', ASCENDING), ('priority', ASCENDING)], name='category_priority'),
@@ -165,11 +166,11 @@ class OptimizedMongoDBService:
                 # Primary client for writes (with safe options)
                 self.primary_client = AsyncIOMotorClient(
                     self.mongo_uri,
-                    serverSelectionTimeoutMS=45000,
-                    connectTimeoutMS=45000,
+                    serverSelectionTimeoutMS=15000,   # Reduced: fail fast on bad connectivity
+                    connectTimeoutMS=30000,
                     socketTimeoutMS=45000,
-                    maxPoolSize=100,                 # Optimization for concurrent users
-                    minPoolSize=2,                   # Increased to 2 so we always have a hot connection
+                    maxPoolSize=50,                  # Atlas M0 free tier supports ~100 total connections
+                    minPoolSize=2,                   # Keep hot connections ready
                     maxIdleTimeMS=30000,
                     waitQueueTimeoutMS=10000,
                     retryWrites=True,
@@ -178,25 +179,33 @@ class OptimizedMongoDBService:
                     appName="EAiSER-Backend-Write"
                 )
                 
-                # Secondary client for reads (prefer secondary)
+                # Read client — use PRIMARY_PREFERRED instead of SECONDARY_PREFERRED
+                # Atlas free tier (M0) has NO secondaries, so SECONDARY_PREFERRED
+                # causes saslStart auth failures when driver tries to reach non-existent replicas
                 self.read_client = AsyncIOMotorClient(
                     self.mongo_uri,
-                    serverSelectionTimeoutMS=45000,
-                    connectTimeoutMS=45000,
+                    serverSelectionTimeoutMS=15000,   # Reduced: fail fast on bad connectivity
+                    connectTimeoutMS=30000,
                     socketTimeoutMS=45000,
-                    maxPoolSize=100,                 # Optimization for concurrent users
-                    minPoolSize=2,                   # Increased to 2 so we always have a hot connection
+                    maxPoolSize=50,                  # Atlas M0 free tier supports ~100 total connections
+                    minPoolSize=2,                   # Keep hot connections ready
                     maxIdleTimeMS=45000,
                     waitQueueTimeoutMS=10000,
                     compressors=['zlib'],
-                    read_preference=ReadPreference.SECONDARY_PREFERRED,
+                    read_preference=ReadPreference.PRIMARY_PREFERRED,
                     tlsAllowInvalidCertificates=True,
                     appName="EAiSER-Backend-Read"
                 )
                 
-                # Test connections
-                await self.primary_client.admin.command('ping')
-                await self.read_client.admin.command('ping')
+                # Test connections with timeout to prevent hanging startup
+                await asyncio.wait_for(
+                    self.primary_client.admin.command('ping'),
+                    timeout=10.0
+                )
+                await asyncio.wait_for(
+                    self.read_client.admin.command('ping'),
+                    timeout=10.0
+                )
                 
                 # Initialize databases
                 self.db = self.primary_client[self.db_name]
@@ -694,6 +703,15 @@ class OptimizedMongoDBService:
                     }
                     
                 cursor = collection.find(filter_query, projection)
+                
+                # 🔧 Performance: Hint the compound index for user_email queries
+                # to avoid full collection scans on Atlas free tier
+                if 'user_email' in filter_query:
+                    try:
+                        cursor = cursor.hint('user_email_submitted_status_ts')
+                    except Exception:
+                        pass  # Fallback to default index selection
+                
                 cursor = cursor.max_time_ms(12000).batch_size(100)  # 12s server timeout, smaller batches
                 
                 # Apply sorting by timestamp (newest first)

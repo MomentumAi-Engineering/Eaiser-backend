@@ -115,12 +115,11 @@ class RedisService:
         try:
             # Check if Redis is available (localhost check for development)
             if self.redis_host == 'localhost':
-                logger.warning("⚠️ Using localhost Redis - this will fail in production!")
-                logger.warning("⚠️ Please set REDIS_URL environment variable for production deployment")
-                logger.info("💡 For development, you can:")
-                logger.info("   1. Install Redis locally: https://redis.io/download")
-                logger.info("   2. Use Docker: docker run -d -p 6379:6379 redis:alpine")
-                logger.info("   3. Skip Redis (app will work without caching)")
+                env = os.getenv('ENV', 'development').lower()
+                if env == 'production':
+                    logger.info("ℹ️ Redis not configured for production (REDIS_URL not set) — running without cache")
+                else:
+                    logger.warning("⚠️ Using localhost Redis — set REDIS_URL for production")
             
             # Prefer REDIS_URL to avoid low-level SSL kwarg incompatibilities across client versions
             redis_url = os.getenv('REDIS_URL')
@@ -166,8 +165,8 @@ class RedisService:
                 )
                 self.redis_client = redis.Redis(connection_pool=self.connection_pool)
             
-            # Test connection with timeout
-            await asyncio.wait_for(self.redis_client.ping(), timeout=5.0)
+            # Test connection with timeout (reduced for faster startup)
+            await asyncio.wait_for(self.redis_client.ping(), timeout=3.0)
             self.is_connected = True
             
             logger.info(f"✅ Redis connected successfully to {self.redis_host}:{self.redis_port}")

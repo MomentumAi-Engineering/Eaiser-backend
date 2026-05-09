@@ -54,7 +54,8 @@ from utils.location import get_authority, get_authority_by_zip_code
 from utils.timezone import get_timezone_name
 from utils.v4_tables import (
     get_tier, is_emergency, get_emergency_advisory,
-    reconcile_and_enrich, determine_scenario
+    reconcile_and_enrich, reconcile_multi_issue,
+    get_departments_for_all_issues, determine_scenario
 )
 from utils.validators import validate_email, validate_zip_code
 from utils.helpers import generate_report_id
@@ -181,6 +182,9 @@ class IssueResponse(BaseModel):
     zip_code: Optional[str] = None
     latitude: Optional[float] = 0.0
     longitude: Optional[float] = 0.0
+    # 🆕 SIMI Level 3: All detected issues from single image
+    detected_issues: Optional[List[Dict]] = []
+    total_detected_issues: Optional[int] = 1
 
 class IssueStatusUpdate(BaseModel):
     status: str
@@ -240,6 +244,13 @@ class Issue(BaseModel):
     confidence: Optional[float] = 0.0
     policy_conflict: Optional[bool] = False
     image_hash: Optional[str] = None
+    
+    # 🆕 SIMI Level 3: Multi-issue detection from single image
+    detected_issues: Optional[List[Dict]] = []
+    known_issues: Optional[List[Dict]] = []
+    unknown_issues: Optional[List[Dict]] = []
+    scene_description: Optional[str] = ""
+    total_detected_issues: Optional[int] = 1
     
     model_config = ConfigDict(
         validate_assignment=True,
@@ -345,6 +356,7 @@ async def process_issue_background(
     confidence = 0.0
     issue_detected = False
     priority = "Medium"
+    simi_data = None  # 🆕 SIMI Level 3: Full multi-issue analysis data
     # category, severity, issue_type are passed as arguments, but we'll ensure they are used/updated correctly
     
     try:
@@ -440,7 +452,12 @@ async def process_issue_background(
             try:
                 ai_start = time.time()
                 ai_results = await ai_task
-                issue_type, severity, confidence, category, priority, issue_detected = ai_results
+                # 🆕 SIMI Level 3: Unpack 7th value (full SIMI analysis data)
+                if len(ai_results) >= 7:
+                    issue_type, severity, confidence, category, priority, issue_detected, simi_data = ai_results
+                else:
+                    issue_type, severity, confidence, category, priority, issue_detected = ai_results[:6]
+                    simi_data = None
                 performance_metrics.record_ai_processing(time.time() - ai_start)
                 
                 # Cache AI classification result
@@ -548,10 +565,19 @@ async def process_issue_background(
             }
         
         # Get authorities (can be cached based on location)
+        # SIMI-aware cache key: include all detected issue types for multi-issue reports
+        simi_key_suffix = ""
+        if simi_data and simi_data.get("total_issues", 0) > 1:
+            simi_issues = sorted([
+                ki.get("issue", "").lower().replace(" ", "_")
+                for ki in simi_data.get("known_issues", []) if ki.get("issue")
+            ])
+            simi_key_suffix = "_SIMI_" + "_".join(simi_issues)
+        
         authority_cache_key = generate_cache_key(
             "authorities",
             zip_code=zip_code,
-            issue_type=issue_type,
+            issue_type=issue_type + simi_key_suffix,
             category=category
         )
         
@@ -560,7 +586,59 @@ async def process_issue_background(
             authority_data = cached_authorities
         else:
             try:
-                authority_data = get_authority_by_zip_code(zip_code, issue_type, category) if zip_code else get_authority(final_address, issue_type, latitude, longitude, category)
+                # 🆕 SIMI Level 3: Resolve authorities for ALL detected issues
+                if simi_data and simi_data.get("total_issues", 0) > 1:
+                    # Collect authorities for each detected issue type
+                    all_responsible = []
+                    all_available = []
+                    seen_emails = set()
+                    
+                    all_issue_types = []
+                    for ki in simi_data.get("known_issues", []):
+                        normalized = ki.get("issue", "").lower().replace(" ", "_").replace("-", "_").replace("/", "_")
+                        if normalized:
+                            all_issue_types.append(normalized)
+                    for ui in simi_data.get("unknown_issues", []):
+                        all_issue_types.append(ui.get("issue", "unknown"))
+                    
+                    logger.info(f"🔍 SIMI Authority Resolution: Resolving for {len(all_issue_types)} issue types: {all_issue_types}")
+                    
+                    for it in all_issue_types:
+                        try:
+                            it_auth = get_authority_by_zip_code(zip_code, it, category) if zip_code else get_authority(final_address, it, latitude, longitude, category)
+                            for auth in it_auth.get("responsible_authorities", []):
+                                email = auth.get("email", "")
+                                if email and email not in seen_emails:
+                                    seen_emails.add(email)
+                                    # Tag which issue(s) this authority is responsible for
+                                    auth_copy = dict(auth)
+                                    auth_copy["issue_types"] = [it]
+                                    all_responsible.append(auth_copy)
+                                elif email in seen_emails:
+                                    # Merge issue_types into existing entry
+                                    for existing in all_responsible:
+                                        if existing.get("email") == email:
+                                            if it not in existing.get("issue_types", []):
+                                                existing.setdefault("issue_types", []).append(it)
+                                            break
+                            for auth in it_auth.get("available_authorities", []):
+                                email = auth.get("email", "")
+                                if email and email not in seen_emails:
+                                    seen_emails.add(email)
+                                    all_available.append(auth)
+                        except Exception as it_err:
+                            logger.warning(f"Authority resolution failed for issue '{it}': {it_err}")
+                    
+                    authority_data = {
+                        "responsible_authorities": all_responsible,
+                        "available_authorities": all_available,
+                        "multi_issue": True,
+                        "issue_types_resolved": all_issue_types,
+                    }
+                    logger.info(f"✅ SIMI Authorities: {len(all_responsible)} responsible + {len(all_available)} available for {len(all_issue_types)} issues")
+                else:
+                    # Single issue — standard resolution
+                    authority_data = get_authority_by_zip_code(zip_code, issue_type, category) if zip_code else get_authority(final_address, issue_type, latitude, longitude, category)
                 await set_cached_data(authority_cache_key, authority_data, ttl=3600)  # Cache for 1 hour
             except Exception as e:
                 logger.warning(f"Failed to fetch authorities: {e}")
@@ -794,19 +872,37 @@ async def process_issue_background(
                 pass
 
             # 🆕 V4: Compute tier, emergency, and scenario data
+            # Use SIMI multi-issue data when available for accurate results
             try:
-                v4_data = reconcile_and_enrich(
-                    issue_type or "unknown",
-                    severity or "Medium",
-                    confidence or 0.0,
-                    category or "public",
-                    priority or "Medium"
-                )
-                v4_tier = v4_data.get("tier", -1)
-                v4_emergency_911 = v4_data.get("emergency_911", False)
-                v4_emergency_advisory = v4_data.get("emergency_advisory")
-                v4_scenario = v4_data.get("scenario", "A")
-                v4_review_required = v4_data.get("internal_review_required", False)
+                if simi_data and simi_data.get("total_issues", 0) > 0:
+                    # SIMI Level 3: Use pre-reconciled multi-issue data
+                    v4_tier = simi_data.get("primary_tier", -1)
+                    v4_emergency_911 = simi_data.get("emergency_911", False)
+                    v4_emergency_advisory = simi_data.get("emergency_advisory")
+                    v4_scenario = simi_data.get("scenario", "A")
+                    v4_review_required = simi_data.get("internal_review_required", False)
+                    # Override priority/severity from SIMI (highest-tier issue wins)
+                    priority = simi_data.get("final_priority", priority)
+                    severity = simi_data.get("final_severity", severity)
+                    logger.info(
+                        f"🔍 SIMI V4: {simi_data.get('total_issues', 0)} issues — "
+                        f"Primary='{simi_data.get('primary_issue')}', "
+                        f"Priority={priority}, Scenario={v4_scenario}"
+                    )
+                else:
+                    # Fallback: single-issue enrichment
+                    v4_data = reconcile_and_enrich(
+                        issue_type or "unknown",
+                        severity or "Medium",
+                        confidence or 0.0,
+                        category or "public",
+                        priority or "Medium"
+                    )
+                    v4_tier = v4_data.get("tier", -1)
+                    v4_emergency_911 = v4_data.get("emergency_911", False)
+                    v4_emergency_advisory = v4_data.get("emergency_advisory")
+                    v4_scenario = v4_data.get("scenario", "A")
+                    v4_review_required = v4_data.get("internal_review_required", False)
             except Exception as v4_err:
                 logger.warning(f"V4 enrichment failed: {v4_err}")
                 v4_tier = -1
@@ -815,13 +911,23 @@ async def process_issue_background(
                 v4_scenario = "A"
                 v4_review_required = False
 
+            # 🆕 SIMI Level 3: Set issue_type to "Multi Issues" when multiple issues detected
+            display_issue_type = issue_type
+            if simi_data and simi_data.get("total_issues", 0) > 1:
+                display_issue_type = "Multi Issues"
+                logger.info(
+                    f"🔍 SIMI: issue_type set to 'Multi Issues' "
+                    f"(primary='{issue_type}', total={simi_data.get('total_issues')})"
+                )
+
             issue_doc = {
                 "_id": issue_id,
                 "address": final_address,
                 "zip_code": zip_code or "N/A",
                 "latitude": latitude,
                 "longitude": longitude,
-                "issue_type": issue_type,
+                "issue_type": display_issue_type,
+                "primary_issue_type": issue_type,  # 🆕 Preserve the actual primary for internal use
                 "severity": severity,
                 "category": category,
                 "priority": priority,
@@ -844,6 +950,12 @@ async def process_issue_background(
                 "scenario": v4_scenario,
                 "internal_review_required": v4_review_required,
                 "image_count": len(all_image_contents) if all_image_contents else (1 if image_content else 0),
+                # 🆕 SIMI Level 3: Store ALL detected issues from single image
+                "detected_issues": simi_data.get("ordered_issue_list", []) if simi_data else [],
+                "known_issues": simi_data.get("known_issues", []) if simi_data else [],
+                "unknown_issues": simi_data.get("unknown_issues", []) if simi_data else [],
+                "scene_description": simi_data.get("issue_summary", "") if simi_data else "",
+                "total_detected_issues": simi_data.get("total_issues", 1) if simi_data else 1,
             }
             
             # Store issue with optimized batch operation
@@ -1068,6 +1180,12 @@ async def create_issue_optimized(
                 "emergency_advisory": issue_doc.get("emergency_advisory"),
                 "tier": issue_doc.get("tier", -1),
                 "scenario": issue_doc.get("scenario", "A"),
+                # 🆕 SIMI Level 3: All detected issues for frontend
+                "detected_issues": issue_doc.get("detected_issues", []),
+                "known_issues": issue_doc.get("known_issues", []),
+                "unknown_issues": issue_doc.get("unknown_issues", []),
+                "total_detected_issues": issue_doc.get("total_detected_issues", 1),
+                "scene_description": issue_doc.get("scene_description", ""),
             },
             authority_data=issue_doc.get("authority_data"),
             processing_time_ms=processing_time,
@@ -1081,7 +1199,9 @@ async def create_issue_optimized(
             address=issue_doc.get("address"),
             zip_code=issue_doc.get("zip_code"),
             latitude=issue_doc.get("latitude"),
-            longitude=issue_doc.get("longitude")
+            longitude=issue_doc.get("longitude"),
+            detected_issues=issue_doc.get("detected_issues", []),
+            total_detected_issues=issue_doc.get("total_detected_issues", 1),
         )
         
 

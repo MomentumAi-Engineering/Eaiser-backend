@@ -973,7 +973,7 @@ async def create_issue(
 
     try:
         # Pass reduced image to initial classifier
-        issue_type, severity, confidence, category, priority, issue_detected = await classify_issue(image_content, description or "")
+        issue_type, severity, confidence, category, priority, issue_detected, *_simi_extra = await classify_issue(image_content, description or "")
         if not issue_type:
             logger.error("Failed to classify issue type")
             raise ValueError("Failed to classify issue type")
