@@ -44,6 +44,7 @@ from services.redis_cluster_service import init_redis_cluster, close_redis_clust
 
 # Import routers
 from routes.issues_optimized_v2 import router as issues_optimized
+from routes.community import router as community_router
 
 # Load environment variables
 load_dotenv()
@@ -519,6 +520,7 @@ async def readiness_check():
 
 # Include routers
 app.include_router(issues_optimized, prefix="/api", tags=["Issues"])
+app.include_router(community_router, prefix="/api/community", tags=["Community"])
 
 # Root endpoint
 @app.get("/", tags=["Root"])

@@ -141,6 +141,14 @@ except ImportError:
     except ImportError:
         analytics_router = None
 
+try:
+    from app.routes.community import router as community_router
+except ImportError:
+    try:
+        from routes.community import router as community_router
+    except ImportError:
+        community_router = None
+
 # Service imports
 try:
     from services.mongodb_service import init_db, close_db
@@ -733,6 +741,9 @@ if gov_operations_router:
 
 if analytics_router:
     app.include_router(analytics_router)
+
+if community_router:
+    app.include_router(community_router, prefix="/api/community", tags=["Community"])
 
 # Ensure endpoints exist via ai_router (mounted at /api)
 # The redundant app.post wrappers here were causing 422 conflicts with the router definitions.
