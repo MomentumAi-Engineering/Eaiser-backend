@@ -115,6 +115,18 @@ class CommentCreate(BaseModel):
 class ChatMessage(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
 
+# Valid reaction types (emoji-based)
+VALID_REACTIONS = {"❤️", "😡", "😢", "👏", "🔥"}
+
+class ReactionCreate(BaseModel):
+    reaction: str = Field(..., min_length=1, max_length=4)
+
+    @validator('reaction')
+    def validate_reaction(cls, v):
+        if v not in VALID_REACTIONS:
+            raise ValueError(f'Invalid reaction. Must be one of: {VALID_REACTIONS}')
+        return v
+
 
 # ═══════════════════════════════════════
 # SERVER-SIDE CONTENT MODERATION
@@ -278,6 +290,32 @@ async def _create_community_indexes(db):
             sparse=True
         )
 
+        # ─── Notification & Bookmark indexes ───
+        notif_coll = db["community_notifications"]
+        await notif_coll.create_index(
+            [("recipient", 1), ("created_at", -1)],
+            name="notif_user_time",
+            background=True
+        )
+        await notif_coll.create_index(
+            [("recipient", 1), ("read", 1)],
+            name="notif_user_read",
+            background=True
+        )
+
+        bookmarks_coll = db["community_bookmarks"]
+        await bookmarks_coll.create_index(
+            [("user_email", 1), ("post_id", 1)],
+            name="bookmark_user_post",
+            unique=True,
+            background=True
+        )
+        await bookmarks_coll.create_index(
+            [("user_email", 1), ("created_at", -1)],
+            name="bookmark_user_time",
+            background=True
+        )
+
         _indexes_created = True
         logger.info("✅ Community collection indexes created/verified")
     except Exception as e:
@@ -307,7 +345,7 @@ def format_relative_time(created_at) -> str:
         return created_at.strftime("%b %d")
 
 
-def serialize_post(post: dict, user_email: str) -> dict:
+def serialize_post(post: dict, user_email: str, bookmarked_ids: set = None) -> dict:
     """Serialize a MongoDB post document for the API response.
     
     Defensive: handles malformed/missing data without crashing.
@@ -324,6 +362,26 @@ def serialize_post(post: dict, user_email: str) -> dict:
     if not isinstance(likes, list):
         likes = []
     post["liked"] = user_email in likes
+
+    # Bookmark status
+    if bookmarked_ids is not None:
+        post["bookmarked"] = post["id"] in bookmarked_ids
+    else:
+        post.setdefault("bookmarked", False)
+
+    # Reactions summary — strip voter emails, return only counts + user's reaction
+    raw_reactions = post.get("reactions", {}) or {}
+    reactions_summary = {}
+    user_reaction = None
+    for r_emoji in VALID_REACTIONS:
+        voters = raw_reactions.get(r_emoji, [])
+        if isinstance(voters, list) and len(voters) > 0:
+            reactions_summary[r_emoji] = len(voters)
+            if user_email in voters:
+                user_reaction = r_emoji
+    post["reactions"] = reactions_summary
+    post["user_reaction"] = user_reaction
+    post["reactions_total"] = sum(reactions_summary.values())
 
     # Ensure user has initials
     user_obj = post.get("user")
@@ -462,6 +520,7 @@ async def get_community_posts(
                     "gif": 1,
                     "aiReply": 1,
                     "likes": 1,
+                    "reactions": 1,
                     "comments": 1,
                     "shares": 1,
                     "poll": 1,
@@ -471,8 +530,22 @@ async def get_community_posts(
             cursor.max_time_ms(8000)  # Server-side abort if query takes >8s
             return await cursor.to_list(length=limit)
 
+        async def _fetch_bookmarked_ids():
+            """Fetch user's bookmarked post IDs for bookmark badge on feed."""
+            try:
+                bms = await db["community_bookmarks"].find(
+                    {"user_email": user_email},
+                    {"post_id": 1}
+                ).to_list(length=500)
+                return {bm["post_id"] for bm in bms}
+            except Exception:
+                return set()
+
         try:
-            posts = await asyncio.wait_for(_fetch_posts(), timeout=DB_QUERY_TIMEOUT)
+            posts, bookmarked_ids = await asyncio.gather(
+                asyncio.wait_for(_fetch_posts(), timeout=DB_QUERY_TIMEOUT),
+                _fetch_bookmarked_ids(),
+            )
         except asyncio.TimeoutError:
             logger.error(f"⏰ Community posts query timed out (skip={skip}, limit={limit})")
             return []
@@ -481,7 +554,7 @@ async def get_community_posts(
         result = []
         for post in posts:
             try:
-                result.append(serialize_post(post, user_email))
+                result.append(serialize_post(post, user_email, bookmarked_ids))
             except Exception as e:
                 post_id = post.get("_id", "unknown")
                 logger.warning(f"⚠️ Skipping broken post {post_id}: {e}")
@@ -637,6 +710,25 @@ async def toggle_like(
             liked = True
             new_count = len(likes) + 1
 
+            # Fire notification for post owner
+            full_post = await db["community_posts"].find_one({"_id": oid}, {"user": 1, "content": 1})
+            if full_post:
+                post_owner_id = full_post.get("user", {}).get("id", "")
+                if post_owner_id and ObjectId.is_valid(post_owner_id):
+                    owner_doc = await db["users"].find_one({"_id": ObjectId(post_owner_id)}, {"email": 1})
+                    if owner_doc:
+                        user_profile = await get_user_profile(db, user_email)
+                        asyncio.create_task(create_notification(
+                            db,
+                            recipient_email=owner_doc["email"],
+                            actor_email=user_email,
+                            actor_name=user_profile["name"] if user_profile else "Someone",
+                            actor_avatar=user_profile.get("avatar") if user_profile else None,
+                            notif_type="like",
+                            post_id=post_id,
+                            post_preview=full_post.get("content", ""),
+                        ))
+
         return {"liked": liked, "likes_count": max(0, new_count)}
 
     except HTTPException:
@@ -721,6 +813,34 @@ async def add_comment(
                 {"_id": oid},
                 {"$set": {"comments": comments}}
             )
+
+        # Fire notification for post owner
+        post_owner_id = post.get("user", {}).get("id", "") if isinstance(post.get("user"), dict) else ""
+        # We need to re-fetch with user field since our earlier projection only had _id and comments
+        if not post_owner_id:
+            full_post = await db["community_posts"].find_one({"_id": oid}, {"user": 1, "content": 1})
+            if full_post:
+                post_owner_id = full_post.get("user", {}).get("id", "")
+                post_content = full_post.get("content", "")
+            else:
+                post_content = ""
+        else:
+            post_content = post.get("content", "")
+
+        if post_owner_id and ObjectId.is_valid(post_owner_id):
+            owner_doc = await db["users"].find_one({"_id": ObjectId(post_owner_id)}, {"email": 1})
+            if owner_doc:
+                asyncio.create_task(create_notification(
+                    db,
+                    recipient_email=owner_doc["email"],
+                    actor_email=user_email,
+                    actor_name=display_name,
+                    actor_avatar=user_avatar,
+                    notif_type="reply" if parent_id else "comment",
+                    post_id=post_id,
+                    post_preview=post_content,
+                    comment_preview=comment_data.text,
+                ))
 
         logger.info(f"💬 Comment added by {user_email} on post {post_id}")
         return new_comment
@@ -1105,3 +1225,370 @@ Your helpful response:"""
         else:
             logger.error(f"❌ Community AI chat error: {str(e)}")
             return {"reply": "I'm processing a lot of civic data right now. Please try again in a moment! 🔄"}
+
+
+# ═══════════════════════════════════════
+# NOTIFICATION HELPER
+# ═══════════════════════════════════════
+
+async def create_notification(
+    db,
+    recipient_email: str,
+    actor_email: str,
+    actor_name: str,
+    actor_avatar: str,
+    notif_type: str,       # "like" | "comment" | "reaction" | "reply"
+    post_id: str,
+    post_preview: str = "",
+    reaction_emoji: str = None,
+    comment_preview: str = None,
+):
+    """Create a notification document. Skips if actor == recipient (no self-notifications)."""
+    if recipient_email == actor_email:
+        return  # Don't notify yourself
+
+    notif = {
+        "recipient": recipient_email,
+        "actor": {
+            "email": actor_email,
+            "name": actor_name,
+            "avatar": actor_avatar,
+        },
+        "type": notif_type,
+        "post_id": post_id,
+        "post_preview": (post_preview or "")[:120],
+        "reaction_emoji": reaction_emoji,
+        "comment_preview": (comment_preview or "")[:100],
+        "read": False,
+        "created_at": datetime.utcnow(),
+    }
+
+    try:
+        await db["community_notifications"].insert_one(notif)
+    except Exception as e:
+        logger.warning(f"⚠️ Notification creation failed (non-fatal): {e}")
+
+
+# ═══════════════════════════════════════
+# POST REACTIONS (❤️ 😡 😢 👏 🔥)
+# ═══════════════════════════════════════
+
+@router.post("/posts/{post_id}/react")
+async def toggle_reaction(
+    post_id: str,
+    reaction_data: ReactionCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Toggle a reaction on a post. Each user can have ONE reaction per post.
+    
+    - If user has no reaction → add the reaction
+    - If user has the SAME reaction → remove it (un-react)
+    - If user has a DIFFERENT reaction → swap to new one
+    
+    Stores reactions as: { "reactions": { "❤️": ["email1"], "🔥": ["email2"] } }
+    """
+    try:
+        db = await get_db()
+        user_email = current_user["sub"]
+        emoji = reaction_data.reaction
+
+        if not ObjectId.is_valid(post_id):
+            raise HTTPException(status_code=400, detail="Invalid post ID format")
+
+        oid = ObjectId(post_id)
+
+        # Fetch only reactions field
+        post = await db["community_posts"].find_one(
+            {"_id": oid},
+            {"reactions": 1, "user": 1, "content": 1}
+        )
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+
+        reactions = post.get("reactions", {}) or {}
+        current_reaction = None
+
+        # Find user's current reaction (if any)
+        for r_emoji, voters in reactions.items():
+            if isinstance(voters, list) and user_email in voters:
+                current_reaction = r_emoji
+                break
+
+        if current_reaction == emoji:
+            # UN-REACT: remove the user from that emoji
+            await db["community_posts"].update_one(
+                {"_id": oid},
+                {"$pull": {f"reactions.{emoji}": user_email}}
+            )
+            action = "removed"
+            final_emoji = None
+        else:
+            # Remove from old reaction if switching
+            if current_reaction:
+                await db["community_posts"].update_one(
+                    {"_id": oid},
+                    {"$pull": {f"reactions.{current_reaction}": user_email}}
+                )
+            # Add to new reaction
+            await db["community_posts"].update_one(
+                {"_id": oid},
+                {"$addToSet": {f"reactions.{emoji}": user_email}}
+            )
+            action = "added"
+            final_emoji = emoji
+
+            # Create notification for post owner
+            post_owner_email = post.get("user", {}).get("id", "")
+            if post_owner_email:
+                # Lookup owner's email from user ID
+                owner_user = await db["users"].find_one(
+                    {"_id": ObjectId(post_owner_email)},
+                    {"email": 1}
+                ) if ObjectId.is_valid(post_owner_email) else None
+                owner_email = owner_user.get("email", "") if owner_user else ""
+            else:
+                owner_email = ""
+
+            if owner_email:
+                user_profile = await get_user_profile(db, user_email)
+                asyncio.create_task(create_notification(
+                    db,
+                    recipient_email=owner_email,
+                    actor_email=user_email,
+                    actor_name=user_profile["name"] if user_profile else "Someone",
+                    actor_avatar=user_profile.get("avatar") if user_profile else None,
+                    notif_type="reaction",
+                    post_id=post_id,
+                    post_preview=post.get("content", ""),
+                    reaction_emoji=emoji,
+                ))
+
+        # Re-fetch updated reactions
+        updated = await db["community_posts"].find_one({"_id": oid}, {"reactions": 1})
+        updated_reactions = updated.get("reactions", {}) or {}
+
+        # Build summary
+        summary = {}
+        for r_emoji in VALID_REACTIONS:
+            voters = updated_reactions.get(r_emoji, [])
+            if isinstance(voters, list) and len(voters) > 0:
+                summary[r_emoji] = len(voters)
+
+        logger.info(f"{'➕' if action == 'added' else '➖'} Reaction {emoji} {action} by {user_email} on post {post_id}")
+        return {
+            "action": action,
+            "user_reaction": final_emoji,
+            "reactions": summary,
+            "total": sum(summary.values()),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error toggling reaction: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to toggle reaction")
+
+
+# ═══════════════════════════════════════
+# BOOKMARKS / SAVE POSTS
+# ═══════════════════════════════════════
+
+@router.post("/posts/{post_id}/bookmark")
+async def toggle_bookmark(
+    post_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Toggle bookmark on a post. Uses a dedicated collection for O(1) lookups."""
+    try:
+        db = await get_db()
+        user_email = current_user["sub"]
+
+        if not ObjectId.is_valid(post_id):
+            raise HTTPException(status_code=400, detail="Invalid post ID format")
+
+        # Verify post exists
+        post = await db["community_posts"].find_one(
+            {"_id": ObjectId(post_id)},
+            {"_id": 1}
+        )
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+
+        # Check if already bookmarked
+        existing = await db["community_bookmarks"].find_one({
+            "user_email": user_email,
+            "post_id": post_id,
+        })
+
+        if existing:
+            # Remove bookmark
+            await db["community_bookmarks"].delete_one({"_id": existing["_id"]})
+            bookmarked = False
+        else:
+            # Add bookmark
+            await db["community_bookmarks"].insert_one({
+                "user_email": user_email,
+                "post_id": post_id,
+                "created_at": datetime.utcnow(),
+            })
+            bookmarked = True
+
+        logger.info(f"{'🔖' if bookmarked else '📤'} Bookmark {'added' if bookmarked else 'removed'} by {user_email} on post {post_id}")
+        return {"bookmarked": bookmarked, "post_id": post_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error toggling bookmark: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to toggle bookmark")
+
+
+@router.get("/bookmarks")
+async def get_user_bookmarks(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=50),
+    current_user: dict = Depends(get_current_user)
+):
+    """Fetch the current user's bookmarked posts, newest first."""
+    try:
+        db = await get_db()
+        user_email = current_user["sub"]
+
+        # Get bookmark entries
+        bookmarks = await db["community_bookmarks"].find(
+            {"user_email": user_email}
+        ).sort("created_at", -1).skip(skip).limit(limit).to_list(length=limit)
+
+        post_ids = []
+        for bm in bookmarks:
+            pid = bm.get("post_id", "")
+            if ObjectId.is_valid(pid):
+                post_ids.append(ObjectId(pid))
+
+        if not post_ids:
+            return []
+
+        # Fetch actual posts
+        posts = await db["community_posts"].find(
+            {"_id": {"$in": post_ids}}
+        ).to_list(length=limit)
+
+        # Preserve bookmark order
+        post_map = {}
+        for p in posts:
+            post_map[str(p["_id"])] = p
+
+        result = []
+        for bm in bookmarks:
+            pid = bm.get("post_id", "")
+            if pid in post_map:
+                serialized = serialize_post(post_map[pid], user_email)
+                serialized["bookmarked"] = True
+                result.append(serialized)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching bookmarks: {str(e)}")
+        return []
+
+
+# ═══════════════════════════════════════
+# NOTIFICATIONS
+# ═══════════════════════════════════════
+
+@router.get("/notifications")
+async def get_notifications(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(30, ge=1, le=50),
+    current_user: dict = Depends(get_current_user)
+):
+    """Fetch paginated notifications for the current user, newest first."""
+    try:
+        db = await get_db()
+        user_email = current_user["sub"]
+
+        cursor = db["community_notifications"].find(
+            {"recipient": user_email}
+        ).sort("created_at", -1).skip(skip).limit(limit)
+
+        notifs = await cursor.to_list(length=limit)
+
+        result = []
+        for n in notifs:
+            result.append({
+                "id": str(n.pop("_id", "")),
+                "actor": n.get("actor", {}),
+                "type": n.get("type", ""),
+                "post_id": n.get("post_id", ""),
+                "post_preview": n.get("post_preview", ""),
+                "reaction_emoji": n.get("reaction_emoji"),
+                "comment_preview": n.get("comment_preview"),
+                "read": n.get("read", False),
+                "time": format_relative_time(n.get("created_at")),
+                "created_at": n.get("created_at", datetime.utcnow()).isoformat(),
+            })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching notifications: {str(e)}")
+        return []
+
+
+@router.get("/notifications/unread-count")
+async def get_unread_count(
+    current_user: dict = Depends(get_current_user)
+):
+    """Return the count of unread notifications for badge display."""
+    try:
+        db = await get_db()
+        user_email = current_user["sub"]
+
+        count = await db["community_notifications"].count_documents({
+            "recipient": user_email,
+            "read": False,
+        })
+
+        return {"count": min(count, 99)}  # Cap at 99 for UI badge
+
+    except Exception as e:
+        logger.error(f"❌ Error counting unread: {str(e)}")
+        return {"count": 0}
+
+
+@router.post("/notifications/mark-read")
+async def mark_notifications_read(
+    notification_ids: List[str] = Body(default=None),
+    mark_all: bool = Body(default=False),
+    current_user: dict = Depends(get_current_user)
+):
+    """Mark specific notifications or ALL as read."""
+    try:
+        db = await get_db()
+        user_email = current_user["sub"]
+
+        if mark_all:
+            result = await db["community_notifications"].update_many(
+                {"recipient": user_email, "read": False},
+                {"$set": {"read": True}}
+            )
+            modified = result.modified_count
+        elif notification_ids:
+            valid_ids = [ObjectId(nid) for nid in notification_ids if ObjectId.is_valid(nid)]
+            if valid_ids:
+                result = await db["community_notifications"].update_many(
+                    {"_id": {"$in": valid_ids}, "recipient": user_email},
+                    {"$set": {"read": True}}
+                )
+                modified = result.modified_count
+            else:
+                modified = 0
+        else:
+            modified = 0
+
+        return {"success": True, "modified": modified}
+
+    except Exception as e:
+        logger.error(f"❌ Error marking notifications read: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to mark notifications")
