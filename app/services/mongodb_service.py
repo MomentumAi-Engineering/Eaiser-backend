@@ -318,13 +318,51 @@ async def close_db():
         client.close()
         logger.info("🔒 MongoDB connection closed")
 
+_reconnect_lock = asyncio.Lock()
+_last_health_check = 0.0
+_HEALTH_CHECK_INTERVAL = 30.0  # Only check connection health every 30s (not every call)
+
 async def get_db():
-    """Get the async database connection."""
-    global db
+    """Get the async database connection with automatic health monitoring.
+    
+    Production-grade: If the connection drops, this will attempt to reconnect
+    automatically instead of failing all subsequent requests until server restart.
+    """
+    global db, _last_health_check
+    
     if db is None:
-        await init_db()
-    if db is None:
-        raise RuntimeError("Async database connection could not be established")
+        async with _reconnect_lock:
+            if db is None:  # Double-check after acquiring lock
+                logger.info("🔄 Initializing MongoDB connection...")
+                await init_db()
+        if db is None:
+            raise RuntimeError("Async database connection could not be established")
+        return db
+    
+    # Periodic health check — verify the connection is still alive
+    now = time.time()
+    if (now - _last_health_check) > _HEALTH_CHECK_INTERVAL:
+        _last_health_check = now
+        try:
+            await asyncio.wait_for(
+                client.admin.command('ping'),
+                timeout=3.0
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ MongoDB health check failed: {e} — attempting reconnect...")
+            async with _reconnect_lock:
+                try:
+                    # Force re-initialization
+                    db_ref = db  # Save ref before clearing
+                    await init_db()
+                    if db is not None:
+                        logger.info("✅ MongoDB reconnection successful")
+                    else:
+                        raise RuntimeError("Reconnect returned None")
+                except Exception as reconnect_err:
+                    logger.error(f"❌ MongoDB reconnect failed: {reconnect_err}")
+                    raise RuntimeError(f"MongoDB connection lost and reconnect failed: {reconnect_err}")
+    
     return db
 
 async def get_fs():
