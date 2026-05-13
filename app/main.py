@@ -35,7 +35,7 @@ from datetime import datetime
 app = FastAPI(title="EAiSER AI Engine", version="2.0.0")
 
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
+async def process_time_middleware(request: Request, call_next):
     import time
     start_time = time.time()
     response = await call_next(request)
@@ -231,7 +231,7 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
             )
 
 # Add timeout middleware before other middlewares
-app.add_middleware(RequestTimeoutMiddleware)
+# app.add_middleware(RequestTimeoutMiddleware)
 
 # Production Security Headers Middleware
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -305,7 +305,7 @@ class AdminKillSwitchMiddleware(BaseHTTPMiddleware):
 app.add_middleware(AdminKillSwitchMiddleware)
 
 # Log all incoming requests
-app.add_middleware(TimingMiddleware)
+# app.add_middleware(TimingMiddleware)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -358,7 +358,7 @@ CORS_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_origin_regex=r"http(s)?://(([a-zA-Z0-9-]+\.)?localhost|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?",
+    allow_origin_regex=r"http(s)?://(([a-zA-Z0-9-]+\.)?localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
