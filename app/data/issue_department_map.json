@@ -1,53 +1,605 @@
 {
-  "pothole": ["public_works"],
-  "garbage": ["sanitation"],
-  "broken_streetlight": ["public_works"],
-  "road_damage": ["public_works"],
-  "graffiti_vandalism": ["code_enforcement", "police"],
-  "graffiti": ["code_enforcement", "police"],
-  "vandalism": ["code_enforcement", "police"],
-  "damaged_sidewalk": ["public_works"],
-  "damaged_traffic_sign": ["transportation"],
-  "fallen_tree": ["public_works"],
-  "fallen___hazardous_tree": ["public_works"],
-  "fallen_hazardous_tree": ["public_works"],
-  "hazardous_tree": ["public_works"],
-  "tree_fallen": ["public_works"],
-  "tree_down": ["public_works"],
-  "clogged_drain": ["public_works"],
-  "clogged_drain___sewer": ["public_works"],
-  "clogged_drain_sewer": ["public_works"],
-  "sewer": ["public_works"],
-  "park_playground_damage": ["public_works"],
-  "park_damage": ["public_works"],
-  "playground_damage": ["public_works"],
-  "broken_traffic_signal": ["transportation"],
-  "traffic_signal": ["transportation"],
-  "abandoned_vehicle": ["public_works", "police"],
-  "dead_animal": ["animal_control", "sanitation"],
-  "water_leakage": ["water_utility"],
-  "water_leak": ["water_utility"],
-  "open_manhole": ["public_works"],
-  "open___damaged_manhole": ["public_works"],
-  "open_damaged_manhole": ["public_works"],
-  "damaged_manhole": ["public_works"],
-  "flooding": ["emergency", "public_works"],
-  "flooding___standing_water": ["emergency", "public_works"],
-  "flooding_standing_water": ["emergency", "public_works"],
-  "standing_water": ["emergency", "public_works"],
-  "fire": ["fire", "police"],
-  "fire_hazard": ["fire", "emergency"],
-  "car_accident": ["police", "emergency"],
-  "vehicle_damage": ["police", "emergency", "public_works"],
-  "tree_on_vehicle": ["police", "emergency", "public_works"],
-  "tree_on_car": ["police", "emergency", "public_works"],
-  "downed_power_line": ["electric_utility", "emergency", "fire"],
-  "power_line": ["electric_utility", "emergency"],
-  "police": ["police"],
-  "illegal_dumping": ["code_enforcement", "sanitation"],
-  "noise_complaint": ["police"],
-  "stray_animal": ["animal_control"],
-  "general": ["general"],
-  "other": ["general"],
-  "unknown": ["general"]
+  "_schema": "v5-severity-aware",
+  "_version": "1.1",
+  "_note": "Each category maps to severity-specific recipient lists. OWNER = default_owner. location_rules add recipients conditionally.",
+  "pothole": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works"
+    ],
+    "emergency": [
+      "public_works",
+      "county_ema"
+    ],
+    "location_rules": [
+      {
+        "condition": "on_state_route",
+        "routes": [
+          "SR-96",
+          "SR-100"
+        ],
+        "add_recipients": [
+          "tdot"
+        ]
+      }
+    ]
+  },
+  "road_damage": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works"
+    ],
+    "emergency": [
+      "public_works",
+      "county_ema"
+    ],
+    "location_rules": [
+      {
+        "condition": "on_state_route",
+        "routes": [
+          "SR-96",
+          "SR-100"
+        ],
+        "add_recipients": [
+          "tdot"
+        ]
+      }
+    ]
+  },
+  "damaged_sidewalk": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works"
+    ],
+    "emergency": [
+      "public_works",
+      "county_ema"
+    ],
+    "notes": "ADA hard rule from SIMI/MIMI bumps severity to High minimum."
+  },
+  "damaged_traffic_sign": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works"
+    ],
+    "emergency": [
+      "public_works",
+      "county_ema"
+    ],
+    "location_rules": [
+      {
+        "condition": "on_state_route",
+        "routes": [
+          "SR-96",
+          "SR-100"
+        ],
+        "add_recipients": [
+          "tdot"
+        ]
+      }
+    ]
+  },
+  "broken_traffic_signal": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works",
+      "police"
+    ],
+    "emergency": [
+      "public_works",
+      "police",
+      "county_ema"
+    ],
+    "location_rules": [
+      {
+        "condition": "on_state_route",
+        "routes": [
+          "SR-96",
+          "SR-100"
+        ],
+        "add_recipients": [
+          "tdot"
+        ]
+      }
+    ],
+    "notes": "Police added at High for traffic control role (functional escalation)."
+  },
+  "clogged_drain": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works"
+    ],
+    "emergency": [
+      "public_works",
+      "county_ema"
+    ]
+  },
+  "open_manhole": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works",
+      "police"
+    ],
+    "emergency": [
+      "public_works",
+      "police",
+      "county_ema"
+    ],
+    "notes": "Police added at High for scene-securing."
+  },
+  "flooding": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works",
+      "water_utility"
+    ],
+    "emergency": [
+      "public_works",
+      "water_utility",
+      "county_ema",
+      "fire"
+    ],
+    "location_rules": [
+      {
+        "condition": "on_state_route",
+        "routes": [
+          "SR-96",
+          "SR-100"
+        ],
+        "add_recipients": [
+          "tdot"
+        ]
+      }
+    ],
+    "notes": "WADC at High (water-main-break); Fire at Emergency (water rescue)."
+  },
+  "fallen_tree": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works"
+    ],
+    "emergency": [
+      "public_works",
+      "county_ema",
+      "fire"
+    ],
+    "notes": "If tangled in power line, SIMI/MIMI generates parallel Downed_Power_Line \u2192 MTE."
+  },
+  "park_playground_damage": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works"
+    ],
+    "emergency": [
+      "public_works",
+      "county_ema"
+    ],
+    "notes": "Fairview has no separate Parks department."
+  },
+  "dead_animal": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works"
+    ],
+    "emergency": [
+      "public_works",
+      "county_ema"
+    ],
+    "location_rules": [
+      {
+        "condition": "on_state_route",
+        "routes": [
+          "SR-96",
+          "SR-100"
+        ],
+        "add_recipients": [
+          "tdot"
+        ]
+      }
+    ],
+    "notes": "Emergency is rare; large-animal blockage or biohazard."
+  },
+  "garbage": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works",
+      "code_enforcement"
+    ],
+    "emergency": [
+      "public_works",
+      "code_enforcement",
+      "county_ema"
+    ],
+    "notes": "Codes added at High for enforcement on illegal dumping."
+  },
+  "graffiti_vandalism": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works",
+      "code_enforcement"
+    ],
+    "emergency": [
+      "public_works",
+      "code_enforcement",
+      "county_ema"
+    ],
+    "notes": "v1 GAP: hate-symbol graffiti should route to Police; deferred until SIMI flags it."
+  },
+  "abandoned_vehicle": {
+    "tier": "known",
+    "default_owner": [
+      "code_enforcement",
+      "police"
+    ],
+    "low": [
+      "code_enforcement",
+      "police"
+    ],
+    "medium": [
+      "code_enforcement",
+      "police"
+    ],
+    "high": [
+      "code_enforcement",
+      "police"
+    ],
+    "emergency": [
+      "code_enforcement",
+      "police",
+      "county_ema"
+    ],
+    "notes": "Co-owned: Codes (code violation) + Police (stolen/public safety)."
+  },
+  "broken_streetlight": {
+    "tier": "known",
+    "default_owner": [
+      "electric_utility"
+    ],
+    "low": [
+      "electric_utility"
+    ],
+    "medium": [
+      "electric_utility"
+    ],
+    "high": [
+      "electric_utility",
+      "public_works"
+    ],
+    "emergency": [
+      "electric_utility",
+      "public_works",
+      "county_ema"
+    ],
+    "notes": "MTE owns infrastructure. Public Works at High coordinates citywide lighting."
+  },
+  "water_leakage": {
+    "tier": "known",
+    "default_owner": [
+      "water_utility"
+    ],
+    "low": [
+      "water_utility"
+    ],
+    "medium": [
+      "water_utility"
+    ],
+    "high": [
+      "water_utility",
+      "public_works"
+    ],
+    "emergency": [
+      "water_utility",
+      "public_works",
+      "county_ema"
+    ],
+    "notes": "WADC owns water (not Fairview). Public Works at High for road-closure."
+  },
+  "fire_hazard": {
+    "tier": "tier_0",
+    "default_owner": [
+      "fire"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "fire",
+      "county_ema",
+      "police"
+    ],
+    "notes": "Police added for perimeter, traffic, evacuation. Resident calls 911 via locked banner."
+  },
+  "fire": {
+    "tier": "tier_0",
+    "default_owner": [
+      "fire"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "fire",
+      "county_ema",
+      "police"
+    ],
+    "notes": "Alias for fire_hazard."
+  },
+  "major_gas_leak": {
+    "tier": "tier_0",
+    "default_owner": [
+      "gas_utility"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "gas_utility",
+      "county_ema",
+      "fire",
+      "police"
+    ],
+    "notes": "Fire for evacuation/scene management. Police for evacuation enforcement."
+  },
+  "active_flooding": {
+    "tier": "tier_0",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "public_works",
+      "county_ema",
+      "fire",
+      "water_utility",
+      "police"
+    ],
+    "notes": "Distinct from non-Tier-0 Flooding. Fire for water rescue, WADC if water-main-break. Police for road-closure."
+  },
+  "downed_power_line": {
+    "tier": "tier_0",
+    "default_owner": [
+      "electric_utility"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "electric_utility",
+      "county_ema",
+      "police"
+    ],
+    "notes": "Police for scene-securing. Default-to-power rule: unknown cables = power lines."
+  },
+  "car_accident": {
+    "tier": "tier_0",
+    "default_owner": [
+      "police"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "police",
+      "county_ema",
+      "fire"
+    ],
+    "notes": "Fire/EMS for injury response. Resident calls 911."
+  },
+  "structural_collapse": {
+    "tier": "tier_0",
+    "default_owner": [
+      "fire"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "fire",
+      "county_ema",
+      "building_inspector",
+      "police"
+    ],
+    "notes": "Fire owns life-safety. Building Inspector for structural assessment. Police for perimeter."
+  },
+  "hazmat_spill": {
+    "tier": "tier_0",
+    "default_owner": [
+      "fire"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "fire",
+      "county_ema",
+      "police"
+    ],
+    "notes": "Fire is primary (hazmat capability). County EMA for multi-agency. Police for perimeter/evacuation."
+  },
+  "person_in_distress": {
+    "tier": "tier_0",
+    "default_owner": [
+      "fire"
+    ],
+    "low": null,
+    "medium": null,
+    "high": null,
+    "emergency": [
+      "fire",
+      "county_ema",
+      "police"
+    ],
+    "notes": "Fire/EMS primary (medical). Police for scene-securing. Resident calls 911."
+  },
+  "_aliases": {
+    "asphalt_damage": "road_damage",
+    "clogged_drain___sewer": "clogged_drain",
+    "clogged_drain_sewer": "clogged_drain",
+    "damaged_manhole": "open_manhole",
+    "fallen___hazardous_tree": "fallen_tree",
+    "fallen_hazardous_tree": "fallen_tree",
+    "flooding___standing_water": "flooding",
+    "flooding_standing_water": "flooding",
+    "graffiti": "graffiti_vandalism",
+    "hazardous_tree": "fallen_tree",
+    "illegal_dumping": "garbage",
+    "open___damaged_manhole": "open_manhole",
+    "open_damaged_manhole": "open_manhole",
+    "park_damage": "park_playground_damage",
+    "pavement_damage": "road_damage",
+    "playground_damage": "park_playground_damage",
+    "pothole_damage": "pothole",
+    "power_line": "downed_power_line",
+    "road_crack": "road_damage",
+    "road_defect": "road_damage",
+    "road_deterioration": "road_damage",
+    "road_pothole": "pothole",
+    "sewer": "clogged_drain",
+    "standing_water": "flooding",
+    "traffic_signal": "broken_traffic_signal",
+    "tree_down": "fallen_tree",
+    "tree_fallen": "fallen_tree",
+    "tree_on_car": "car_accident",
+    "tree_on_vehicle": "car_accident",
+    "vandalism": "graffiti_vandalism",
+    "vehicle_damage": "car_accident",
+    "water_leak": "water_leakage"
+  },
+  "_fallback": {
+    "default_owner": [
+      "general"
+    ],
+    "low": [
+      "general"
+    ],
+    "medium": [
+      "general"
+    ],
+    "high": [
+      "general"
+    ],
+    "emergency": [
+      "general",
+      "county_ema"
+    ]
+  }
 }

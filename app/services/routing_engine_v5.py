@@ -30,50 +30,42 @@ logger = logging.getLogger(__name__)
 # PHASE 0 — DEFINITIONS (NON-NEGOTIABLE)
 # ═══════════════════════════════════════════════════════════════
 
-# Severity mapping: P0-P3
+# V5 Severity levels (replaces P0-P3)
 SEVERITY_MAP = {
-    "P0": {"label": "Critical", "description": "Life/Safety", "priority_ordinal": 4},
-    "P1": {"label": "High", "description": "Urgent", "priority_ordinal": 3},
-    "P2": {"label": "Medium", "description": "Moderate", "priority_ordinal": 2},
-    "P3": {"label": "Low", "description": "Low", "priority_ordinal": 1},
+    "Emergency": {"label": "Emergency", "description": "Life/Safety — 911", "priority_ordinal": 4},
+    "High": {"label": "High", "description": "Same-day review", "priority_ordinal": 3},
+    "Medium": {"label": "Medium", "description": "This week", "priority_ordinal": 2},
+    "Low": {"label": "Low", "description": "Routine maintenance", "priority_ordinal": 1},
 }
 
-# Issue → Severity (P-level) mapping
-ISSUE_SEVERITY_MAP = {
-    # Tier 0 → P0 (life/safety)
-    "Fire Hazard": "P0",
-    "Car Accident": "P0",
-    "Downed Power Line": "P0",
-    # Tier 1 → P1 (urgent)
-    "Flooding / Standing Water": "P1",
-    "Open / Damaged Manhole": "P1",
-    "Broken Traffic Signal": "P1",
-    "Fallen / Hazardous Tree": "P1",
-    # Tier 2 → P2 (moderate)
-    "Pothole": "P2",
-    "Road Damage": "P2",
-    "Broken Streetlight": "P2",
-    "Water Leakage": "P2",
-    "Damaged Sidewalk": "P2",
-    "Damaged Traffic Sign": "P2",
-    "Clogged Drain / Sewer": "P2",
-    # Tier 3 → P3 (low)
-    "Garbage": "P3",
-    "Dead Animal": "P3",
-    "Abandoned Vehicle": "P3",
-    "Graffiti / Vandalism": "P3",
-    "Park / Playground Damage": "P3",
+# Legacy P-level aliases for backward compat
+P_LEVEL_TO_SEVERITY = {"P0": "Emergency", "P1": "High", "P2": "Medium", "P3": "Low"}
+
+# 8 Tier 0 categories (V5 spec)
+TIER_0_CATEGORIES = {
+    "fire_hazard", "fire",
+    "major_gas_leak",
+    "active_flooding",
+    "downed_power_line",
+    "car_accident",
+    "structural_collapse",
+    "hazmat_spill",
+    "person_in_distress",
 }
 
-# P0 labels that map to emergency departments
-P0_DEPARTMENT_MAP = {
-    "Fire Hazard": ["fire", "emergency"],
-    "Car Accident": ["police", "emergency"],
-    "Downed Power Line": ["electric_utility", "emergency", "fire"],
-}
+# Confidence threshold for 911 banner (float 0.0-1.0)
+TIER_0_CONFIDENCE_THRESHOLD = 0.85
 
-# Confidence threshold for P0 downgrade
-P0_CONFIDENCE_THRESHOLD = 85
+# Unified 911 banner (locked — do not modify without legal review)
+EMERGENCY_BANNER = (
+    "⚠️ This may need 911\n\n"
+    "Some of what you reported looks like it could be an emergency. "
+    "EAiSER is not a 911 service and is not monitored 24/7. "
+    "If anyone is in danger, or there is any reason to reach out to an "
+    "emergency line, please call 911.\n\n"
+    "You can still submit this report and we'll work to route it to the "
+    "right departments. For emergencies, call 911."
+)
 
 # ═══════════════════════════════════════════════════════════════
 # DATA LOADERS
@@ -185,103 +177,160 @@ def get_city_state(zip_code: str) -> Dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# PHASE 5 — ROUTING ENGINE
+# PHASE 5 — ROUTING ENGINE (V5: severity-aware)
 # ═══════════════════════════════════════════════════════════════
 
-def get_severity_level(issue_label: str) -> str:
-    """Get P-level severity for an issue label."""
-    return ISSUE_SEVERITY_MAP.get(issue_label, "P2")
+def _normalize_issue_key(label: str) -> str:
+    """Normalize issue label to snake_case for department map lookup."""
+    import re
+    key = re.sub(r'[_\s]+', '_', label.lower().strip().replace("/", "_").replace("-", "_")).strip("_")
+    # Remove doubled underscores
+    while "__" in key:
+        key = key.replace("__", "_")
+    return key
+
+
+def _resolve_aliases(issue_key: str, dept_map: Dict[str, Any]) -> str:
+    """Resolve issue aliases from the department map."""
+    aliases = dept_map.get("_aliases", {})
+    if issue_key in aliases:
+        return aliases[issue_key]
+    return issue_key
+
+
+def _get_severity_key(severity: str) -> str:
+    """Convert severity to department map key."""
+    # Handle legacy P-levels
+    if severity.startswith("P"):
+        severity = P_LEVEL_TO_SEVERITY.get(severity, "Medium")
+    return severity.lower()  # "low", "medium", "high", "emergency"
 
 
 def process_issue_routing(
     issue_label: str,
     confidence: float,
+    severity: str,
     zip_code: str,
     city_status: str,
+    lat: float = None,
+    lng: float = None,
 ) -> List[Dict[str, Any]]:
     """
     Phase 5: Process routing for a SINGLE issue.
+    V5: Uses severity-aware department map with per-level recipient lists.
+    
+    Args:
+        issue_label: The issue type label
+        confidence: Float 0.0-1.0
+        severity: "Emergency", "High", "Medium", or "Low"
+        zip_code: User's zip code
+        city_status: LIVE or NOT_LIVE
+        lat/lng: Optional coordinates for location-conditional routing
     
     Returns list of recipient entries:
-    [{ name, email, type, issue_labels[], reason, checked, locked }]
+    [{ name, email, type, issue_labels[], reason, checked, locked, severity }]
     """
     recipients = []
-    severity = get_severity_level(issue_label)
     dept_map = get_department_map()
     zip_auth = get_zip_authorities(zip_code)
+    
+    # Normalize issue key and resolve aliases
+    issue_key = _normalize_issue_key(issue_label)
+    issue_key = _resolve_aliases(issue_key, dept_map)
+    
+    # Normalize severity to key
+    sev_key = _get_severity_key(severity)
+    
+    # Check if Tier 0
+    is_tier_0 = issue_key in TIER_0_CATEGORIES
+    if is_tier_0:
+        sev_key = "emergency"  # Tier 0 always routes at Emergency
     
     # ──────────────────────────────────
     # 6A: Tier 0 Safety Layer
     # ──────────────────────────────────
-    if severity == "P0":
-        if confidence < P0_CONFIDENCE_THRESHOLD:
-            # Downgrade to P1 if confidence too low
-            severity = "P1"
+    if is_tier_0:
+        if confidence < TIER_0_CONFIDENCE_THRESHOLD:
+            # Don't fire 911 banner, but still route to departments
             logger.info(
-                f"⚠️ V5 Routing: P0 downgraded to P1 for '{issue_label}' "
-                f"(confidence {confidence}% < {P0_CONFIDENCE_THRESHOLD}%)"
+                f"⚠️ V5 Routing: Tier 0 '{issue_key}' confidence {confidence:.2f} "
+                f"< {TIER_0_CONFIDENCE_THRESHOLD} — 911 banner suppressed, ops review required"
             )
-        else:
-            # Add emergency departments — LOCKED, always checked
-            p0_depts = P0_DEPARTMENT_MAP.get(issue_label, ["emergency", "police"])
-            for dept in p0_depts:
-                dept_contacts = zip_auth.get(dept, [])
-                for contact in dept_contacts:
-                    recipients.append({
-                        "name": contact.get("name", dept),
-                        "email": contact.get("email", ""),
-                        "type": contact.get("type", dept),
-                        "issue_labels": [issue_label],
-                        "reason": f"P0_emergency_{issue_label.lower().replace(' ', '_')}",
-                        "checked": True,
-                        "locked": True,
-                        "severity": "P0",
-                    })
-            logger.info(f"🔴 V5 Routing: P0 LOCKED recipients added for '{issue_label}'")
     
     # ──────────────────────────────────
-    # 6B: Department Mapping
+    # 6B: Severity-Aware Department Mapping
     # ──────────────────────────────────
-    import re
-    # Normalize: "Fallen / Hazardous Tree" → "fallen_hazardous_tree"
-    issue_key = re.sub(r'[_\s]+', '_', issue_label.lower().strip().replace("/", "_")).strip("_")
+    issue_config = dept_map.get(issue_key)
     
-    # Try multiple key formats for maximum match rate
-    mapped_depts = dept_map.get(issue_key)
-    if not mapped_depts:
-        # Try first word only: "fallen_hazardous_tree" → "fallen_tree"
+    # Try alias resolution if not found
+    if not issue_config:
+        # Try common alternatives
+        alt_keys = [issue_key]
         words = issue_key.split("_")
         if len(words) >= 2:
-            short_key = f"{words[0]}_{words[-1]}"
-            mapped_depts = dept_map.get(short_key)
-    if not mapped_depts:
-        # Try exact label lowered with underscores
-        alt_key = issue_label.lower().strip().replace(" ", "_")
-        mapped_depts = dept_map.get(alt_key)
+            alt_keys.append(f"{words[0]}_{words[-1]}")
+        for alt in alt_keys:
+            resolved = _resolve_aliases(alt, dept_map)
+            if resolved in dept_map and not resolved.startswith("_"):
+                issue_config = dept_map[resolved]
+                break
+    
+    if not issue_config or isinstance(issue_config, str):
+        # Use fallback
+        issue_config = dept_map.get("_fallback", {
+            "low": ["general"], "medium": ["general"],
+            "high": ["general"], "emergency": ["general", "county_ema"]
+        })
+    
+    # Get severity-specific department list
+    if isinstance(issue_config, dict):
+        mapped_depts = issue_config.get(sev_key)
+        # If severity level returns null (Tier 0 at non-emergency), use emergency
+        if mapped_depts is None:
+            mapped_depts = issue_config.get("emergency", issue_config.get("high", ["general"]))
+        
+        # Apply location rules (SR 96/100 → add TDOT)
+        location_rules = issue_config.get("location_rules", [])
+        for rule in location_rules:
+            if rule.get("condition") == "on_state_route" and lat and lng:
+                # TODO: GeoJSON proximity check (30-foot buffer)
+                # For now, log that location rules exist
+                logger.info(f"📍 Location rule exists for {issue_key}: {rule.get('routes')}")
+    elif isinstance(issue_config, list):
+        # Legacy flat format: just a list of departments
+        mapped_depts = issue_config
+    else:
+        mapped_depts = ["general"]
     
     if mapped_depts:
-        # CASE A: Mapping found
         for dept in mapped_depts:
-            # Skip if already added as P0 locked
-            if any(r["type"] == dept and r["locked"] for r in recipients):
-                continue
             dept_contacts = zip_auth.get(dept, [])
+            if not dept_contacts:
+                logger.warning(f"⚠️ No contacts found for dept '{dept}' in ZIP {zip_code}")
+                continue
             for contact in dept_contacts:
+                is_locked = is_tier_0  # Tier 0 recipients are always locked
                 recipients.append({
                     "name": contact.get("name", dept),
                     "email": contact.get("email", ""),
                     "type": contact.get("type", dept),
                     "issue_labels": [issue_label],
-                    "reason": "mapped_department",
+                    "reason": f"tier_0_emergency_{issue_key}" if is_tier_0 else "severity_based_routing",
                     "checked": True,
-                    "locked": False,
-                    "severity": severity,
+                    "locked": is_locked,
+                    "severity": "Emergency" if is_tier_0 else severity,
+                    "contact_name": contact.get("contact_name", ""),
+                    "phone": contact.get("phone", ""),
                 })
+        if is_tier_0:
+            logger.info(f"🔴 V5 Routing: Tier 0 LOCKED recipients for '{issue_key}': {[d for d in mapped_depts]}")
+        else:
+            logger.info(f"📧 V5 Routing: {sev_key} recipients for '{issue_key}': {[d for d in mapped_depts]}")
     else:
-        # CASE B: Mapping NOT found → route to MomntumAI Crew
+        # No mapping found → route to MomntumAI Ops Queue
         recipients.append({
-            "name": "MomntumAI Crew",
-            "email": "eaiser@momntumai.com",
+            "name": "MomntumAI Ops Queue",
+            "email": "ops-queue@momntumai-routing.dev",
             "type": "internal_review",
             "issue_labels": [issue_label],
             "reason": "unknown_label",
@@ -289,7 +338,7 @@ def process_issue_routing(
             "locked": False,
             "severity": severity,
         })
-        logger.info(f"🟡 V5 Routing: Unknown label '{issue_label}' → MomntumAI Crew")
+        logger.info(f"🟡 V5 Routing: Unknown label '{issue_key}' → Ops Queue")
     
     return recipients
 
@@ -362,20 +411,30 @@ def build_recipient_list(
     
     # Process each issue through routing engine
     all_recipients = []
-    has_p0 = False
+    has_emergency = False
     advisory_text = None
+    emergency_categories = []
     
     for issue in issues:
         label = issue.get("label", "Unknown")
         confidence = issue.get("confidence", 0)
-        severity = get_severity_level(label)
+        # Normalize confidence: convert percentage to float if needed
+        if isinstance(confidence, (int, float)) and confidence > 1.0:
+            confidence = confidence / 100.0
+        severity = issue.get("severity", issue.get("computed_severity", "Medium"))
+        # Handle legacy P-levels
+        if isinstance(severity, str) and severity.startswith("P"):
+            severity = P_LEVEL_TO_SEVERITY.get(severity, "Medium")
         
-        if severity == "P0" and confidence >= P0_CONFIDENCE_THRESHOLD:
-            has_p0 = True
+        issue_key = _normalize_issue_key(label)
+        if issue_key in TIER_0_CATEGORIES and confidence >= TIER_0_CONFIDENCE_THRESHOLD:
+            has_emergency = True
+            emergency_categories.append(issue_key)
         
         issue_recipients = process_issue_routing(
             issue_label=label,
             confidence=confidence,
+            severity=severity,
             zip_code=zip_code,
             city_status=city_status,
         )
@@ -388,12 +447,10 @@ def build_recipient_list(
     for r in all_recipients:
         key = f"{r['email']}_{r['type']}"
         if key in deduped:
-            # Merge issue labels
             existing = deduped[key]
-            for label in r["issue_labels"]:
-                if label not in existing["issue_labels"]:
-                    existing["issue_labels"].append(label)
-            # Keep locked if ANY entry is locked
+            for lbl in r["issue_labels"]:
+                if lbl not in existing["issue_labels"]:
+                    existing["issue_labels"].append(lbl)
             if r["locked"]:
                 existing["locked"] = True
                 existing["checked"] = True
@@ -406,13 +463,15 @@ def build_recipient_list(
     
     recipients = list(deduped.values())
     
-    # Build advisory text for P0
-    if has_p0:
-        advisory_text = "⚠️ This report contains emergency-level issues. Call 911 immediately if there is immediate danger."
+    # Build advisory text for emergency
+    if has_emergency:
+        advisory_text = EMERGENCY_BANNER
     
     return {
         "recipients": recipients,
-        "has_p0": has_p0,
+        "has_p0": has_emergency,  # backward compat key name
+        "has_emergency": has_emergency,
+        "emergency_categories": emergency_categories,
         "advisory_text": advisory_text,
         "city_status": city_status,
         "is_out_of_area": False,

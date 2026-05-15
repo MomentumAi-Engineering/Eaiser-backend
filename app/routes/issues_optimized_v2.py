@@ -743,8 +743,8 @@ async def process_issue_background(
                 "issue_type": issue_type,
                 "severity": severity,
                 "priority": priority,
-                "public_safety_risk": (report or {}).get("detailed_analysis", {}).get("public_safety_risk", "") if report else "",
-                "image_analysis": ((report or {}).get("ai_evaluation") if isinstance((report or {}).get("ai_evaluation"), dict) else {}).get("image_analysis", "") if report else "",
+                "public_safety_risk": (report or {}).get("detailed_analysis", {}).get("public_safety_risk", "") if isinstance((report or {}).get("detailed_analysis"), dict) else "",
+                "image_analysis": (report or {}).get("ai_evaluation", {}).get("image_analysis", "") if isinstance((report or {}).get("ai_evaluation"), dict) else str((report or {}).get("ai_evaluation", "")),
                 "ai_confidence_percent": float(confidence or 0),
                 "metadata_complete": metadata_complete,
                 "is_duplicate": is_duplicate,
@@ -1289,8 +1289,20 @@ async def get_my_issues(
                 elif 'timestamp' in issue_data and isinstance(issue_data['timestamp'], datetime):
                      issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
                 
-                # Ensure image_url is present if image_id or hash exists
-                if not issue_data.get('image_url'):
+                # Ensure image_url is present — prefer Cloudinary URLs over fallback
+                existing_url = issue_data.get('image_url', '')
+                has_http_url = existing_url and str(existing_url).startswith('http')
+                
+                # Check image_urls array (multi-image Cloudinary uploads)
+                image_urls_arr = issue_data.get('image_urls')
+                if not has_http_url and image_urls_arr and isinstance(image_urls_arr, list) and len(image_urls_arr) > 0:
+                    first_cloud = str(image_urls_arr[0])
+                    if first_cloud.startswith('http'):
+                        issue_data['image_url'] = first_cloud
+                        has_http_url = True
+                
+                # Only set fallback API path if no Cloudinary URL exists
+                if not has_http_url:
                     if issue_data.get('image_id') or (issue_data.get('image_hash') and issue_data.get('image_hash') != f"manual_{current_id}"):
                         issue_data['image_url'] = f"/api/issues/{current_id}/image"
                 
@@ -1441,8 +1453,20 @@ async def get_issue_optimized(
         
         # Merge processing_time_ms and image_url into issue_data
         issue_data['processing_time_ms'] = processing_time
-        if issue_data.get('image_id') or issue_data.get('image_hash') != f"manual_{issue_id}":
-            issue_data['image_url'] = f"/api/issues/{issue_id}/image"
+        existing_url = issue_data.get('image_url', '')
+        has_http_url = existing_url and str(existing_url).startswith('http')
+        
+        if not has_http_url:
+            image_urls_arr = issue_data.get('image_urls')
+            if image_urls_arr and isinstance(image_urls_arr, list) and len(image_urls_arr) > 0:
+                first_cloud = str(image_urls_arr[0])
+                if first_cloud.startswith('http'):
+                    issue_data['image_url'] = first_cloud
+                    has_http_url = True
+        
+        if not has_http_url:
+            if issue_data.get('image_id') or issue_data.get('image_hash') != f"manual_{issue_id}":
+                issue_data['image_url'] = f"/api/issues/{issue_id}/image"
         return Issue(**issue_data)
         
     except HTTPException:
@@ -1492,7 +1516,17 @@ async def get_issues_optimized(
                 if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
                     issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
                 
-                if not issue_data.get('image_url'):
+                existing_url = issue_data.get('image_url', '')
+                has_http_url = existing_url and str(existing_url).startswith('http')
+                
+                image_urls_arr = issue_data.get('image_urls')
+                if not has_http_url and image_urls_arr and isinstance(image_urls_arr, list) and len(image_urls_arr) > 0:
+                    first_cloud = str(image_urls_arr[0])
+                    if first_cloud.startswith('http'):
+                        issue_data['image_url'] = first_cloud
+                        has_http_url = True
+                
+                if not has_http_url:
                     if issue_data.get('image_id') or (issue_data.get('image_hash') and issue_data.get('image_hash') != f"manual_{current_id}"):
                         issue_data['image_url'] = f"/api/issues/{current_id}/image"
             
@@ -1549,8 +1583,18 @@ async def get_issues_optimized(
             if 'timestamp' in issue_data and hasattr(issue_data['timestamp'], 'isoformat'):
                 issue_data['timestamp'] = issue_data['timestamp'].isoformat() + "Z"
                 
-            # Ensure image_url is present
-            if not issue_data.get('image_url'):
+            # Ensure image_url is present — prefer Cloudinary URLs
+            existing_url = issue_data.get('image_url', '')
+            has_http_url = existing_url and str(existing_url).startswith('http')
+            
+            image_urls_arr = issue_data.get('image_urls')
+            if not has_http_url and image_urls_arr and isinstance(image_urls_arr, list) and len(image_urls_arr) > 0:
+                first_cloud = str(image_urls_arr[0])
+                if first_cloud.startswith('http'):
+                    issue_data['image_url'] = first_cloud
+                    has_http_url = True
+            
+            if not has_http_url:
                  if issue_data.get('image_id') or (issue_data.get('image_hash') and issue_data.get('image_hash') != f"manual_{current_id}"):
                     issue_data['image_url'] = f"/api/issues/{current_id}/image"
 
@@ -2139,7 +2183,7 @@ async def get_issue_image_optimized(
     _: None = Depends(rate_limit_dependency)
 ):
     """
-    🖼️ Serve issue evidence image from GridFS or Cloudinary
+    🖼️ Serve issue evidence image from Cloudinary or GridFS
     """
     try:
         from fastapi.responses import StreamingResponse, RedirectResponse
@@ -2147,15 +2191,33 @@ async def get_issue_image_optimized(
         if not mongodb_service:
             raise HTTPException(status_code=503, detail="Database service unavailable")
         
-        # Check if the document has a Cloudinary image_url
         issue = await mongodb_service.get_issue_by_id(issue_id)
-        if issue and issue.get("image_url"):
-            # If it's a Cloudinary URL or a static URL
-            if str(issue["image_url"]).startswith("http"):
-                return RedirectResponse(url=issue["image_url"])
+        if not issue:
+            raise HTTPException(status_code=404, detail="Issue not found")
         
-        # Try GridFS by image_id first
-        if issue and issue.get("image_id"):
+        # ── Step 1: Check for Cloudinary/HTTP URLs ──
+        # Priority: image_url (single) → image_urls[0] (multi-image array)
+        # Skip self-referencing relative paths like "/api/issues/{id}/image"
+        cloud_url = None
+        
+        # Check image_url field
+        raw_url = issue.get("image_url", "")
+        if raw_url and str(raw_url).startswith("http"):
+            cloud_url = raw_url
+        
+        # Check image_urls array (multi-image Cloudinary uploads)
+        if not cloud_url:
+            image_urls_arr = issue.get("image_urls")
+            if image_urls_arr and isinstance(image_urls_arr, list) and len(image_urls_arr) > 0:
+                first_url = str(image_urls_arr[0])
+                if first_url.startswith("http"):
+                    cloud_url = first_url
+        
+        if cloud_url:
+            return RedirectResponse(url=cloud_url, status_code=302)
+        
+        # ── Step 2: Try GridFS by image_id ──
+        if issue.get("image_id"):
             image_stream = await mongodb_service.get_issue_image_stream(issue_id)
             if image_stream:
                 return StreamingResponse(
@@ -2167,7 +2229,7 @@ async def get_issue_image_optimized(
                     }
                 )
         
-        # Fallback: Search GridFS directly by filename pattern (handles async upload race)
+        # ── Step 3: Fallback — search GridFS by filename pattern ──
         if mongodb_service.fs:
             try:
                 gridout = await mongodb_service.fs.open_download_stream_by_name(f"issue_{issue_id}.jpg")
@@ -2183,7 +2245,6 @@ async def get_issue_image_optimized(
             except Exception as gridfs_err:
                 logger.debug(f"GridFS filename lookup failed for issue_{issue_id}.jpg: {gridfs_err}")
         
-        # Return a default placeholder or 404
         raise HTTPException(status_code=404, detail="Image not found for this issue")
     except HTTPException:
         raise

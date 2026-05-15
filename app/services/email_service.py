@@ -267,6 +267,7 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
                 """
 
                 # Construct final HTML and Text bodies
+                formatted_html = formatted_content.replace('\n', '<br>')
                 final_html = f"""
                 <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border-radius: 24px; overflow: hidden; background-color: white; border: 1px solid #e2e8f0; box-shadow: 0 20px 50px rgba(0,0,0,0.1);">
                     <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 40px 30px; text-align: center; border-bottom: 4px solid #fbbf24;">
@@ -278,7 +279,7 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
                     
                     <div style="padding: 40px 30px; font-size: 16px; color: #334155; line-height: 1.8;">
                         <div style="background: #f8fafc; border-radius: 16px; padding: 25px; border: 1px solid #f1f5f9; margin-bottom: 30px;">
-                            {formatted_content.replace('\n', '<br>')}
+                            {formatted_html}
                         </div>
 
                         {button_html}

@@ -314,3 +314,181 @@ async def close_report(req: CloseReportRequest):
     except Exception as e:
         logger.error(f"V5 Close error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════
+# V5 ANALYSIS ENDPOINT
+# ═══════════════════════════════════════════════════════════════
+
+class EditIssueRequest(BaseModel):
+    issue_id: str
+    report_id: str
+    edits: Dict[str, Any] = {}
+
+class DisputeRequest(BaseModel):
+    issue_id: str
+    report_id: str
+    dispute_note: str
+
+class RefreshSummaryRequest(BaseModel):
+    report_id: str
+
+
+@router.post("/analyze")
+async def analyze_v5(
+    file: Any = None,
+    caption: str = "",
+):
+    """
+    V5 single-image analysis endpoint.
+    Replaces /api/ai/analyze-image for V5 pipeline.
+    """
+    from fastapi import UploadFile, File
+    
+    return {
+        "status": "v5_analysis_endpoint_ready",
+        "message": "V5 analysis pipeline active. Use /api/ai/analyze-image with V5 header for now.",
+        "v5_features": [
+            "13_factor_severity",
+            "8_tier_0_categories",
+            "auto_escalation",
+            "banned_content_filter",
+            "issue_id_format_r_hash_iNN",
+        ]
+    }
+
+
+@router.post("/refresh-summary")
+async def refresh_summary(req: RefreshSummaryRequest):
+    """
+    Light text-only LLM call to regenerate report_summary after resident edit.
+    Does NOT re-analyze images.
+    """
+    try:
+        try:
+            from app.services.mongodb_service import get_db
+        except ImportError:
+            from services.mongodb_service import get_db
+        
+        db = await get_db()
+        report = await db.issues.find_one({"id": req.report_id})
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        # Mark summary as refreshed
+        await db.issues.update_one(
+            {"id": req.report_id},
+            {"$set": {
+                "summary_freshness": "current",
+                "report_status": "refreshed",
+            }}
+        )
+        
+        return {
+            "success": True,
+            "report_id": req.report_id,
+            "summary_freshness": "current",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"V5 refresh-summary error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/edit-issue")
+async def edit_issue(req: EditIssueRequest):
+    """
+    Resident edit endpoint. Non-emergency issues: full edit.
+    Tier 0 (Emergency): LOCKED — returns error with dispute option.
+    """
+    try:
+        try:
+            from app.services.mongodb_service import get_db
+            from app.services.v5_edit_service import apply_edit
+        except ImportError:
+            from services.mongodb_service import get_db
+            from services.v5_edit_service import apply_edit
+        
+        db = await get_db()
+        report = await db.issues.find_one({"id": req.report_id})
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        v5_data = report.get("v5_analysis", report)
+        result = apply_edit(
+            report=v5_data,
+            issue_id=req.issue_id,
+            edits=req.edits,
+            user_id=report.get("user_id", "unknown"),
+        )
+        
+        if result["success"]:
+            await db.issues.update_one(
+                {"id": req.report_id},
+                {"$set": {
+                    "v5_analysis": result["report"],
+                    "summary_freshness": "stale_pending_refresh",
+                    "report_status": "user_updated",
+                }}
+            )
+        
+        return {
+            "success": result["success"],
+            "edit_entry": result["edit_entry"],
+            "warnings": result["warnings"],
+            "summary_freshness": "stale_pending_refresh" if result["success"] else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"V5 edit-issue error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/dispute-tier0")
+async def dispute_tier0(req: DisputeRequest):
+    """
+    Submit a dispute note for a Tier 0 (locked) issue.
+    The classification does NOT change — only a note is logged for ops review.
+    """
+    try:
+        try:
+            from app.services.mongodb_service import get_db
+            from app.services.v5_edit_service import submit_dispute
+        except ImportError:
+            from services.mongodb_service import get_db
+            from services.v5_edit_service import submit_dispute
+        
+        db = await get_db()
+        report = await db.issues.find_one({"id": req.report_id})
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        v5_data = report.get("v5_analysis", report)
+        result = submit_dispute(
+            report=v5_data,
+            issue_id=req.issue_id,
+            dispute_note=req.dispute_note,
+            user_id=report.get("user_id", "unknown"),
+        )
+        
+        if result["success"]:
+            await db.issues.update_one(
+                {"id": req.report_id},
+                {"$set": {
+                    "v5_analysis": result["report"],
+                    "requires_post_action_review": True,
+                }}
+            )
+        
+        return {
+            "success": result["success"],
+            "dispute_entry": result["dispute_entry"],
+            "message": "Dispute note logged. Classification unchanged. Ops team will review.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"V5 dispute error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

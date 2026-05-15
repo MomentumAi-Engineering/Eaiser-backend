@@ -2,49 +2,123 @@
   "37062": {
     "public_works": [
       {
-        "name": "Fairview Public Works Department",
-        "email": "chrishabh2002@gmail.com",
+        "name": "Fairview Public Works",
+        "email": "fairview-publicworks@momntumai-routing.dev",
         "type": "public_works",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "sanitation": [
-      {
-        "name": "Fairview Sanitation Department",
-        "email": "chrishabh1000@gmail.com",
-        "type": "sanitation",
+        "phone": "(615) 799-0353",
+        "contact_name": "Todd Bratcher",
+        "role": "Public Works Director",
         "timezone": "America/Chicago"
       }
     ],
     "police": [
       {
         "name": "Fairview Police Department",
-        "email": "rishav@momntumai.com",
+        "email": "fairview-police@momntumai-routing.dev",
         "type": "police",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "emergency": [
-      {
-        "name": "Fairview Emergency Services",
-        "email": "joel@momntumai.com",
-        "type": "emergency",
+        "phone": "(615) 799-2431",
+        "contact_name": "Chief Zack Humphreys",
+        "role": "Non-emergency",
         "timezone": "America/Chicago"
       }
     ],
     "fire": [
       {
         "name": "Fairview Fire Department",
-        "email": "raj@momntumai.com",
+        "email": "fairview-fire@momntumai-routing.dev",
         "type": "fire",
+        "phone": "(615) 799-3473",
+        "contact_name": "Chief Scott Hughes",
+        "role": "Non-emergency",
         "timezone": "America/Chicago"
       }
     ],
-    "building_inspection": [
+    "code_enforcement": [
       {
-        "name": "Fairview Building Inspection",
-        "email": "Dummy@fairviewtn.gov",
-        "type": "building_inspection",
+        "name": "Fairview Codes Enforcement",
+        "email": "fairview-codes@momntumai-routing.dev",
+        "type": "code_enforcement",
+        "phone": "(615) 387-6082",
+        "contact_name": "Devon Halliburton",
+        "role": "Codes Inspector",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "building_inspector": [
+      {
+        "name": "Fairview Building Inspector",
+        "email": "fairview-building@momntumai-routing.dev",
+        "type": "building_inspector",
+        "phone": "(615) 387-6082",
+        "contact_name": "Tom Ponder",
+        "role": "Building Inspector",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "city_manager": [
+      {
+        "name": "Fairview City Manager",
+        "email": "fairview-citymgr@momntumai-routing.dev",
+        "type": "city_manager",
+        "phone": "(615) 387-6084",
+        "contact_name": "Tom Daugherty",
+        "role": "Reserved for edge cases",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "county_ema": [
+      {
+        "name": "Williamson County EMA",
+        "email": "todd.horton@williamsoncounty-tn.gov",
+        "type": "county_ema",
+        "phone": "(615) 790-5754",
+        "contact_name": "Todd Horton",
+        "role": "EMA Director",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "tdot": [
+      {
+        "name": "Tennessee DOT",
+        "email": "tdot-roadrepair@momntumai-routing.dev",
+        "type": "tdot",
+        "phone": "833-836-8349",
+        "contact_name": "TDOT Road Repair",
+        "role": "Web form; Ops bridges email to TDOT form",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "electric_utility": [
+      {
+        "name": "Middle Tennessee Electric",
+        "email": "mte-emergency@momntumai-routing.dev",
+        "type": "electric_utility",
+        "phone": "(615) 794-3561",
+        "phone_emergency": "(877) 777-9111",
+        "contact_name": "MTE Emergency",
+        "role": "Electric utility (streetlights, power lines)",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "gas_utility": [
+      {
+        "name": "Spire Tennessee",
+        "email": "spire-emergency@momntumai-routing.dev",
+        "type": "gas_utility",
+        "phone": "(800) 752-7504",
+        "contact_name": "Spire Emergency",
+        "role": "Gas utility (formerly Piedmont)",
+        "timezone": "America/Chicago"
+      }
+    ],
+    "water_utility": [
+      {
+        "name": "Water Authority of Dickson County",
+        "email": "wadc-emergency@momntumai-routing.dev",
+        "type": "water_utility",
+        "phone": "(615) 441-9511",
+        "contact_name": "WADC Emergency",
+        "role": "Water/wastewater; Fairview has no city water dept",
         "timezone": "America/Chicago"
       }
     ],
@@ -56,59 +130,11 @@
         "timezone": "America/Chicago"
       }
     ],
-    "environment": [
-      {
-        "name": "Fairview Environmental Department",
-        "email": "Dummy@fairviewtn.gov",
-        "type": "environment",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "water_utility": [
-      {
-        "name": "Fairview Water Utility Department",
-        "email": "Dummy@fairviewtn.gov",
-        "type": "water_utility",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "code_enforcement": [
-      {
-        "name": "Fairview Code Enforcement",
-        "email": "Dummy@fairviewtn.gov",
-        "type": "code_enforcement",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "transportation": [
-      {
-        "name": "Fairview Transportation Department",
-        "email": "Dummy@fairviewtn.gov",
-        "type": "transportation",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "property_management": [
-      {
-        "name": "Fairview Property Management",
-        "email": "chrishabh1000@gmail.com",
-        "type": "property_management",
-        "timezone": "America/Chicago"
-      }
-    ],
     "general": [
       {
         "name": "Fairview City Department",
-        "email": "Dummy@fairviewtn.gov",
+        "email": "eaiser@momntumai.com",
         "type": "general",
-        "timezone": "America/Chicago"
-      }
-    ],
-    "electric_utility": [
-      {
-        "name": "Fairview Electric / Utility Services",
-        "email": "joel@momntumai.com",
-        "type": "electric_utility",
         "timezone": "America/Chicago"
       }
     ]
@@ -116,8 +142,8 @@
   "default": {
     "general": [
       {
-        "name": "City Department",
-        "email": "eaiser@momntumai.com",
+        "name": "MomntumAI Ops Queue",
+        "email": "ops-queue@momntumai-routing.dev",
         "type": "general",
         "timezone": "UTC"
       }

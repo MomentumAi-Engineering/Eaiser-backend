@@ -192,9 +192,30 @@ def get_authority(address: str, issue_type: str, latitude: float, longitude: flo
         # Enhance fallback using department mapping when zip is not provided
         try:
             dept_map = load_json_data("issue_department_map.json")
-            departments = dept_map.get(issue_type, dept_map.get(_canonical_issue(issue_type), [])) or []
-            if isinstance(departments, str):
-                departments = [departments]
+            raw_dept = dept_map.get(issue_type, dept_map.get(_canonical_issue(issue_type)))
+            
+            # Check aliases
+            if raw_dept is None:
+                aliases = dept_map.get("_aliases", {})
+                canonical = aliases.get(issue_type, issue_type)
+                raw_dept = dept_map.get(canonical)
+
+            # Extract flat department list from V5 format or legacy format
+            if isinstance(raw_dept, dict):
+                departments = raw_dept.get("default_owner", [])
+                if not departments:
+                    for level in ["medium", "low", "high"]:
+                        level_depts = raw_dept.get(level, [])
+                        if level_depts:
+                            departments = level_depts
+                            break
+            elif isinstance(raw_dept, list):
+                departments = raw_dept
+            elif isinstance(raw_dept, str):
+                departments = [raw_dept]
+            else:
+                departments = []
+
             dept_defaults = {
                 "public_works": "City Public Works",
                 "sanitation": "Sanitation Department",
@@ -258,8 +279,42 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
         issue_department_map = {str(k).lower(): v for k, v in dept_map.items()}
         
         # Strict lookup for departments
-        # If issue type is not found, default to 'unknown' mapping or 'general'
-        departments = issue_department_map.get(issue_type, issue_department_map.get("unknown", ["general"]))
+        # If issue type is not found, check aliases, then default to 'general'
+        raw_dept = issue_department_map.get(issue_type)
+        
+        # Check aliases if not found directly
+        if raw_dept is None:
+            aliases = issue_department_map.get("_aliases", {})
+            canonical = aliases.get(issue_type, issue_type)
+            raw_dept = issue_department_map.get(canonical)
+        
+        # Still not found — use fallback
+        if raw_dept is None:
+            fallback = issue_department_map.get("_fallback", {})
+            raw_dept = fallback if fallback else ["general"]
+
+        # ═══ Handle V5 nested format vs legacy flat list ═══
+        # V5 format: {"tier": "known", "default_owner": ["public_works"], "low": [...], "medium": [...], ...}
+        # Legacy format: ["public_works", "sanitation"]
+        if isinstance(raw_dept, dict):
+            # V5 nested format — extract department list from default_owner or medium severity
+            departments = raw_dept.get("default_owner", [])
+            if not departments:
+                # Fallback: try medium severity, then low, then any severity level
+                for level in ["medium", "low", "high", "emergency"]:
+                    level_depts = raw_dept.get(level, [])
+                    if level_depts:
+                        departments = level_depts
+                        break
+            if not departments:
+                departments = ["general"]
+        elif isinstance(raw_dept, list):
+            # Legacy flat list format
+            departments = raw_dept
+        elif isinstance(raw_dept, str):
+            departments = [raw_dept]
+        else:
+            departments = ["general"]
 
         zip_code_authorities = load_json_data("zip_code_authorities.json")
         zip_key = zip_code if zip_code in zip_code_authorities else None
@@ -277,12 +332,19 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
         responsible_authorities = []
         for dept in departments:
             if dept in zip_data:
-                responsible_authorities.extend(zip_data[dept])
+                entries = zip_data[dept]
+                if isinstance(entries, list):
+                    responsible_authorities.extend(entries)
+                elif isinstance(entries, dict):
+                    responsible_authorities.append(entries)
         
         # 2. Populate available authorities with ALL departments in that zip code
         available_authorities = []
         for dept_list in zip_data.values():
-            available_authorities.extend(dept_list)
+            if isinstance(dept_list, list):
+                available_authorities.extend(dept_list)
+            elif isinstance(dept_list, dict):
+                available_authorities.append(dept_list)
 
         # 3. Add General Support/Business Support as an option in available authorities
         # Use the timezone from the first responsible authority, or default to UTC

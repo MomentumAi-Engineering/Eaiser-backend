@@ -704,13 +704,9 @@ class OptimizedMongoDBService:
                     
                 cursor = collection.find(filter_query, projection)
                 
-                # 🔧 Performance: Hint the compound index for user_email queries
-                # to avoid full collection scans on Atlas free tier
-                if 'user_email' in filter_query:
-                    try:
-                        cursor = cursor.hint('user_email_submitted_status_ts')
-                    except Exception:
-                        pass  # Fallback to default index selection
+                # Note: Removed .hint() — it throws during iteration (not during call),
+                # and if the index doesn't exist, it silently kills the query.
+                # MongoDB's query planner will auto-select the best available index.
                 
                 cursor = cursor.max_time_ms(12000).batch_size(100)  # 12s server timeout, smaller batches
                 
