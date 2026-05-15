@@ -199,11 +199,35 @@ def _resolve_aliases(issue_key: str, dept_map: Dict[str, Any]) -> str:
 
 
 def _get_severity_key(severity: str) -> str:
-    """Convert severity to department map key."""
+    """Convert severity to department map key ('low', 'medium', 'high', 'emergency')."""
+    if not severity:
+        return "medium"
+    s = severity.strip().lower()
     # Handle legacy P-levels
-    if severity.startswith("P"):
-        severity = P_LEVEL_TO_SEVERITY.get(severity, "Medium")
-    return severity.lower()  # "low", "medium", "high", "emergency"
+    if s.startswith("p"):
+        mapped = P_LEVEL_TO_SEVERITY.get(severity.upper(), "Medium")
+        return mapped.lower()
+    # Handle Tier-based severity from AI
+    if "tier" in s or "tier_" in s:
+        if "0" in s:
+            return "emergency"
+        elif "1" in s:
+            return "high"
+        elif "2" in s:
+            return "medium"
+        elif "3" in s:
+            return "low"
+        return "medium"
+    # Handle direct severity words
+    if s in ("emergency", "critical"):
+        return "emergency"
+    if s in ("high", "urgent"):
+        return "high"
+    if s in ("medium", "moderate"):
+        return "medium"
+    if s in ("low", "minor"):
+        return "low"
+    return "medium"  # safe default
 
 
 def process_issue_routing(
