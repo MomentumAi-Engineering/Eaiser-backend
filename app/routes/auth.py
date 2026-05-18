@@ -986,3 +986,48 @@ async def accept_tos(current_user: dict = Depends(get_current_user), background_
     except Exception as e:
         logger.error(f"Error accepting TOS: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+class DeleteAccountRequest(BaseModel):
+    confirmation: str  # Must be "DELETE" to confirm
+
+@router.delete("/delete-account")
+async def delete_account(data: DeleteAccountRequest = Body(...), current_user: dict = Depends(get_current_user)):
+    """
+    Permanently delete user account and all associated data.
+    Required by Apple App Store Guideline 5.1.1(v).
+    User must send confirmation: "DELETE" to proceed.
+    """
+    try:
+        if data.confirmation != "DELETE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Please type DELETE to confirm account deletion."
+            )
+
+        db = await get_db()
+        email = current_user["sub"]
+
+        user = await db["users"].find_one({"email": email})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user_id = str(user["_id"])
+        logger.warning(f"🗑️ Account deletion initiated for user: {email} (ID: {user_id})")
+
+        # Delete user's issues/reports
+        issues_result = await db["issues"].delete_many({"user_email": email})
+        logger.info(f"  Deleted {issues_result.deleted_count} issues for {email}")
+
+        # Delete the user account
+        await db["users"].delete_one({"_id": user["_id"]})
+        logger.warning(f"✅ Account permanently deleted: {email}")
+
+        return {
+            "message": "Your account and all associated data have been permanently deleted.",
+            "deleted_issues": issues_result.deleted_count,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Account deletion error for {current_user.get('sub')}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete account. Please try again or contact support.")
