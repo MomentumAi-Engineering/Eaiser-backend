@@ -680,6 +680,28 @@ except ImportError:
 if admin_users_router:
     app.include_router(admin_users_router, prefix="/api") # Mounted at /api/admin/users
 
+# Include Admin Subscriptions Router (reads from `organizations` collection
+# populated by /api/gov/billing/checkout — see gov/billing.py)
+admin_subscriptions_router = None
+_admin_subs_err = None
+try:
+    import app.routes.admin_subscriptions as admin_subscriptions_mod
+    admin_subscriptions_router = admin_subscriptions_mod.router
+except Exception as e:
+    _admin_subs_err = e
+    try:
+        import routes.admin_subscriptions as admin_subscriptions_mod
+        admin_subscriptions_router = admin_subscriptions_mod.router
+        _admin_subs_err = None
+    except Exception as e2:
+        _admin_subs_err = e2
+
+if admin_subscriptions_router:
+    app.include_router(admin_subscriptions_router, prefix="/api") # Mounted at /api/admin/subscriptions
+    logger.info("✅ /api/admin/subscriptions router mounted")
+else:
+    logger.error(f"❌ Failed to mount /api/admin/subscriptions router: {_admin_subs_err!r}")
+
 # Include Gov Auth Router
 try:
     import app.gov.gov_auth as gov_auth_mod
@@ -707,6 +729,55 @@ except ImportError:
 
 if gov_portal_router:
     app.include_router(gov_portal_router, prefix="/api") # Mounted at /api/gov/portal
+
+# ═══════════════════════════════════════════════════════════════════
+# EAiSER Civic — Billing, Activation, Onboarding (self-serve flow)
+# ═══════════════════════════════════════════════════════════════════
+
+# Billing & Self-Serve Checkout
+try:
+    import app.gov.billing as gov_billing_mod
+    gov_billing_router = gov_billing_mod.router
+except ImportError:
+    try:
+        import gov.billing as gov_billing_mod
+        gov_billing_router = gov_billing_mod.router
+    except ImportError as e:
+        logger.warning(f"gov.billing router not loaded: {e}")
+        gov_billing_router = None
+
+if gov_billing_router:
+    app.include_router(gov_billing_router, prefix="/api")  # Mounted at /api/gov/billing
+
+# Account Activation (magic link)
+try:
+    import app.gov.activation as gov_activation_mod
+    gov_activation_router = gov_activation_mod.router
+except ImportError:
+    try:
+        import gov.activation as gov_activation_mod
+        gov_activation_router = gov_activation_mod.router
+    except ImportError as e:
+        logger.warning(f"gov.activation router not loaded: {e}")
+        gov_activation_router = None
+
+if gov_activation_router:
+    app.include_router(gov_activation_router, prefix="/api")  # Mounted at /api/gov/activation
+
+# Onboarding Wizard
+try:
+    import app.gov.onboarding as gov_onboarding_mod
+    gov_onboarding_router = gov_onboarding_mod.router
+except ImportError:
+    try:
+        import gov.onboarding as gov_onboarding_mod
+        gov_onboarding_router = gov_onboarding_mod.router
+    except ImportError as e:
+        logger.warning(f"gov.onboarding router not loaded: {e}")
+        gov_onboarding_router = None
+
+if gov_onboarding_router:
+    app.include_router(gov_onboarding_router, prefix="/api")  # Mounted at /api/gov/onboarding
 
 # Include Email Webhooks
 try:

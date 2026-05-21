@@ -44,6 +44,10 @@ PERMISSIONS = {
     "maintenance_mode": ["super_admin"],
     "change_password": ["super_admin", "admin", "team_member", "viewer", "operations", "ops_manager"],
     "enable_2fa": ["super_admin", "admin", "team_member"],
+
+    # Subscriptions & Billing (mirror frontend)
+    "view_subscriptions": ["super_admin", "admin"],
+    "manage_subscriptions": ["super_admin"],
     
     # Legacy
     "view_stats": ["super_admin", "admin", "viewer"],
