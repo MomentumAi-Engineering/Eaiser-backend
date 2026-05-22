@@ -473,21 +473,30 @@ async def process_issue_background(
                 logger.warning(f"AI Task failed: {ai_err}")
 
         # Await Geocode if it's running
+        city = ""
+        state = ""
         if geocode_task:
             try:
                 geocode_result = await geocode_task
                 final_address = geocode_result.get("address", address or "Unknown Address")
                 latitude = geocode_result.get("latitude", latitude)
                 longitude = geocode_result.get("longitude", longitude)
-                
+                city = geocode_result.get("city", "")
+                state = geocode_result.get("state", "")
+
                 # Cache geocoding result
                 await set_cached_data(geocode_cache_key, {
                     "address": final_address,
                     "latitude": latitude,
-                    "longitude": longitude
+                    "longitude": longitude,
+                    "city": city,
+                    "state": state,
                 }, ttl=86400)
             except Exception as geo_err:
                 logger.warning(f"Geocoding Task failed: {geo_err}")
+        elif cached_geocode:
+            city = cached_geocode.get("city", "")
+            state = cached_geocode.get("state", "")
 
         if not image_content and not is_manual:
             # Manual Report Fallback
@@ -920,10 +929,37 @@ async def process_issue_background(
                     f"(primary='{issue_type}', total={simi_data.get('total_issues')})"
                 )
 
+            # Fallback: parse city from address string if geocode didn't return it
+            if not city and final_address:
+                try:
+                    parts = [p.strip() for p in final_address.split(",")]
+                    if len(parts) >= 2:
+                        city = parts[0] if parts[0] else ""
+                        if not state and len(parts[1]) >= 2:
+                            state_token = parts[1].strip().split(" ")[0]
+                            if len(state_token) == 2 and state_token.isalpha():
+                                state = state_token.upper()
+                except Exception:
+                    pass
+
+            # GeoJSON location for 2dsphere index (nearby queries)
+            location_geojson = None
+            if latitude and longitude:
+                try:
+                    location_geojson = {
+                        "type": "Point",
+                        "coordinates": [float(longitude), float(latitude)],
+                    }
+                except (TypeError, ValueError):
+                    location_geojson = None
+
             issue_doc = {
                 "_id": issue_id,
                 "address": final_address,
                 "zip_code": zip_code or "N/A",
+                "city": city or "Unknown",
+                "state": state or "",
+                "location": location_geojson,
                 "latitude": latitude,
                 "longitude": longitude,
                 "issue_type": display_issue_type,

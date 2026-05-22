@@ -54,23 +54,33 @@ async def geocode_zip_code(zip_code: str) -> Dict[str, Any]:
         result = data["results"][0]
         location = result["geometry"]["location"]
         formatted_zip = ""
+        city = ""
+        state = ""
         for component in result["address_components"]:
-            if "postal_code" in component["types"]:
+            types = component["types"]
+            if "postal_code" in types:
                 formatted_zip = component["long_name"]
-                break
+            elif "locality" in types:
+                city = component["long_name"]
+            elif not city and "sublocality" in types:
+                city = component["long_name"]
+            elif "administrative_area_level_1" in types:
+                state = component["short_name"]
 
-        logger.info(f"Geocoded zip code {zip_code}: {result['formatted_address']}, {location['lat']}, {location['lng']}")
+        logger.info(f"Geocoded zip code {zip_code}: {result['formatted_address']}, {location['lat']}, {location['lng']}, city={city}")
         return {
             "address": result["formatted_address"],
             "latitude": location["lat"],
             "longitude": location["lng"],
-            "zip_code": formatted_zip or zip_code
+            "zip_code": formatted_zip or zip_code,
+            "city": city,
+            "state": state,
         }
     except Exception as e:
         logger.error(f"Zip code geocoding error for {zip_code}: {str(e)}")
         if os.getenv("ENV") == "production":
             raise HTTPException(status_code=500, detail=f"Zip code geocoding error: {str(e)}")
-        return {"address": "Unknown Address", "latitude": 0.0, "longitude": 0.0, "zip_code": zip_code}
+        return {"address": "Unknown Address", "latitude": 0.0, "longitude": 0.0, "zip_code": zip_code, "city": "", "state": ""}
 
 def geocode_address(address: str) -> Dict[str, Any]:
     """
@@ -110,23 +120,33 @@ def geocode_address(address: str) -> Dict[str, Any]:
         result = data["results"][0]
         location = result["geometry"]["location"]
         zip_code = ""
+        city = ""
+        state = ""
         for component in result["address_components"]:
-            if "postal_code" in component["types"]:
+            types = component["types"]
+            if "postal_code" in types:
                 zip_code = component["long_name"]
-                break
+            elif "locality" in types:
+                city = component["long_name"]
+            elif not city and "sublocality" in types:
+                city = component["long_name"]
+            elif "administrative_area_level_1" in types:
+                state = component["short_name"]
 
-        logger.info(f"Geocoded address {address}: {result['formatted_address']}, {location['lat']}, {location['lng']}, zip: {zip_code}")
+        logger.info(f"Geocoded address {address}: {result['formatted_address']}, {location['lat']}, {location['lng']}, zip: {zip_code}, city: {city}")
         return {
             "latitude": location["lat"],
             "longitude": location["lng"],
             "address": result["formatted_address"],
-            "zip_code": zip_code
+            "zip_code": zip_code,
+            "city": city,
+            "state": state,
         }
     except Exception as e:
         logger.error(f"Geocoding error for address {address}: {str(e)}")
         if os.getenv("ENV") == "production":
             raise HTTPException(status_code=500, detail=f"Geocoding error: {str(e)}")
-        return {"latitude": 0.0, "longitude": 0.0, "address": address, "zip_code": ""}
+        return {"latitude": 0.0, "longitude": 0.0, "address": address, "zip_code": "", "city": "", "state": ""}
 
 def reverse_geocode(latitude: float, longitude: float) -> Dict[str, str]:
     """
@@ -166,21 +186,31 @@ def reverse_geocode(latitude: float, longitude: float) -> Dict[str, str]:
 
         result = data["results"][0]
         zip_code = ""
+        city = ""
+        state = ""
         for component in result["address_components"]:
-            if "postal_code" in component["types"]:
+            types = component["types"]
+            if "postal_code" in types:
                 zip_code = component["long_name"]
-                break
+            elif "locality" in types:
+                city = component["long_name"]
+            elif not city and "sublocality" in types:
+                city = component["long_name"]
+            elif "administrative_area_level_1" in types:
+                state = component["short_name"]
 
-        logger.info(f"Reverse geocoded {latitude}, {longitude}: {result['formatted_address']}, zip: {zip_code}")
+        logger.info(f"Reverse geocoded {latitude}, {longitude}: {result['formatted_address']}, zip: {zip_code}, city: {city}")
         return {
             "address": result["formatted_address"],
-            "zip_code": zip_code
+            "zip_code": zip_code,
+            "city": city,
+            "state": state,
         }
     except Exception as e:
         logger.error(f"Reverse geocoding error for {latitude}, {longitude}: {str(e)}")
         if os.getenv("ENV") == "production":
             raise HTTPException(status_code=500, detail=f"Reverse geocoding error: {str(e)}")
-        return {"address": "Unknown Address", "zip_code": ""}
+        return {"address": "Unknown Address", "zip_code": "", "city": "", "state": ""}
 
 
 class GeocodeService:
