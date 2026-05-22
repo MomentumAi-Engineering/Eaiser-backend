@@ -32,3 +32,7 @@ app/find_*.py
 app/list_*.py
 app/reset_*.py
 app/*output*.txt
+
+# Backups (CONTAIN PII — do not commit)
+app/backups/
+*.log
