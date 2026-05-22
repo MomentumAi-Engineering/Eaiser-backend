@@ -1,6 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks, Request
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, EmailStr
+try:
+    from utils.signup_security import (
+        check_signup_rate_limit,
+        check_honeypot,
+        check_disposable_email,
+        verify_recaptcha,
+        REQUIRE_EMAIL_VERIFICATION,
+    )
+except ImportError:
+    from app.utils.signup_security import (
+        check_signup_rate_limit,
+        check_honeypot,
+        check_disposable_email,
+        verify_recaptcha,
+        REQUIRE_EMAIL_VERIFICATION,
+    )
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 from passlib.context import CryptContext
@@ -112,6 +128,10 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     tos_accepted: Optional[bool] = False
+    # Bot detection: hidden field that real browsers leave empty
+    website: Optional[str] = None
+    # Optional reCAPTCHA v3 token (enforced only if RECAPTCHA_SECRET_KEY is set)
+    captcha_token: Optional[str] = None
 
 class UserLogin(BaseModel):
     identifier: str # Email or Username
@@ -166,8 +186,14 @@ class VerifyEmailRequest(BaseModel):
     token: str
 
 @router.post("/signup", response_model=Dict[str, Any])
-async def signup(user: UserCreate, background_tasks: BackgroundTasks):
+async def signup(user: UserCreate, request: Request, background_tasks: BackgroundTasks):
     try:
+        # === SECURITY CHECKS ===
+        check_honeypot(user.website, request)
+        await check_signup_rate_limit(request)
+        check_disposable_email(user.email)
+        await verify_recaptcha(user.captcha_token, request)
+
         db = await get_db()
         email = user.email.lower()
         username = user.username.lower()
@@ -188,10 +214,14 @@ async def signup(user: UserCreate, background_tasks: BackgroundTasks):
 
         # Hash password
         hashed_password = get_password_hash(user.password)
-        
-        # Verification token
+
+        # Verification token (used when REQUIRE_EMAIL_VERIFICATION=true)
         verification_token = secrets.token_urlsafe(32)
-            
+
+        # Default email_verified depends on env config — if verification is
+        # required, account starts unverified; otherwise behave as before.
+        email_verified_default = not REQUIRE_EMAIL_VERIFICATION
+
         new_user = {
             "first_name": user.firstName,
             "last_name": user.lastName,
@@ -200,13 +230,21 @@ async def signup(user: UserCreate, background_tasks: BackgroundTasks):
             "hashed_password": hashed_password,
             "role": "user",
             "is_active": True,
-            "email_verified": True,
-            "verification_token": None,
+            "email_verified": email_verified_default,
+            "verification_token": verification_token if REQUIRE_EMAIL_VERIFICATION else None,
             "tos_accepted": True,
+            "signup_ip": request.client.host if request.client else None,
             "created_at": datetime.utcnow()
         }
-        
+
         await db["users"].insert_one(new_user)
+
+        if REQUIRE_EMAIL_VERIFICATION:
+            try:
+                from services.email_service import send_verification_email
+                background_tasks.add_task(send_verification_email, email, user.firstName, verification_token)
+            except Exception as email_error:
+                logger.error(f"Failed to dispatch verification email: {email_error}")
         
         # Skip sending Verification Email - Removed by user request
         # try:

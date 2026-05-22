@@ -823,7 +823,10 @@ class OptimizedMongoDBService:
             images_to_store = all_image_contents if all_image_contents else ([image_content] if image_content else [])
 
             # 1. GridFS backup for ALL images in background
-            if images_to_store and self.fs:
+            # Disabled by default — Cloudinary is the primary store and free-tier
+            # MongoDB has only 512MB. Re-enable by setting ENABLE_GRIDFS_BACKUP=true.
+            gridfs_backup_enabled = os.getenv("ENABLE_GRIDFS_BACKUP", "false").lower() == "true"
+            if gridfs_backup_enabled and images_to_store and self.fs:
                 async def _gridfs_backup_all():
                     try:
                         for idx, img_bytes in enumerate(images_to_store):
@@ -836,7 +839,7 @@ class OptimizedMongoDBService:
                         logger.info(f"💾 [Background] GridFS backup complete for {issue_id} ({len(images_to_store)} images)")
                     except Exception as fs_e:
                         logger.warning(f"⚠️ [Background] GridFS backup failed: {fs_e}")
-                
+
                 asyncio.create_task(_gridfs_backup_all())
 
             # 2. Cloudinary upload for ALL images in background
