@@ -846,22 +846,29 @@ async def get_report(issue_id: str) -> Dict[str, Any]:
 async def update_issue_status(issue_id: str, status: str) -> bool:
     """
     Update the status of an issue.
+
+    Also appends to `status_history` so the iOS report-detail timeline
+    can show *when* each stage was entered, not just "Updated".
     """
     try:
         db = await get_db()
         valid_statuses = ["pending", "accepted", "rejected", "completed", "needs_review", "submitted"]
         if status not in valid_statuses:
             raise ValueError(f"Invalid status '{status}'. Must be one of {valid_statuses}")
-        
+
+        now_iso = datetime.now().isoformat()
         result = await db.issues.update_one(
             {"_id": issue_id},
             {
                 "$set": {
                     "status": status,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": now_iso,
                     # Clear decline_reason and decline_history on accept
                     "decline_reason": None if status == "accepted" else None,
                     "decline_history": [] if status == "accepted" else []
+                },
+                "$push": {
+                    "status_history": {"state": status, "at": now_iso}
                 }
             }
         )

@@ -320,14 +320,29 @@ async def submit_with_consent(req: SubmitWithConsentRequest):
         
         # Update issue status
         checked_recipients = [r for r in recipients if r["checked"]]
+        submitted_at = datetime.utcnow().isoformat()
+        # Surface whether this city is a live partner or routed through Ops,
+        # so the iOS report-detail screen can be transparent with the resident.
+        all_internal = bool(checked_recipients) and all(
+            (r.get("type") or "").startswith("internal_")
+            or "momntum" in (r.get("name") or r.get("email") or "").lower()
+            for r in checked_recipients
+        )
+        city_status = "NOT_LIVE" if all_internal else "LIVE"
         await db.issues.update_one(
             {"id": req.issue_id},
-            {"$set": {
-                "v5_submitted": True,
-                "v5_recipients_final": checked_recipients,
-                "v5_submitted_at": datetime.utcnow().isoformat(),
-                "status": "submitted",
-            }}
+            {
+                "$set": {
+                    "v5_submitted": True,
+                    "v5_recipients_final": checked_recipients,
+                    "v5_submitted_at": submitted_at,
+                    "v5_city_status": city_status,
+                    "status": "submitted",
+                },
+                "$push": {
+                    "status_history": {"state": "submitted", "at": submitted_at},
+                },
+            }
         )
         
         # Phase 11: Dispatch
@@ -377,13 +392,19 @@ async def close_report(req: CloseReportRequest):
     try:
         db = await get_db()
         
+        closed_at = datetime.utcnow().isoformat()
         result = await db.issues.update_one(
             {"id": req.issue_id},
-            {"$set": {
-                "status": "closed",
-                "closed_at": datetime.utcnow().isoformat(),
-                "close_reason": req.reason,
-            }}
+            {
+                "$set": {
+                    "status": "closed",
+                    "closed_at": closed_at,
+                    "close_reason": req.reason,
+                },
+                "$push": {
+                    "status_history": {"state": "closed", "at": closed_at},
+                },
+            }
         )
         
         if result.modified_count == 0:
