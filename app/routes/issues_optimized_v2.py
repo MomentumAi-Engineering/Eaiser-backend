@@ -347,7 +347,9 @@ async def process_issue_background(
     category: str = 'public',
     severity: str = 'medium',
     issue_type: str = 'other',
-    is_manual: bool = False
+    is_manual: bool = False,
+    pre_analyzed: bool = False,
+    provided_confidence: Optional[float] = None
 ):
     """Process issue in background for better performance"""
     start_time = time.time()
@@ -409,7 +411,10 @@ async def process_issue_background(
             v3_service = get_ai_service_v3()
             consistency_task = asyncio.create_task(v3_service.validate_image_consistency(all_image_contents))
 
-        if image_content and not is_manual and not cached_classification:
+        # 🚀 PERF: Skip the redundant V3 vision classification when the client already
+        # analyzed this image via /api/ai/analyze-image (pre_analyzed=True). The
+        # issue_type/severity/category/confidence passed by the client are reused below.
+        if image_content and not is_manual and not cached_classification and not pre_analyzed:
              ai_task = asyncio.create_task(classify_issue(image_content, description or ""))
         
         # Await consistency result (if started) — this runs IN PARALLEL with classify
@@ -471,6 +476,35 @@ async def process_issue_background(
                 await set_cached_data(cache_key, classification_data, ttl=3600)
             except Exception as ai_err:
                 logger.warning(f"AI Task failed: {ai_err}")
+        elif pre_analyzed and image_content and not cached_classification:
+            # 🚀 PERF: Reuse the client's prior classification — no second vision call.
+            try:
+                confidence = float(provided_confidence) if provided_confidence is not None else 0.0
+            except (TypeError, ValueError):
+                confidence = 0.0
+            # Normalize 0–1 scores to 0–100 for consistency with classify_issue output
+            if 0 < confidence <= 1:
+                confidence *= 100.0
+            issue_detected = True
+            sev_l = (severity or "").lower()
+            if sev_l in ["high", "critical", "severe", "emergency"]:
+                priority = "High"
+            elif sev_l in ["low", "minor"]:
+                priority = "Low"
+            else:
+                priority = "Medium"
+            # Cache so a retry of the same image short-circuits entirely
+            try:
+                await set_cached_data(cache_key, {
+                    "issue_type": issue_type,
+                    "severity": severity,
+                    "confidence": confidence,
+                    "category": category,
+                    "priority": priority
+                }, ttl=3600)
+            except Exception:
+                pass
+            logger.info(f"⚡ Reused client classification for {issue_id} (pre_analyzed, conf={confidence}%) — skipped redundant vision call")
 
         # Await Geocode if it's running
         city = ""
@@ -1068,6 +1102,11 @@ async def create_issue_optimized(
     issue_type: str = Form('other'),
     is_manual: Any = Form(False),
     auto_submit: bool = Form(False),
+    # 🚀 PERF: When the client already ran /api/ai/analyze-image, it sends the
+    # resulting classification back here. We then SKIP the redundant V3 vision
+    # call at submit time (issue_type/severity/category/confidence are reused).
+    pre_analyzed: Any = Form(False),
+    confidence: Optional[float] = Form(None),
     _: None = Depends(rate_limit_dependency)
 ):
     """
@@ -1127,6 +1166,13 @@ async def create_issue_optimized(
             is_manual_bool = is_manual
         elif isinstance(is_manual, str):
             is_manual_bool = is_manual.lower() in ("true", "1", "yes")
+
+        # Robust parsing of pre_analyzed flag (client already classified the image)
+        pre_analyzed_bool = False
+        if isinstance(pre_analyzed, bool):
+            pre_analyzed_bool = pre_analyzed
+        elif isinstance(pre_analyzed, str):
+            pre_analyzed_bool = pre_analyzed.lower() in ("true", "1", "yes")
             
         # Generate unique issue ID
         issue_id = generate_short_id()
@@ -1148,7 +1194,9 @@ async def create_issue_optimized(
             category=category,
             severity=severity,
             issue_type=issue_type,
-            is_manual=is_manual_bool
+            is_manual=is_manual_bool,
+            pre_analyzed=pre_analyzed_bool,
+            provided_confidence=confidence
         )
         
         if not issue_doc:
@@ -1163,22 +1211,64 @@ async def create_issue_optimized(
         # This saves a full network round-trip for the mobile app.
         if auto_submit and not is_guest_user and user_info:
             try:
+                from services.email_service import send_formatted_ai_alert
                 authorities = issue_doc.get("authority_data", {}).get("responsible_authorities", [])
-                if authorities:
-                    # Trigger submission logic in background tasks or await it for immediate status
-                    # To keep the response FAST, we perform the core state change here and email in background
-                    from services.email_service import send_formatted_ai_alert
-                    
-                    # Update status to submitted/pending
-                    # Draft issues (AI uncertain) → needs_review on submit
-                    # Reported issues (AI confident) → submitted on submit
+                is_manual_doc = bool(issue_doc.get("is_manual"))
+                mongodb_service = await get_optimized_mongodb_service()
+
+                # 🔑 Every manual report — and any report with NO mapped authority —
+                # must route through the EAiSER review team. Previously this branch only
+                # ran when `authorities` was non-empty, so manual reports (which usually
+                # have no mapped authority) stayed is_submitted=False and never appeared
+                # on the dashboard. Mirror the /submit endpoint's admin-review fallback.
+                if is_manual_doc or not authorities:
+                    review_authorities = [{
+                        "name": "EAiSER Admin Review Team",
+                        "email": "eaiser@momntumai.com",
+                        "type": "admin_review"
+                    }]
+                    await mongodb_service.update_issue_status(issue_id, {
+                        "status": "needs_review",
+                        "is_submitted": True,
+                        "authority_email": [a["email"] for a in review_authorities],
+                        "authority_name": [a["name"] for a in review_authorities],
+                        "updated_at": datetime.utcnow()
+                    })
+                    issue_doc["status"] = "needs_review"
+                    issue_doc["is_submitted"] = True
+
+                    # Add to the admin Mapping Review queue so the EAiSER team can
+                    # classify/verify it (same queue the /submit endpoint populates).
+                    try:
+                        db = await get_database()
+                        review_description = (
+                            (issue_doc.get("report") or {}).get("issue_overview", {}).get("summary_explanation")
+                            or description or ""
+                        )[:300]
+                        await db.authority_mapping_review.insert_one({
+                            "id": generate_short_id(),
+                            "issue_id": issue_id,
+                            "issue_type": issue_doc.get("issue_type", issue_type),
+                            "submitted_description": review_description,
+                            "current_routed_to": "admin_review",
+                            "address": issue_doc.get("address", ""),
+                            "zip_code": issue_doc.get("zip_code", ""),
+                            "confidence": issue_doc.get("confidence", 0.0),
+                            "flagged_at": datetime.utcnow().isoformat(),
+                            "resolved": False,
+                            "user_email": issue_doc.get("user_email", ""),
+                            "image_id": issue_doc.get("image_id"),
+                            "is_manual": is_manual_doc
+                        })
+                    except Exception as q_err:
+                        logger.warning(f"Could not insert {issue_id} into mapping_review queue: {q_err}")
+
+                    logger.info(f"✅ Auto-Submit → EAiSER Admin Review Team for {issue_id} (manual={is_manual_doc}, mapped_authorities={len(authorities)})")
+                else:
+                    # Mapped authorities present (and not manual) → normal auto-submit + email.
+                    # Draft issues (AI uncertain) → needs_review; confident → submitted.
                     current_status = issue_doc.get("status", "reported")
-                    if current_status == "draft":
-                        new_status = "needs_review"
-                    else:
-                        new_status = "submitted"
-                    
-                    mongodb_service = await get_optimized_mongodb_service()
+                    new_status = "needs_review" if current_status == "draft" else "submitted"
                     await mongodb_service.update_issue_status(issue_id, {
                         "status": new_status,
                         "is_submitted": True,
@@ -1186,11 +1276,9 @@ async def create_issue_optimized(
                         "authority_name": [a.get("name") for a in authorities if a.get("name")],
                         "updated_at": datetime.utcnow()
                     })
-                    
-                    # Update the doc for the response
                     issue_doc["status"] = new_status
                     issue_doc["is_submitted"] = True
-                    
+
                     # Dispatch emails in background
                     background_tasks.add_task(send_formatted_ai_alert, issue_doc.get("report"), background=True)
                     logger.info(f"✅ Enterprise Auto-Submit triggered for {issue_id}")

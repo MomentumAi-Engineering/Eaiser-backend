@@ -61,9 +61,27 @@ class AIServiceV3:
 
     async def analyze_single_image(self, image_content: bytes) -> Dict[str, Any]:
         """
-        The core V3 analyzer. 
+        The core V3 analyzer.
         Returns the structured JSON report defined in the EAiSER V3 specification.
         """
+        # 🚀 PERF: Cache the vision result by image-content hash. The same image is
+        # analyzed by BOTH classify_issue and generate_report (and again across the
+        # analyze→submit screens). Caching means the expensive Gemini vision call
+        # runs once per image instead of 2–3 times, which removes most of the
+        # "Uploading report..." delay at submit time.
+        cache_key = None
+        try:
+            import hashlib as _hashlib
+            from services.ai_service_optimized import get_cached_data
+            cache_key = f"v3_analyze:{_hashlib.md5(image_content).hexdigest()}"
+            cached = await get_cached_data(cache_key, 1800)
+            if cached:
+                logger.info("⚡ V3 analyze cache HIT — skipped redundant Gemini vision call")
+                return cached
+        except Exception as cache_err:
+            logger.debug(f"V3 analyze cache lookup skipped: {cache_err}")
+            cache_key = None
+
         try:
             # 1. Prepare Image
             img = Image.open(io.BytesIO(image_content))
@@ -111,10 +129,21 @@ class AIServiceV3:
                 if field not in report:
                     raise ValueError(f"Missing required field in Gemini V3 response: {field}")
             
-            return {
+            result = {
                 "success": True,
                 "data": report
             }
+
+            # Cache the successful analysis so subsequent calls for the same image
+            # (generate_report, retries) skip the Gemini vision call entirely.
+            if cache_key:
+                try:
+                    from services.ai_service_optimized import set_cached_data
+                    await set_cached_data(cache_key, result, 1800)
+                except Exception as set_err:
+                    logger.debug(f"V3 analyze cache store skipped: {set_err}")
+
+            return result
 
         except Exception as e:
             logger.error(f"V3 Analysis failed: {e}", exc_info=True)
