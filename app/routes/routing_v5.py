@@ -43,6 +43,12 @@ class RecipientToggle(BaseModel):
     email: str
     type: str
     checked: bool
+    # Provenance for dashboard + audit log:
+    #   "ai_recommended" (default) — EAiSER routed automatically
+    #   "user_added"               — resident added from the city picker
+    #   "ai_removed_by_user"       — EAiSER recommended but resident unchecked
+    source: Optional[str] = "ai_recommended"
+    name: Optional[str] = None
 
 class SubmitWithConsentRequest(BaseModel):
     issue_id: str
@@ -65,9 +71,39 @@ async def check_zip(req: ZipCheckRequest):
         from app.services.routing_engine_v5 import check_zip_gate
     except ImportError:
         from services.routing_engine_v5 import check_zip_gate
-    
+
     result = check_zip_gate(req.zip_code)
     return result
+
+
+@router.get("/list-departments")
+async def list_departments(zip_code: str):
+    """
+    Return every city/county department available for a ZIP, so the
+    iOS resident UI can offer a searchable picker to add additional
+    recipients beyond EAiSER's AI recommendations.
+    """
+    try:
+        from app.services.routing_engine_v5 import get_zip_authorities
+    except ImportError:
+        from services.routing_engine_v5 import get_zip_authorities
+
+    zip_auth = get_zip_authorities(zip_code)
+    departments = []
+    for dept_key, contacts in (zip_auth or {}).items():
+        if not isinstance(contacts, list):
+            continue
+        for contact in contacts:
+            departments.append({
+                "name": contact.get("name", dept_key),
+                "email": contact.get("email", ""),
+                "type": contact.get("type", dept_key),
+                "phone": contact.get("phone", ""),
+                "contact_name": contact.get("contact_name", ""),
+                "role": contact.get("role", ""),
+            })
+    departments.sort(key=lambda d: d["name"].lower())
+    return {"zip_code": zip_code, "departments": departments}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -172,29 +208,58 @@ async def submit_with_consent(req: SubmitWithConsentRequest):
                 "type": toggle.type,
                 "checked": toggle.checked,
                 "locked": False,  # Will be overridden below
-                "name": toggle.type,
+                "name": toggle.name or toggle.type,
                 "issue_labels": [],
                 "reason": "user_tagged" if toggle.checked else "user_untagged",
                 "severity": "P2",
+                "source": toggle.source or "ai_recommended",
             })
-        
+
         # Fetch full recipient data from the issue
         issue = await db.issues.find_one({"id": req.issue_id})
         if not issue:
             issue = await db.issues.find_one({"_id": req.issue_id})
-        
+
         if issue and issue.get("v5_recipients"):
-            # Merge user toggles with stored recipients
+            # Merge user toggles with stored recipients.
+            # Anything the resident added that wasn't in the AI list is appended
+            # with source="user_added"; anything they unchecked is recorded as
+            # "ai_removed_by_user" so the city dashboard can render the diff.
             stored = issue["v5_recipients"]
             merged = []
+            stored_keys = set()
             for stored_r in stored:
+                key = (stored_r.get("email", ""), stored_r.get("type", ""))
+                stored_keys.add(key)
                 user_toggle = next(
                     (t for t in req.recipients if t.email == stored_r["email"] and t.type == stored_r["type"]),
-                    None
+                    None,
                 )
+                stored_r.setdefault("source", "ai_recommended")
                 if user_toggle:
-                    stored_r["checked"] = user_toggle.checked if not stored_r.get("locked") else True
+                    if stored_r.get("locked"):
+                        stored_r["checked"] = True
+                    else:
+                        stored_r["checked"] = user_toggle.checked
+                        if not user_toggle.checked:
+                            stored_r["source"] = "ai_removed_by_user"
                 merged.append(stored_r)
+
+            for toggle in req.recipients:
+                key = (toggle.email, toggle.type)
+                if key in stored_keys:
+                    continue
+                merged.append({
+                    "email": toggle.email,
+                    "type": toggle.type,
+                    "name": toggle.name or toggle.type,
+                    "checked": toggle.checked,
+                    "locked": False,
+                    "issue_labels": [],
+                    "reason": "user_added_recipient",
+                    "severity": "P2",
+                    "source": "user_added",
+                })
             recipients = merged
         
         # Phase 9: Hard guardrail
@@ -226,6 +291,32 @@ async def submit_with_consent(req: SubmitWithConsentRequest):
             details=f"Submitted to {sum(1 for r in recipients if r['checked'])} recipients"
         )
         await db.audit_log.insert_one(audit)
+
+        # 4b. Manual-change audit entry (separate row for the city dashboard
+        # so ops can filter on resident overrides without scanning the consent log)
+        manual_changes = [
+            {
+                "name": r.get("name"),
+                "email": r.get("email"),
+                "type": r.get("type"),
+                "source": r.get("source"),
+                "checked": r.get("checked"),
+            }
+            for r in recipients
+            if r.get("source") in ("user_added", "ai_removed_by_user")
+        ]
+        if manual_changes:
+            manual_audit = build_audit_log(
+                issue_id=req.issue_id,
+                action="recipient_manual_changes",
+                user_id=user_id,
+                after={"changes": manual_changes},
+                details=(
+                    f"User added {sum(1 for c in manual_changes if c['source'] == 'user_added')} "
+                    f"and removed {sum(1 for c in manual_changes if c['source'] == 'ai_removed_by_user')} recipients"
+                ),
+            )
+            await db.audit_log.insert_one(manual_audit)
         
         # Update issue status
         checked_recipients = [r for r in recipients if r["checked"]]

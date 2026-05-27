@@ -553,6 +553,7 @@ def build_consent_log(
                 "recipient_type": r["type"],
                 "checked": r["checked"],
                 "locked": r["locked"],
+                "source": r.get("source", "ai_recommended"),
                 "reason": "user_tagged" if r["checked"] else "user_untagged",
             }
             for r in recipients
@@ -574,6 +575,7 @@ def build_report_routings(
             "issue_labels": r["issue_labels"],
             "severity": r["severity"],
             "locked": r["locked"],
+            "source": r.get("source", "ai_recommended"),
             "routed_at": datetime.utcnow().isoformat(),
             "status": "pending",
         }
@@ -589,12 +591,14 @@ def build_report_ownership(
     entries = []
     for r in recipients:
         if r["checked"]:
-            for label in r["issue_labels"]:
+            labels = r["issue_labels"] or [""]
+            for label in labels:
                 entries.append({
                     "issue_id": issue_id,
                     "issue_label": label,
                     "department": r["type"],
                     "recipient_name": r["name"],
+                    "source": r.get("source", "ai_recommended"),
                     "assigned_at": datetime.utcnow().isoformat(),
                     "status": "assigned",
                 })
