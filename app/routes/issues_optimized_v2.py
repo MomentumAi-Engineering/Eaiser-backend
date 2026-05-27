@@ -34,7 +34,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, Request, UploadFile, File, Form, status
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, validator, ConfigDict
+from pydantic import BaseModel, Field, validator, ConfigDict, model_validator
 
 # Services - Using optimized versions
 from services.mongodb_optimized_service import get_optimized_mongodb_service
@@ -222,6 +222,7 @@ class Issue(BaseModel):
     latitude: float = 0.0
     longitude: float = 0.0
     issue_type: str = "other"
+    primary_issue_type: Optional[str] = None  # real primary when issue_type is the "Multi Issues" umbrella
     severity: str = "Medium"
     image_id: Optional[str] = None
     status: str = "reported"
@@ -258,6 +259,37 @@ class Issue(BaseModel):
         populate_by_name=True,
         extra="ignore"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_fields(cls, data):
+        """Tolerate sparse/legacy docs so a report is NEVER silently dropped from a
+        dashboard list. Manual reports often lack GPS or have None fields, which used
+        to fail strict validation and make the report invisible. Coerce bad values to
+        safe defaults instead of raising."""
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        # Numeric fields: None / "" / "N/A" / unparseable → 0.0
+        for f in ("latitude", "longitude"):
+            v = d.get(f)
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                try:
+                    d[f] = float(v)
+                except (TypeError, ValueError):
+                    d[f] = 0.0
+        # report must be a dict
+        if not isinstance(d.get("report"), dict):
+            d["report"] = {"message": "No report generated"}
+        # Required string fields: None → sensible default
+        for f, default in (("issue_type", "other"), ("severity", "Medium"),
+                           ("status", "reported"), ("category", "public"),
+                           ("priority", "Medium")):
+            if d.get(f) is None:
+                d[f] = default
+        if d.get("is_submitted") is None:
+            d["is_submitted"] = False
+        return d
 
 # ========================================
 # CACHING UTILITIES
@@ -1107,6 +1139,10 @@ async def create_issue_optimized(
     # call at submit time (issue_type/severity/category/confidence are reused).
     pre_analyzed: Any = Form(False),
     confidence: Optional[float] = Form(None),
+    # The user-edited recipient list from the review screen (v5 engine + user-added
+    # departments + "Edit receivers" extra emails). This is the SINGLE source of
+    # truth for dispatch — emails go exactly to the checked entries here.
+    v5_recipients: Optional[str] = Form(None),
     _: None = Depends(rate_limit_dependency)
 ):
     """
@@ -1212,33 +1248,20 @@ async def create_issue_optimized(
         if auto_submit and not is_guest_user and user_info:
             try:
                 from services.email_service import send_formatted_ai_alert
-                authorities = issue_doc.get("authority_data", {}).get("responsible_authorities", [])
                 is_manual_doc = bool(issue_doc.get("is_manual"))
                 mongodb_service = await get_optimized_mongodb_service()
+                authorities = issue_doc.get("authority_data", {}).get("responsible_authorities", [])
 
-                # 🔑 Every manual report — and any report with NO mapped authority —
-                # must route through the EAiSER review team. Previously this branch only
-                # ran when `authorities` was non-empty, so manual reports (which usually
-                # have no mapped authority) stayed is_submitted=False and never appeared
-                # on the dashboard. Mirror the /submit endpoint's admin-review fallback.
-                if is_manual_doc or not authorities:
-                    review_authorities = [{
-                        "name": "EAiSER Admin Review Team",
-                        "email": "eaiser@momntumai.com",
-                        "type": "admin_review"
-                    }]
-                    await mongodb_service.update_issue_status(issue_id, {
-                        "status": "needs_review",
-                        "is_submitted": True,
-                        "authority_email": [a["email"] for a in review_authorities],
-                        "authority_name": [a["name"] for a in review_authorities],
-                        "updated_at": datetime.utcnow()
-                    })
-                    issue_doc["status"] = "needs_review"
-                    issue_doc["is_submitted"] = True
+                # Parse the user-edited recipient list (single source of truth for dispatch).
+                v5_checked = []
+                if v5_recipients:
+                    try:
+                        v5_checked = [r for r in json.loads(v5_recipients) if r.get("checked") and r.get("email")]
+                    except Exception as ve:
+                        logger.warning(f"Could not parse v5_recipients for {issue_id}: {ve}")
 
-                    # Add to the admin Mapping Review queue so the EAiSER team can
-                    # classify/verify it (same queue the /submit endpoint populates).
+                async def _queue_admin_review():
+                    # Add to the admin Mapping Review queue so the EAiSER team can verify.
                     try:
                         db = await get_database()
                         review_description = (
@@ -1258,15 +1281,69 @@ async def create_issue_optimized(
                             "resolved": False,
                             "user_email": issue_doc.get("user_email", ""),
                             "image_id": issue_doc.get("image_id"),
-                            "is_manual": is_manual_doc
+                            "is_manual": is_manual_doc,
                         })
                     except Exception as q_err:
                         logger.warning(f"Could not insert {issue_id} into mapping_review queue: {q_err}")
 
+                if v5_checked:
+                    # 🔑 Dispatch EXACTLY to the recipients the user confirmed on the review
+                    # screen: locked system authorities + user-added departments + extra
+                    # "Edit receivers" emails + the EAiSER team for unknown issue types.
+                    # This OVERRIDES the AI's authority_data so the email goes where the UI showed.
+                    dispatch_auth = [
+                        {"name": r.get("name") or r.get("email"), "email": r.get("email"), "type": r.get("type", "")}
+                        for r in v5_checked
+                    ]
+                    # Real mapped CITY authority present? (not the EAiSER team, not an
+                    # internal/admin queue, not a user's extra "additional_recipient" email).
+                    # If none, the report is effectively EAiSER-only → needs admin review.
+                    has_external = any(
+                        (r.get("email") or "").lower() != "eaiser@momntumai.com"
+                        and not str(r.get("type", "")).lower().startswith(("internal", "admin", "eaiser", "additional"))
+                        for r in v5_checked
+                    )
+                    new_status = "submitted" if has_external else "needs_review"
+                    rep = issue_doc.get("report") or {}
+                    rep["responsible_authorities_or_parties"] = dispatch_auth
+                    issue_doc["report"] = rep
+                    await mongodb_service.update_issue_status(issue_id, {
+                        "status": new_status,
+                        "is_submitted": True,
+                        "authority_email": [a["email"] for a in dispatch_auth],
+                        "authority_name": [a["name"] for a in dispatch_auth],
+                        "report": rep,
+                        "updated_at": datetime.utcnow(),
+                    })
+                    issue_doc["status"] = new_status
+                    issue_doc["is_submitted"] = True
+                    # Unknown/EAiSER-only reports also go to the admin verify queue.
+                    if not has_external:
+                        await _queue_admin_review()
+                    background_tasks.add_task(send_formatted_ai_alert, rep, background=True)
+                    logger.info(f"✅ Auto-Submit dispatched to {len(dispatch_auth)} v5 recipient(s) for {issue_id} (status={new_status})")
+
+                elif is_manual_doc or not authorities:
+                    # No v5 list provided (e.g. dedicated manual screen) and no mapped
+                    # authority → route through the EAiSER review team.
+                    review_authorities = [{
+                        "name": "EAiSER Admin Review Team",
+                        "email": "eaiser@momntumai.com",
+                        "type": "admin_review",
+                    }]
+                    await mongodb_service.update_issue_status(issue_id, {
+                        "status": "needs_review",
+                        "is_submitted": True,
+                        "authority_email": [a["email"] for a in review_authorities],
+                        "authority_name": [a["name"] for a in review_authorities],
+                        "updated_at": datetime.utcnow()
+                    })
+                    issue_doc["status"] = "needs_review"
+                    issue_doc["is_submitted"] = True
+                    await _queue_admin_review()
                     logger.info(f"✅ Auto-Submit → EAiSER Admin Review Team for {issue_id} (manual={is_manual_doc}, mapped_authorities={len(authorities)})")
                 else:
                     # Mapped authorities present (and not manual) → normal auto-submit + email.
-                    # Draft issues (AI uncertain) → needs_review; confident → submitted.
                     current_status = issue_doc.get("status", "reported")
                     new_status = "needs_review" if current_status == "draft" else "submitted"
                     await mongodb_service.update_issue_status(issue_id, {
@@ -1278,8 +1355,6 @@ async def create_issue_optimized(
                     })
                     issue_doc["status"] = new_status
                     issue_doc["is_submitted"] = True
-
-                    # Dispatch emails in background
                     background_tasks.add_task(send_formatted_ai_alert, issue_doc.get("report"), background=True)
                     logger.info(f"✅ Enterprise Auto-Submit triggered for {issue_id}")
             except Exception as auto_err:

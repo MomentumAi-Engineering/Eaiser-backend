@@ -230,6 +230,49 @@ def _get_severity_key(severity: str) -> str:
     return "medium"  # safe default
 
 
+# Severity ordering for "minimum severity" rules (ADA bump, etc.)
+_SEV_ORDINAL = {"low": 1, "medium": 2, "high": 3, "emergency": 4}
+
+# Interim keyword heuristics for conditional rules whose real signal comes from
+# SIMI/MIMI (the AI vision layer). Until that flag exists, we sniff the resident's
+# description/observations text.
+_ADA_KEYWORDS = ("ada", "wheelchair", "accessib", "ramp", "tripping", "trip hazard", "disab", "mobility")
+_HATE_KEYWORDS = ("hate", "swastika", "nazi", "racial", "racist", "slur", "white power", "kkk", "hate symbol")
+
+
+def _addr_on_state_route(address: str, routes: List[str]) -> bool:
+    """Heuristic: does the address text look like it sits on SR 96 / SR 100?
+    (Proper implementation would do a GeoJSON proximity check on lat/lng.)"""
+    a = (address or "").lower()
+    if not a:
+        return False
+    for route in routes:
+        num = "".join(ch for ch in route if ch.isdigit())  # "SR-96" → "96"
+        if not num:
+            continue
+        for pat in (f"sr {num}", f"sr-{num}", f"sr{num}", f"state route {num}",
+                    f"highway {num}", f"hwy {num}", f"hwy-{num}", f"tn-{num}", f"tn {num}", f"route {num}"):
+            if pat in a:
+                return True
+    return False
+
+
+def _eaiser_team_recipient(issue_label: str, severity: str, reason: str) -> Dict[str, Any]:
+    """The EAiSER team recipient used for unknown/custom issue types and as the
+    fallback when a known type has no reachable local contacts (spec §4.2–4.4).
+    System-recommended → always locked."""
+    return {
+        "name": "EAiSER Team",
+        "email": "eaiser@momntumai.com",
+        "type": "eaiser_review",
+        "issue_labels": [issue_label],
+        "reason": reason,
+        "checked": True,
+        "locked": True,
+        "severity": severity,
+    }
+
+
 def process_issue_routing(
     issue_label: str,
     confidence: float,
@@ -238,6 +281,8 @@ def process_issue_routing(
     city_status: str,
     lat: float = None,
     lng: float = None,
+    observations_text: str = "",
+    address: str = "",
 ) -> List[Dict[str, Any]]:
     """
     Phase 5: Process routing for a SINGLE issue.
@@ -269,6 +314,15 @@ def process_issue_routing(
     is_tier_0 = issue_key in TIER_0_CATEGORIES
     if is_tier_0:
         sev_key = "emergency"  # Tier 0 always routes at Emergency
+
+    # Rule #2 — ADA hard rule: a damaged sidewalk flagged as an accessibility hazard
+    # is bumped to a minimum severity of High. (Interim keyword heuristic until the
+    # SIMI/MIMI ADA flag is available.)
+    obs_l = (observations_text or "").lower()
+    if issue_key == "damaged_sidewalk" and any(k in obs_l for k in _ADA_KEYWORDS):
+        if _SEV_ORDINAL.get(sev_key, 0) < _SEV_ORDINAL["high"]:
+            sev_key = "high"
+            logger.info(f"♿ V5 Routing: ADA hazard on '{issue_key}' → severity bumped to High")
     
     # ──────────────────────────────────
     # 6A: Tier 0 Safety Layer
@@ -285,7 +339,10 @@ def process_issue_routing(
     # 6B: Severity-Aware Department Mapping
     # ──────────────────────────────────
     issue_config = dept_map.get(issue_key)
-    
+    # Spec §4.1: a "known" issue type is one that exists in the catalog (a real,
+    # non-"_"-prefixed entry). Anything else is unknown/custom → routes to EAiSER team.
+    found_in_catalog = bool(issue_config) and not isinstance(issue_config, str)
+
     # Try alias resolution if not found
     if not issue_config:
         # Try common alternatives
@@ -297,15 +354,17 @@ def process_issue_routing(
             resolved = _resolve_aliases(alt, dept_map)
             if resolved in dept_map and not resolved.startswith("_"):
                 issue_config = dept_map[resolved]
+                found_in_catalog = True
                 break
-    
-    if not issue_config or isinstance(issue_config, str):
-        # Use fallback
-        issue_config = dept_map.get("_fallback", {
-            "low": ["general"], "medium": ["general"],
-            "high": ["general"], "emergency": ["general", "county_ema"]
-        })
-    
+
+    # ──────────────────────────────────
+    # Spec §4.2–4.4: Unknown / custom issue type → EAiSER team (no city dept).
+    # ──────────────────────────────────
+    if not found_in_catalog or not issue_config or isinstance(issue_config, str):
+        recipients.append(_eaiser_team_recipient(issue_label, severity, reason="unknown_issue_type"))
+        logger.info(f"🟡 V5 Routing: Unknown/custom label '{issue_key}' → EAiSER Team")
+        return recipients
+
     # Get severity-specific department list
     if isinstance(issue_config, dict):
         mapped_depts = issue_config.get(sev_key)
@@ -313,19 +372,32 @@ def process_issue_routing(
         if mapped_depts is None:
             mapped_depts = issue_config.get("emergency", issue_config.get("high", ["general"]))
         
-        # Apply location rules (SR 96/100 → add TDOT)
-        location_rules = issue_config.get("location_rules", [])
-        for rule in location_rules:
-            if rule.get("condition") == "on_state_route" and lat and lng:
-                # TODO: GeoJSON proximity check (30-foot buffer)
-                # For now, log that location rules exist
-                logger.info(f"📍 Location rule exists for {issue_key}: {rule.get('routes')}")
+        # Rule #1 — Location rule: if the issue sits on SR 96 / SR 100, add the rule's
+        # extra recipients (TDOT). Heuristic on the address text (geo check is a TODO).
+        mapped_depts = list(mapped_depts)  # copy before mutating
+        for rule in issue_config.get("location_rules", []):
+            if rule.get("condition") == "on_state_route" and _addr_on_state_route(address, rule.get("routes", [])):
+                for extra in rule.get("add_recipients", []):
+                    if extra not in mapped_depts:
+                        mapped_depts.append(extra)
+                        logger.info(f"📍 V5 Routing: '{issue_key}' on state route → added '{extra}'")
+
+        # Rule #4 — Hate-symbol graffiti routes to Police as well. (Interim keyword
+        # heuristic until SIMI/MIMI flags hate symbols.)
+        if issue_key == "graffiti_vandalism" and any(k in obs_l for k in _HATE_KEYWORDS):
+            if "police" not in mapped_depts:
+                mapped_depts.append("police")
+                logger.info(f"🚔 V5 Routing: hate-symbol graffiti → added Police")
     elif isinstance(issue_config, list):
         # Legacy flat format: just a list of departments
         mapped_depts = issue_config
     else:
         mapped_depts = ["general"]
     
+    # Effective severity reflects any escalation (Tier 0 → Emergency, ADA bump → High),
+    # so the recipient badge matches how it was actually routed.
+    effective_severity = "Emergency" if is_tier_0 else sev_key.capitalize()
+
     if mapped_depts:
         for dept in mapped_depts:
             dept_contacts = zip_auth.get(dept, [])
@@ -333,7 +405,7 @@ def process_issue_routing(
                 logger.warning(f"⚠️ No contacts found for dept '{dept}' in ZIP {zip_code}")
                 continue
             for contact in dept_contacts:
-                is_locked = is_tier_0  # Tier 0 recipients are always locked
+                # Spec §2: ALL system-recommended authorities are locked (not just Tier 0).
                 recipients.append({
                     "name": contact.get("name", dept),
                     "email": contact.get("email", ""),
@@ -341,29 +413,22 @@ def process_issue_routing(
                     "issue_labels": [issue_label],
                     "reason": f"tier_0_emergency_{issue_key}" if is_tier_0 else "severity_based_routing",
                     "checked": True,
-                    "locked": is_locked,
-                    "severity": "Emergency" if is_tier_0 else severity,
+                    "locked": True,
+                    "severity": effective_severity,
                     "contact_name": contact.get("contact_name", ""),
                     "phone": contact.get("phone", ""),
                 })
         if is_tier_0:
             logger.info(f"🔴 V5 Routing: Tier 0 LOCKED recipients for '{issue_key}': {[d for d in mapped_depts]}")
         else:
-            logger.info(f"📧 V5 Routing: {sev_key} recipients for '{issue_key}': {[d for d in mapped_depts]}")
-    else:
-        # No mapping found → route to MomntumAI Ops Queue
-        recipients.append({
-            "name": "MomntumAI Ops Queue",
-            "email": "ops-queue@momntumai-routing.dev",
-            "type": "internal_review",
-            "issue_labels": [issue_label],
-            "reason": "unknown_label",
-            "checked": True,
-            "locked": False,
-            "severity": severity,
-        })
-        logger.info(f"🟡 V5 Routing: Unknown label '{issue_key}' → Ops Queue")
-    
+            logger.info(f"📧 V5 Routing: {sev_key} LOCKED recipients for '{issue_key}': {[d for d in mapped_depts]}")
+
+    # Known issue type but no reachable city contacts in this ZIP → EAiSER team fallback
+    # (replaces the old MomntumAI Ops Queue).
+    if not recipients:
+        recipients.append(_eaiser_team_recipient(issue_label, severity, reason="no_local_contacts"))
+        logger.info(f"🟡 V5 Routing: '{issue_key}' has no ZIP contacts → EAiSER Team")
+
     return recipients
 
 
@@ -376,6 +441,7 @@ def build_recipient_list(
     zip_code: str,
     city_status: str = "LIVE",
     is_out_of_area: bool = False,
+    address: str = "",
 ) -> Dict[str, Any]:
     """
     Build the final recipient list from all issues.
@@ -455,12 +521,16 @@ def build_recipient_list(
             has_emergency = True
             emergency_categories.append(issue_key)
         
+        obs = issue.get("observations")
+        observations_text = " ".join(obs) if isinstance(obs, list) else str(obs or "")
         issue_recipients = process_issue_routing(
             issue_label=label,
             confidence=confidence,
             severity=severity,
             zip_code=zip_code,
             city_status=city_status,
+            observations_text=observations_text,
+            address=address,
         )
         all_recipients.extend(issue_recipients)
     
@@ -678,6 +748,7 @@ def run_routing_pipeline(
     issues: List[Dict[str, Any]],
     zip_code: str,
     user_continued_out_of_area: bool = False,
+    address: str = "",
 ) -> Dict[str, Any]:
     """
     Main orchestrator: Runs the complete V5 routing pipeline.
@@ -711,6 +782,7 @@ def run_routing_pipeline(
         zip_code=zip_code,
         city_status=city_state["status"],
         is_out_of_area=is_out_of_area and user_continued_out_of_area,
+        address=address,
     )
     
     # Phase 9: AI Side-Car (if applicable)

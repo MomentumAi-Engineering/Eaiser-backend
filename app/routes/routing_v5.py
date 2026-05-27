@@ -37,6 +37,7 @@ class BuildRecipientsRequest(BaseModel):
     issues: List[IssueItem] = []
     zip_code: str
     user_continued_out_of_area: bool = False
+    address: Optional[str] = ""
     issue_id: Optional[str] = None  # 🆕 SIMI: If provided, auto-fetch detected issues from DB
 
 class RecipientToggle(BaseModel):
@@ -167,6 +168,7 @@ async def build_recipients(req: BuildRecipientsRequest):
         issues=issues,
         zip_code=req.zip_code,
         user_continued_out_of_area=req.user_continued_out_of_area,
+        address=req.address or "",
     )
     return result
 
