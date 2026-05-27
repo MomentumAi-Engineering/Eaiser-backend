@@ -36,13 +36,13 @@ TIER_MAP: Dict[str, int] = {
     "tree_on_vehicle": 0,         # Compound: tree fell on car
     "tree_on_car": 0,             # Alias for tree_on_vehicle
     "downed_power_line": 0,
-    
+
     # Tier 1 — Critical Infrastructure
     "flooding": 1,
     "open_manhole": 1,
     "broken_traffic_signal": 1,
     "fallen_tree": 1,
-    
+
     # Tier 2 — Dangerous Infrastructure
     "pothole": 2,
     "road_damage": 2,
@@ -51,13 +51,52 @@ TIER_MAP: Dict[str, int] = {
     "damaged_sidewalk": 2,
     "damaged_traffic_sign": 2,
     "clogged_drain": 2,
-    
+
     # Tier 3 — Public Nuisance / Health
     "garbage": 3,
     "dead_animal": 3,
     "abandoned_vehicle": 3,
     "graffiti_vandalism": 3,
     "park_playground_damage": 3,
+
+    # ── Display-label aliases (in case AI returns the human-readable form) ──
+    # These map back to the canonical 17 — keeps strict enforcement safe.
+    "fallen___hazardous_tree": 1,         # "Fallen / Hazardous Tree"
+    "fallen_hazardous_tree": 1,
+    "hazardous_tree": 1,
+    "flooding___standing_water": 1,       # "Flooding / Standing Water"
+    "standing_water": 1,
+    "open___damaged_manhole": 1,          # "Open / Damaged Manhole"
+    "damaged_manhole": 1,
+    "clogged_drain___sewer": 2,           # "Clogged Drain / Sewer"
+    "sewer_overflow": 2,
+    "graffiti___vandalism": 3,            # "Graffiti / Vandalism"
+    "vandalism": 3,
+    "graffiti": 3,
+    "park___playground_damage": 3,        # "Park / Playground Damage"
+    "playground_damage": 3,
+    "park_damage": 3,
+}
+
+# Map normalized aliases → canonical label for consistent output
+LABEL_ALIASES: Dict[str, str] = {
+    "fire": "fire_hazard",
+    "tree_on_car": "tree_on_vehicle",
+    "fallen___hazardous_tree": "fallen_tree",
+    "fallen_hazardous_tree": "fallen_tree",
+    "hazardous_tree": "fallen_tree",
+    "flooding___standing_water": "flooding",
+    "standing_water": "flooding",
+    "open___damaged_manhole": "open_manhole",
+    "damaged_manhole": "open_manhole",
+    "clogged_drain___sewer": "clogged_drain",
+    "sewer_overflow": "clogged_drain",
+    "graffiti___vandalism": "graffiti_vandalism",
+    "vandalism": "graffiti_vandalism",
+    "graffiti": "graffiti_vandalism",
+    "park___playground_damage": "park_playground_damage",
+    "playground_damage": "park_playground_damage",
+    "park_damage": "park_playground_damage",
 }
 
 # Known issue labels (all valid labels)
@@ -397,22 +436,45 @@ def reconcile_multi_issue(v3_data: Dict[str, Any]) -> Dict[str, Any]:
     soft_fixes = []
     known = list(v3_data.get("known_issues", []))
     unknown = list(v3_data.get("unknown_issues", []))
-    
-    # ── Step 1: Fix tiers on all known issues ──
+
+    # ── Step 1: Strict canonical-label enforcement + tier correction ──
+    # known_issues MUST only contain labels from KNOWN_ISSUE_LABELS (the 17
+    # canonical issues + aliases). Any AI-output label outside this set is
+    # demoted to unknown_issues so the canonical set is never polluted.
+    valid_known: List[Dict[str, Any]] = []
     for k in known:
         issue_label = k.get("issue", "")
-        # Normalize for TIER_MAP lookup
         normalized = issue_label.lower().replace(" ", "_").replace("-", "_").replace("/", "_")
-        correct_tier = TIER_MAP.get(normalized, -1)
-        
+        # Fold aliases (e.g. "fire" → "fire_hazard", "vandalism" → "graffiti_vandalism")
+        canonical = LABEL_ALIASES.get(normalized, normalized)
+        correct_tier = TIER_MAP.get(canonical, -1)
+
         if correct_tier >= 0:
+            # Canonical label — normalize stored label and fix tier if needed
+            k["issue"] = canonical
             if k.get("tier") != correct_tier:
                 soft_fixes.append(f"Tier corrected for '{issue_label}': {k.get('tier')} → {correct_tier}")
                 k["tier"] = correct_tier
+            valid_known.append(k)
         else:
-            # Label not in TIER_MAP — move to unknown if it snuck in
-            soft_fixes.append(f"Unknown label '{issue_label}' in known_issues — tier set to -1")
-            k["tier"] = -1
+            # Non-canonical label — demote to unknown_issues (do NOT keep in known)
+            soft_fixes.append(
+                f"Non-canonical label '{issue_label}' demoted from known_issues to unknown_issues "
+                f"(only the 17 canonical labels are allowed in known_issues)"
+            )
+            logger.warning(
+                f"🛑 Strict label enforcement: '{issue_label}' is not in KNOWN_ISSUE_LABELS — "
+                f"demoting to unknown_issues"
+            )
+            unknown.append({
+                "issue": issue_label or "Unspecified Issue",
+                "severity": k.get("confidence", "Medium") if k.get("confidence") in ("High", "Medium", "Low") else "Medium",
+                "confidence": k.get("confidence", "Low"),
+                "image_source": k.get("image_source", ["image_1"]),
+                "cross_image_confirmed": k.get("cross_image_confirmed", False),
+                "_demoted_from_known": True,
+            })
+    known = valid_known
     
     # ── Step 1.5: Consequential Issue Inference ──
     # When the AI detects one issue but the scene clearly shows compound damage,
@@ -430,17 +492,37 @@ def reconcile_multi_issue(v3_data: Dict[str, Any]) -> Dict[str, Any]:
     ).lower()
     
     # RULE 1: Fallen tree + vehicle damage context → inject car_accident (Tier 0)
-    # Ensures Police + Emergency are notified alongside Public Works
-    vehicle_damage_cues = [
-        "sedan", "vehicle", "car ", "automobile", "truck", "suv",
-        "roof damage", "body damage", "windshield", "crushed",
-        "vehicle's roof", "vehicle damage", "damage to the vehicle",
-        "fallen onto a", "fallen on a", "rests across the vehicle",
-        "resting on", "onto a parked", "penetrated the"
+    # Ensures Police + Emergency are notified alongside Public Works.
+    # Only STRONG, unambiguous vehicle-damage phrases qualify. Single tokens
+    # like "vehicle" / "car " false-positive constantly on tree-on-house
+    # scenes where the AI mentions a hypothetical or absent vehicle
+    # ("no vehicle visible", "could endanger any car nearby", etc.).
+    # We require an explicit damage-to-vehicle phrase AND veto if the scene
+    # is clearly a residential/building context with no real vehicle visible.
+    strong_vehicle_damage_cues = [
+        "windshield",
+        "vehicle damage", "damage to the vehicle", "damaged vehicle",
+        "vehicle's roof", "vehicle's hood", "vehicle is crushed",
+        "rests across the vehicle", "rests on the vehicle",
+        "onto a parked car", "parked car", "parked vehicle",
+        "crushed car", "crushed the car", "car is crushed",
+        "tree on the car", "tree on a car", "tree fell on the car",
+        "tree on the vehicle", "tree fell on the vehicle",
+        "smashed car", "smashed vehicle",
     ]
+    # House/building context — if these dominate AND no strong vehicle phrase
+    # is present, skip the inference even if a loose word appears elsewhere.
+    building_context_cues = [
+        "house", "home", "residence", "residential", "rooftop of the house",
+        "roof of the house", "roof of the home", "porch", "siding",
+        "chimney", "front door", "window of the house",
+    ]
+    has_strong_vehicle_cue = any(cue in scene_text for cue in strong_vehicle_damage_cues)
+    has_building_context = any(cue in scene_text for cue in building_context_cues)
+
     if ("fallen_tree" in known_labels or "fallen___hazardous_tree" in known_labels) \
             and "car_accident" not in known_labels:
-        if any(cue in scene_text for cue in vehicle_damage_cues):
+        if has_strong_vehicle_cue and not has_building_context:
             known.append({
                 "issue": "car_accident",
                 "tier": 0,
@@ -452,6 +534,11 @@ def reconcile_multi_issue(v3_data: Dict[str, Any]) -> Dict[str, Any]:
             known_labels.add("car_accident")
             soft_fixes.append("Inferred 'car_accident' from fallen_tree + vehicle damage in scene description")
             logger.info("🚗 Consequential inference: car_accident added (fallen tree + vehicle damage detected)")
+        elif has_strong_vehicle_cue and has_building_context:
+            logger.info(
+                "🌳 Skipped car_accident inference: vehicle cue present but building context dominates "
+                "(tree-on-house scene, not vehicle damage)"
+            )
     
     # RULE 2: Downed power line + fire context → inject fire_hazard
     fire_cues = ["spark", "fire", "flame", "smoke", "burning", "smoldering", "charred"]

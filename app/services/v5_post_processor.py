@@ -93,27 +93,28 @@ def apply_auto_escalation(
                 logger.warning("🚨 Auto-escalation Rule 2: Promoted to Downed Power Line")
 
     # ── RULE 2.5: Fallen tree on vehicle → Car Accident (Tier 0) ──
+    # Strict vehicle keywords ONLY. Loose phrases like "fallen onto",
+    # "crushed", "roof damage", "rests across" used to false-positive on
+    # tree-on-house scenes (the roof here is the building's, not a car's).
     vehicle_cues = [
-        "vehicle", "car ", "sedan", "truck", "suv", "automobile",
-        "windshield", "crushed", "roof damage", "vehicle damage",
-        "fallen onto", "rests across", "parked car",
+        "vehicle", "car ", " car,", " car.", "sedan", "truck", "suv",
+        "automobile", "windshield", "parked car", "vehicle damage",
     ]
-    if known_labels & tree_labels:
-        if any(cue in combined_text for cue in vehicle_cues):
-            if "car_accident" not in known_labels:
-                issues.append({
-                    "label": "car_accident",
-                    "issue": "Car Accident",
-                    "confidence": 0.80,
-                    "risk_factors": {"presence_of_hazard": True, "structural_risk": True},
-                    "_escalation_source": "rule_2_5_tree_on_vehicle",
-                    "_inferred": True,
-                })
-                known_labels.add("car_accident")
-                escalation_log.append(
-                    "Rule 2.5: Fallen tree on vehicle → Car Accident (Tier 0)"
-                )
-                logger.warning("🚨 Auto-escalation Rule 2.5: Tree on vehicle → Car Accident")
+    if known_labels & tree_labels and any(cue in combined_text for cue in vehicle_cues):
+        if "car_accident" not in known_labels:
+            issues.append({
+                "label": "car_accident",
+                "issue": "Car Accident",
+                "confidence": 0.80,
+                "risk_factors": {"presence_of_hazard": True, "structural_risk": True},
+                "_escalation_source": "rule_2_5_tree_on_vehicle",
+                "_inferred": True,
+            })
+            known_labels.add("car_accident")
+            escalation_log.append(
+                "Rule 2.5: Fallen tree on vehicle → Car Accident (Tier 0)"
+            )
+            logger.warning("🚨 Auto-escalation Rule 2.5: Tree on vehicle → Car Accident")
 
     # ── RULE 3: Sidewalk/road damage + structural distress → Structural Collapse ──
     infra_labels = {"damaged_sidewalk", "road_damage", "pothole"}

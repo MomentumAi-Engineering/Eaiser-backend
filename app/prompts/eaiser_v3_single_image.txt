@@ -51,7 +51,7 @@ KNOWN ISSUE LIST:
 
 Tier 0 — Emergency (May require 911):
   - fire_hazard (Label: Fire Hazard) — Uncontrolled fire, smoke from structure, visible flames threatening safety
-  - car_accident (Label: Car Accident) — Vehicle collision, wreckage visible, NOT road work or cones
+  - car_accident (Label: Car Accident) — Vehicle collision, wreckage visible, NOT road work or cones. HARD REQUIREMENT: an actual vehicle (car, truck, motorcycle, etc.) MUST be clearly visible in the image AND show visible damage or involvement. Do NOT classify car_accident if no vehicle is visible. A fallen tree, downed pole, or debris on a building/house/road WITHOUT a visible damaged vehicle is NOT a car_accident.
   - downed_power_line (Label: Downed Power Line) — Fallen or hanging electrical line, sparking wire
 
 Tier 1 — Critical Infrastructure (Immediate danger):
@@ -141,11 +141,16 @@ IMPORTANT: You MUST still list ALL consequential/secondary issues as separate en
 CRITICAL: Always classify each sub-issue using the KNOWN ISSUE LIST above. Do NOT invent custom unknown labels.
 For example, a fallen tree on a car should produce:
   - Rank 1: fallen_tree (Known, Tier 1) — Root Cause
-  - Rank 2: car_accident (Known, Tier 0) — Vehicle wreckage/damage is visible
-  - Rank 3: road_damage (Known, Tier 2) — Road/path obstructed by debris
+  - Rank 2: car_accident (Known, Tier 0) — ONLY IF a damaged vehicle is clearly visible in the image
+  - Rank 3: road_damage (Known, Tier 2) — ONLY IF road surface damage or debris on roadway is clearly visible
+Another example, a fallen tree on a HOUSE/BUILDING (no vehicle visible) should produce:
+  - Rank 1: fallen_tree (Known, Tier 1) — Root Cause
+  - DO NOT add car_accident (no vehicle visible)
+  - DO NOT add road_damage unless the road itself is clearly visible and damaged
 Another example, flooding that exposed a pothole:
   - Rank 1: flooding (Known, Tier 1) — Root Cause
   - Rank 2: pothole (Known, Tier 2) — Visible road hole
+CRITICAL: Only include issues that are DIRECTLY VISIBLE in the image. Never add a consequential/secondary issue based on what "might have" happened or what is "typically associated" with the root cause. If you cannot point to specific visual evidence for an issue in the visual_observations array, do NOT include it.
 Never collapse multiple visible issues into a single entry. Every distinct visible problem must be its own known issue.
 
 </instructions>
@@ -313,6 +318,43 @@ EXAMPLE 3 — Controlled fire (Scenario E):
   ],
   "ordered_issue_list": [
     { "rank": 1, "issue": "Controlled Recreational Fire", "type": "Unknown", "tier_or_severity": "Low" }
+  ],
+  "discrepancy_flag": false,
+  "discrepancy_note": null
+}
+
+EXAMPLE 4A — Fallen tree on HOUSE, no vehicle visible (Scenario A — Single Known Issue):
+
+{
+  "report_meta": {
+    "image_count": 1,
+    "scenario": "A",
+    "final_priority": "High",
+    "internal_review_required": false,
+    "emergency_911": false,
+    "emergency_advisory": null
+  },
+  "visual_observations": {
+    "image_1": [
+      "A large tree fallen onto the roof of a residential house",
+      "Tree trunk and large branches resting across the structure",
+      "No vehicle visible in the image",
+      "No roadway or road damage visible in the image"
+    ]
+  },
+  "scene_description": "A large tree has fallen onto the roof of a residential structure. The trunk and branches are resting across the building.",
+  "known_issues": [
+    {
+      "issue": "fallen_tree",
+      "tier": 1,
+      "confidence": "High",
+      "image_source": ["image_1"],
+      "cross_image_confirmed": false
+    }
+  ],
+  "unknown_issues": [],
+  "ordered_issue_list": [
+    { "rank": 1, "issue": "fallen_tree", "type": "Known", "tier_or_severity": "Tier 1" }
   ],
   "discrepancy_flag": false,
   "discrepancy_note": null
