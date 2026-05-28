@@ -73,7 +73,10 @@ class AIServiceV3:
         try:
             import hashlib as _hashlib
             from services.ai_service_optimized import get_cached_data
-            cache_key = f"v3_analyze:{_hashlib.md5(image_content).hexdigest()}"
+            # `v2:` prefix bumps the cache key so any v3_result cached before the
+            # scene_description / visual_observations propagation fix is invalidated
+            # — those entries didn't carry the description fields the UI now needs.
+            cache_key = f"v3_analyze:v2:{_hashlib.md5(image_content).hexdigest()}"
             cached = await get_cached_data(cache_key, 1800)
             if cached:
                 logger.info("⚡ V3 analyze cache HIT — skipped redundant Gemini vision call")

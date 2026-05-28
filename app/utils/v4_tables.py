@@ -684,6 +684,36 @@ def reconcile_multi_issue(v3_data: Dict[str, Any]) -> Dict[str, Any]:
         f"Emergency={emergency}"
     )
     
+    # ── Scene-description fallback ──
+    # When the AI returned an empty scene_description, synthesise a 1–3 sentence
+    # description from the visual_observations the AI DID produce. Beats showing
+    # "AI couldn't generate a description" when the AI actually saw the scene
+    # but skipped the narrative step.
+    scene_desc = (v3_data.get("scene_description") or "").strip()
+    if not scene_desc:
+        obs_blocks = v3_data.get("visual_observations") or {}
+        flat_obs: List[str] = []
+        if isinstance(obs_blocks, dict):
+            for v in obs_blocks.values():
+                if isinstance(v, list):
+                    flat_obs.extend([str(x).strip() for x in v if x and isinstance(x, str)])
+        elif isinstance(obs_blocks, list):
+            flat_obs.extend([str(x).strip() for x in obs_blocks if x and isinstance(x, str)])
+        snippets = [s.rstrip(".,;:") for s in flat_obs[:3] if len(s) > 3]
+        if snippets:
+            cap = lambda x: (x[0].upper() + x[1:]) if x else x
+            scene_desc = ". ".join(cap(s) for s in snippets) + "."
+
+    # Flatten visual_observations into a single list for downstream consumers.
+    obs_blocks = v3_data.get("visual_observations") or {}
+    flat_visual: List[str] = []
+    if isinstance(obs_blocks, dict):
+        for v in obs_blocks.values():
+            if isinstance(v, list):
+                flat_visual.extend([str(x) for x in v if isinstance(x, str)])
+    elif isinstance(obs_blocks, list):
+        flat_visual = [str(x) for x in obs_blocks if isinstance(x, str)]
+
     return {
         "known_issues": known,
         "unknown_issues": unknown,
@@ -697,7 +727,9 @@ def reconcile_multi_issue(v3_data: Dict[str, Any]) -> Dict[str, Any]:
         "emergency_advisory": emergency_advisory,
         "internal_review_required": review_required,
         "total_issues": total_issues,
-        "issue_summary": issue_summary,
+        "issue_summary": issue_summary,                                # comma-joined labels (legacy)
+        "scene_description": scene_desc,                               # REAL or synthesised narrative
+        "visual_observations": flat_visual,                            # raw AI observations
         "_soft_fixes": soft_fixes,
     }
 

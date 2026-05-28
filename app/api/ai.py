@@ -59,6 +59,33 @@ async def analyze_image(request: Request):
         issue_type, severity, confidence, category, priority, issue_detected, *_simi_extra = await classify_issue(content, str(description))
         simi_data = _simi_extra[0] if _simi_extra else None
 
+        # Use the REAL AI scene narrative — only when it actually reads like prose.
+        # We REJECT comma-joined label lists (e.g. "fallen_tree, road_damage") which
+        # have spaces and meet length but aren't real descriptions.
+        def _is_sentence_like(s: str) -> bool:
+            t = (s or "").strip()
+            if len(t) < 25:
+                return False
+            if "_" in t:               # snake_case label artifacts
+                return False
+            if len(t.split()) < 5:     # need at least ~5 words for a real sentence
+                return False
+            # Must contain at least one common connector word (any prose sentence will)
+            connectors = (" is ", " was ", " has ", " have ", " the ", " a ", " an ",
+                          " on ", " at ", " with ", " near ", " from ", " and ",
+                          " or ", " of ", " in ", " across ", " over ", " under ")
+            lower = " " + t.lower() + " "
+            return any(c in lower for c in connectors)
+
+        scene_summary = ""
+        if simi_data:
+            scene = (simi_data.get("scene_description") or "").strip()
+            if _is_sentence_like(scene):
+                scene_summary = scene
+            # We intentionally do NOT fall back to issue_summary — it's a label list,
+            # never a sentence; the UI placeholder is a better experience than that.
+        # Empty is fine — UI will show the placeholder so the user can add their own context.
+
         # Format for Mobile/Web Preview screen
         response = {
             "issue_type": issue_type,
@@ -67,15 +94,18 @@ async def analyze_image(request: Request):
             "category": category,
             "priority": priority,
             "issue_detected": issue_detected,
-            "description": f"EAiSER AI identified this as a potential {issue_type} with high precision.",
+            "description": scene_summary,
             "status": "success"
         }
-        
-        # 🆕 SIMI Level 3: Include all detected issues for mobile preview
+
+        # 🆕 SIMI Level 3: Include all detected issues for mobile preview.
+        # scene_description = AI's actual scene narrative (sentences).
+        # issue_summary    = comma-joined list of detected issue labels.
         if simi_data:
             response["detected_issues"] = simi_data.get("ordered_issue_list", [])
             response["total_detected_issues"] = simi_data.get("total_issues", 1)
-            response["scene_description"] = simi_data.get("issue_summary", "")
+            response["scene_description"] = simi_data.get("scene_description", "")
+            response["issue_summary"] = simi_data.get("issue_summary", "")
             response["emergency_911"] = simi_data.get("emergency_911", False)
             response["emergency_advisory"] = simi_data.get("emergency_advisory")
             response["scenario"] = simi_data.get("scenario", "A")
