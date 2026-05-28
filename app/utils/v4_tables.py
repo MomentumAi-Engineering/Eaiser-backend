@@ -622,28 +622,46 @@ def reconcile_multi_issue(v3_data: Dict[str, Any]) -> Dict[str, Any]:
         soft_fixes.append("Emergency 911 flag set due to Tier 0 issue")
     
     # ── Step 7: Build deterministic ordered_issue_list ──
+    # Dedupe by normalised issue name so that an issue appearing in both `known`
+    # and `unknown` (or repeated in either — e.g. via Step 1.5 consequence
+    # inference) isn't surfaced twice to the client as "Car Accident, Car Accident".
     all_items = []
+    seen_issue_keys: set = set()
+
+    def _issue_key(name: str) -> str:
+        return (name or "").strip().lower().replace("_", " ")
+
     for k in known:
+        name = k.get("issue", "")
+        key = _issue_key(name)
+        if not key or key in seen_issue_keys:
+            continue
+        seen_issue_keys.add(key)
         tier = k.get("tier", 3)
         conf_ord = {"High": 3, "Medium": 2, "Low": 1}.get(k.get("confidence", "Low"), 1)
         all_items.append({
-            "issue": k.get("issue", ""),
+            "issue": name,
             "type": "Known",
             "tier_or_severity": f"Tier {tier}",
             "_sort_tier": tier,
             "_sort_signal": conf_ord,
-            "_sort_label": k.get("issue", "").lower(),
+            "_sort_label": name.lower(),
         })
     for u in unknown:
+        name = u.get("issue", "")
+        key = _issue_key(name)
+        if not key or key in seen_issue_keys:
+            continue
+        seen_issue_keys.add(key)
         sev = u.get("severity", "Low")
         sev_ord = {"High": 3, "Medium": 2, "Low": 1}.get(sev, 1)
         all_items.append({
-            "issue": u.get("issue", ""),
+            "issue": name,
             "type": "Unknown",
             "tier_or_severity": sev,
             "_sort_tier": 4,  # Unknown after all tiers
             "_sort_signal": sev_ord,
-            "_sort_label": u.get("issue", "").lower(),
+            "_sort_label": name.lower(),
         })
     
     # Sort: tier asc → signal desc → label asc
