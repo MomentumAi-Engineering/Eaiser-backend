@@ -295,6 +295,12 @@ async def gov_login(creds: GovLoginRequest):
             "department": user.get("department"),
             "zip": user.get("zip_code"),
             "org": user.get("city"),
+            # `org_slug` is required by the city-side /billing page to fetch
+            # subscription state. Without it the page can't identify which org
+            # to query. Falls back to None for legacy users created before the
+            # billing checkout flow added this field.
+            "org_slug": user.get("org_slug"),
+            "org_id": user.get("org_id"),
             "initials": "".join([n[0] for n in user["name"].split() if n]).upper(),
             "avatar_url": user.get("avatar_url")
         }
