@@ -45,6 +45,16 @@ async def send_email(
         logger.error("❌ Missing POSTMARK_API_TOKEN environment variable.")
         return False
 
+    # 🔒 Validate the recipient before hitting Postmark. Sending to malformed /
+    # junk addresses drives up the bounce rate, which is what got the stream
+    # paused. Skip anything that isn't a syntactically valid single address.
+    import re
+    addr = (to_email or "").strip()
+    if not re.match(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$", addr):
+        logger.warning(f"⚠️ Skipping send — invalid recipient email: {to_email!r}")
+        return False
+    to_email = addr
+
     # Build Postmark payload
     payload = {
         "From": email_user,
@@ -1168,6 +1178,12 @@ async def send_password_reset_email(email: str, token: str) -> bool:
 
 async def send_tos_email(email: str, name: str) -> bool:
     """Send a copy of the Terms of Service to the user upon acceptance."""
+    # 🔒 Kill-switch: the bulk TOS/welcome email (sent on every signup) was the
+    # source of the bot-driven spam spike that got the Postmark stream paused.
+    # Set TOS_EMAIL_ENABLED=false to instantly stop it if a bot wave hits.
+    if os.getenv("TOS_EMAIL_ENABLED", "true").lower() != "true":
+        logger.info("✉️ TOS email disabled (TOS_EMAIL_ENABLED=false) — skipping.")
+        return False
     try:
         subject = "Your Accepted Terms: EAiSER & MomntumAi"
         

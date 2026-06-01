@@ -392,7 +392,9 @@ async def store_issue(
     user_email: Optional[str],
     responsible_authorities: List[Dict[str, Any]],
     available_authorities: List[Dict[str, Any]],
-    status: str = "pending"
+    status: str = "pending",
+    device_id: Optional[str] = None,
+    reporter_email: Optional[str] = None
 ) -> str:
     """
     Store an issue in MongoDB with zip code and return the image ID.
@@ -475,6 +477,11 @@ async def store_issue(
             "timestamp_formatted": report.get("template_fields", {}).get("timestamp", datetime.now().strftime("%m/%d/%Y %H:%M")),
             "timezone_name": report.get("template_fields", {}).get("timezone_name", "UTC"),
             "user_email": user_email,
+            # Per-device identity for anonymous reports — lets a later account
+            # "claim" this report (see /issues/claim-device). reporter_email is
+            # an optional address the anonymous reporter asked a copy be sent to.
+            "device_id": device_id,
+            "reporter_email": reporter_email,
             "available_authorities": available_authorities,
             "decline_reason": None,
             "decline_history": [],

@@ -73,6 +73,65 @@ async def get_my_issues(
     """Get issues reported by the current user."""
     return await get_user_issues(current_user.get("sub"), limit=limit, skip=skip)
 
+
+class ClaimDeviceRequest(BaseModel):
+    device_id: str
+
+
+@router.post("/issues/claim-device")
+async def claim_device(
+    request: ClaimDeviceRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Link reports submitted anonymously from this device to the now-authenticated
+    account. Called by the app right after login/signup. Matches issues by
+    device_id that have no owner yet and assigns them to this user, so they
+    appear on the user's dashboard.
+    """
+    device_id = (request.device_id or "").strip()
+    user_email = current_user.get("sub")
+    if not device_id or not user_email:
+        return {"claimed": 0}
+    db = await get_db()
+    result = await db.issues.update_many(
+        {
+            "device_id": device_id,
+            "$or": [
+                {"user_email": None},
+                {"user_email": ""},
+                {"user_email": {"$exists": False}},
+            ],
+        },
+        {"$set": {"user_email": user_email}},
+    )
+    claimed = getattr(result, "modified_count", 0)
+    logger.info(f"claim-device: linked {claimed} issue(s) for device {device_id} → {user_email}")
+    return {"claimed": claimed}
+
+
+@router.get("/email-test")
+async def email_test(to: str = "engineering@momntumai.com"):
+    """
+    Diagnostic: reveals this server's email config and attempts a live send so
+    you can tell whether PRODUCTION can actually send (token present? dry-run?).
+    Restricted to @momntumai.com recipients to avoid abuse.
+    """
+    import os
+    token_present = bool(os.getenv("POSTMARK_API_TOKEN"))
+    dry_run = os.getenv("EMAIL_DRY_RUN", "false").lower() == "true"
+    from_addr = os.getenv("EMAIL_USER", "alert@momntumai.com")
+    if not to.lower().endswith("@momntumai.com"):
+        return {"ok": False, "error": "recipient must be a @momntumai.com address", "postmark_token_present": token_present, "email_dry_run": dry_run, "from": from_addr}
+    sent = await send_email(
+        to_email=to,
+        subject="EAiSER production email test",
+        html_content="<p>If you received this, production email sending works.</p>",
+        text_content="If you received this, production email sending works.",
+    )
+    return {"ok": sent, "sent": sent, "postmark_token_present": token_present, "email_dry_run": dry_run, "from": from_addr, "to": to}
+
+
 class IssueResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -764,8 +823,38 @@ async def send_authority_email(
         logger.warning(f"Email sending issues for issue {issue_id}: {'; '.join(errors)}")
     if successful_emails:
         logger.info(f"Emails sent successfully for issue {issue_id} to: {', '.join(successful_emails)}")
-    
+
     return len(errors) == 0
+
+
+async def _send_reporter_copy(reporter_email: Optional[str], issue_id: str, issue_type: str, address: str):
+    """Email an anonymous reporter a copy/confirmation of their submission if
+    they asked for one. Best-effort — never raises into the create flow."""
+    if not reporter_email or "@" not in reporter_email:
+        return
+    try:
+        subject = f"Your EAiSER report ({issue_id}) was submitted"
+        text = (
+            "Thanks for your report!\n\n"
+            f"Issue: {issue_type}\n"
+            f"Location: {address}\n"
+            f"Reference: {issue_id}\n\n"
+            "We've routed it to the relevant city department. "
+            "Create a free account in the EAiSER app to track its status.\n\n— EAiSER"
+        )
+        html = (
+            "<p>Thanks for your report!</p>"
+            f"<p><b>Issue:</b> {issue_type}<br>"
+            f"<b>Location:</b> {address}<br>"
+            f"<b>Reference:</b> {issue_id}</p>"
+            "<p>We've routed it to the relevant city department. "
+            "Create a free account in the EAiSER app to track its status.</p><p>— EAiSER</p>"
+        )
+        await send_email(to_email=reporter_email, subject=subject, html_content=html, text_content=text)
+        logger.info(f"Sent reporter copy for issue {issue_id} to the reporter's email")
+    except Exception as e:
+        logger.error(f"Failed to send reporter copy for issue {issue_id}: {e}")
+
 
 @router.post("/issues", response_model=IssueResponse)
 async def create_issue(
@@ -780,7 +869,9 @@ async def create_issue(
     
     severity: str = Form('medium'),
     issue_type: str = Form('other'),
-    report_source: str = Form('automatic')
+    report_source: str = Form('automatic'),
+    device_id: Optional[str] = Form(None),
+    reporter_email: Optional[str] = Form(None)
 ):
     logger.debug(f"Creating issue with address: {address}, zip: {zip_code}, lat: {latitude}, lon: {longitude}, source: {report_source}")
     try:
@@ -902,9 +993,12 @@ async def create_issue(
              user_email,
              [], # responsible_authorities
              [], # available_authorities
-             status="needs_review"
+             status="needs_review",
+             device_id=device_id,
+             reporter_email=reporter_email
         )
-        
+        await _send_reporter_copy(reporter_email, issue_id, issue_t, final_address)
+
         return IssueResponse(
             issue_id=issue_id,
             id=issue_id,
@@ -1282,9 +1376,12 @@ async def create_issue(
             priority=priority,
             user_email=user_email,
             responsible_authorities=report["responsible_authorities_or_parties"],
-            available_authorities=report["available_authorities"]
+            available_authorities=report["available_authorities"],
+            device_id=device_id,
+            reporter_email=reporter_email
         )
         logger.info(f"Issue {issue_id} stored successfully with image_id {image_id}")
+        await _send_reporter_copy(reporter_email, issue_id, issue_type, final_address)
     except Exception as e:
         logger.error(f"Failed to store issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to store issue: {str(e)}")
