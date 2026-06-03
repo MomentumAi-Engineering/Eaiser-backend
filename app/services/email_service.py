@@ -27,11 +27,15 @@ async def send_email(
     embedded_images: Optional[List[Tuple[str, str, str]]] = None,
     reply_to: Optional[str] = None,
     retry: bool = True,
-    raw_attachments: Optional[List[Dict[str, Any]]] = None
+    raw_attachments: Optional[List[Dict[str, Any]]] = None,
+    cc: Optional[List[str]] = None
 ) -> bool:
     """
     Sends an email via Postmark API with inline images and attachments.
     Uses asyncio.to_thread to keep the event loop non-blocking.
+
+    `cc` copies every other notified department onto the SAME email thread, so
+    all recipients share one conversation and can coordinate via reply-all.
     """
     email_user = os.getenv("EMAIL_USER", "alert@momntumai.com")
     postmark_token = os.getenv("POSTMARK_API_TOKEN")
@@ -55,6 +59,17 @@ async def send_email(
         return False
     to_email = addr
 
+    # 📋 Clean the CC list: keep only valid addresses, drop duplicates and the
+    # primary recipient so nobody is listed twice on the thread.
+    cc_clean: List[str] = []
+    if cc:
+        seen = {to_email.lower()}
+        for c in cc:
+            c = (c or "").strip()
+            if c and c.lower() not in seen and re.match(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$", c):
+                seen.add(c.lower())
+                cc_clean.append(c)
+
     # Build Postmark payload
     payload = {
         "From": email_user,
@@ -64,6 +79,9 @@ async def send_email(
         "TextBody": text_content,
         "Attachments": []
     }
+
+    if cc_clean:
+        payload["Cc"] = ", ".join(cc_clean)
 
     if reply_to:
         payload["ReplyTo"] = reply_to
@@ -119,7 +137,8 @@ async def send_email(
             "Content-Type": "application/json",
             "X-Postmark-Server-Token": postmark_token
         }
-        logger.info(f"📤 Sending Postmark email FROM {email_user} TO {to_email}")
+        cc_note = f" CC {len(cc_clean)} dept(s)" if cc_clean else ""
+        logger.info(f"📤 Sending Postmark email FROM {email_user} TO {to_email}{cc_note}")
         return requests.post(url, headers=headers, json=payload, timeout=15)
 
     try:
@@ -141,10 +160,11 @@ async def send_email(
                 logger.info("🔁 Retrying once after 2 seconds...")
                 await asyncio.sleep(2)
                 return await send_email(
-                    to_email, subject, html_content, text_content, 
-                    attachments, embedded_images, 
-                    reply_to=reply_to, retry=False, 
-                    raw_attachments=raw_attachments
+                    to_email, subject, html_content, text_content,
+                    attachments, embedded_images,
+                    reply_to=reply_to, retry=False,
+                    raw_attachments=raw_attachments,
+                    cc=cc
                 )
             return False
 
@@ -225,6 +245,89 @@ def get_email_service() -> EmailService:
 
 
 # --------------------------------------------------------------------
+# ✅ Fallback report body (so authority emails are never empty)
+# --------------------------------------------------------------------
+def _build_fallback_report_body(report: Dict[str, Any]) -> str:
+    """
+    Compose a readable report body from whatever fields exist on the report.
+
+    Some report paths (the V3 engine, no-issue / manual-review reports, and
+    pre-check rejections) never generate the AI's pre-formatted `formatted_report`
+    string — which used to leave the authority email body completely blank. This
+    rebuilds a clear body from issue_overview / template_fields / detailed_analysis
+    so the recipient always sees the incident details.
+    """
+    ov = report.get("issue_overview", {}) or {}
+    tf = report.get("template_fields", {}) or {}
+    da = report.get("detailed_analysis", {}) or {}
+    ai = report.get("ai_evaluation", {}) or {}
+
+    issue_type = ov.get("type") or report.get("issue_type") or "Reported issue"
+    priority = tf.get("priority") or ov.get("severity") or "N/A"
+    report_id = tf.get("oid") or report.get("_id") or "N/A"
+    timestamp = tf.get("timestamp") or ""
+    address = tf.get("address") or report.get("address") or "Location not provided"
+    zip_code = str(tf.get("zip_code") or report.get("zip_code") or "")
+    map_link = tf.get("map_link") or ""
+
+    # Best available narrative, in priority order.
+    summary = (
+        ov.get("summary_explanation")
+        or ov.get("detailed_description")
+        or ov.get("summary")
+        or report.get("scene_description")
+        or report.get("issue_summary")
+        or report.get("description")
+        or ""
+    ).strip()
+
+    issue_detected = ai.get("issue_detected", True)
+    type_blank = str(issue_type).strip().lower() in ("none", "", "no issue", "reported issue")
+
+    lines = ["EAiSER Civic Incident Report", ""]
+    lines.append(f"Issue Type: {issue_type}")
+    lines.append(f"Priority: {priority}")
+    if str(report_id) != "N/A":
+        lines.append(f"Report ID: {report_id}")
+    if timestamp:
+        lines.append(f"Reported: {timestamp}")
+    lines.append("")
+
+    location = address + (f" {zip_code}" if zip_code and zip_code not in address else "")
+    lines.append(f"Location: {location}")
+    if map_link:
+        lines.append(f"Map: {map_link}")
+    lines.append("")
+
+    if not issue_detected or type_blank:
+        lines.append(
+            "EAiSER's AI could not clearly detect a public infrastructure issue in the "
+            "submitted photo. This report has been forwarded for manual review so the "
+            "right team can take a closer look."
+        )
+        lines.append("")
+
+    if summary:
+        lines.append("Summary:")
+        lines.append(summary)
+        lines.append("")
+
+    root = (da.get("root_causes") or "").strip()
+    cons = (da.get("potential_consequences_if_ignored") or "").strip()
+    if root and root.lower() not in ("not specified.", "n/a", "none"):
+        lines.append("Possible cause:")
+        lines.append(root)
+        lines.append("")
+    if cons and cons.lower() not in ("n/a", "none"):
+        lines.append("If left unaddressed:")
+        lines.append(cons)
+        lines.append("")
+
+    lines.append("Please review and let us know if another department is better suited to handle this.")
+    return "\n".join(lines).strip()
+
+
+# --------------------------------------------------------------------
 # ✅ Send AI-Formatted Alert to Authorities (EAiSER Alert)
 # --------------------------------------------------------------------
 async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = True) -> Dict[str, Any]:
@@ -236,6 +339,12 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
         env = os.getenv("ENV", "development").lower()
         dry_run = os.getenv("EMAIL_DRY_RUN", "false").lower() == "true"
         formatted_content = report.get("formatted_report", "")
+        # 🛟 Never send an empty body. Some report paths (V3 engine, no-issue /
+        # manual-review, pre-check rejections) don't produce `formatted_report`,
+        # which left the email blank — rebuild a body from the report fields.
+        if not formatted_content or not formatted_content.strip():
+            logger.warning("⚠️ formatted_report missing/empty — building fallback body from report fields.")
+            formatted_content = _build_fallback_report_body(report)
         issue_type = report.get("issue_overview", {}).get("type", "Issue")
         report_id = report.get("template_fields", {}).get("oid", "N/A")
         priority = report.get("template_fields", {}).get("priority", "N/A")
@@ -247,6 +356,38 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
         if not recipients:
             logger.warning("⚠️ No recipients found in AI report.")
             return {"status": "no_recipients", "recipients": []}
+
+        # 📋 "Departments notified" block — list every department copied on this
+        # email so each recipient can see who else is on the thread.
+        notified = [a for a in authorities if isinstance(a, dict) and a.get("email")]
+        dept_items = "".join(
+            f"<li style='margin-bottom:4px;'><strong>{a.get('name', 'Department')}</strong>"
+            f"{(' — ' + str(a.get('type', '')).replace('_', ' ').title()) if a.get('type') else ''}</li>"
+            for a in notified
+        )
+        departments_html = f"""
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:25px;">
+            <h3 style="margin:0 0 8px;color:#1e293b;font-size:15px;">Departments Notified</h3>
+            <p style="color:#64748b;font-size:13px;margin:0 0 12px;">Every department below has been copied on this email <strong>in the spirit of collaboration</strong>, so you can coordinate directly by replying to this thread.</p>
+            <ul style="margin:0 0 14px;padding-left:18px;color:#334155;font-size:13px;line-height:1.6;">{dept_items}</ul>
+            <p style="color:#64748b;font-size:13px;margin:0;">If a different department or office is better suited to handle this, or there's a better way for us to route reports like this, please just reply and let us know — we're happy to adjust.</p>
+        </div>
+        """
+        departments_text = (
+            "Departments notified — all copied on this email in the spirit of collaboration, "
+            "so you can coordinate directly by replying to this thread:\n"
+            + "\n".join(
+                f" - {a.get('name', 'Department')}" + (f" ({a.get('type')})" if a.get('type') else "")
+                for a in notified
+            )
+            + "\n\nIf a different department is better suited to handle this, or there's a better way "
+            "for us to route reports like this, please reply and let us know — we're happy to adjust."
+        )
+
+        # Safe defaults so the body always includes the departments list even if
+        # the richer template below is skipped.
+        final_html = departments_html + formatted_content.replace("\n", "<br>")
+        final_text = f"{departments_text}\n\n{formatted_content}"
 
         # Only skip if dry_run is explicitly enabled
         if dry_run:
@@ -288,6 +429,7 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
                     </div>
                     
                     <div style="padding: 40px 30px; font-size: 16px; color: #334155; line-height: 1.8;">
+                        {departments_html}
                         <div style="background: #f8fafc; border-radius: 16px; padding: 25px; border: 1px solid #f1f5f9; margin-bottom: 30px;">
                             {formatted_html}
                         </div>
@@ -302,29 +444,29 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
                 </div>
                 """
                 
-                final_text = f"{formatted_content}\n\nREPLY TO THIS EMAIL to communicate with the reporter (Issue ID: #{real_id})."
-                
+                final_text = f"{departments_text}\n\n{formatted_content}\n\nREPLY TO THIS EMAIL to communicate with the reporter (Issue ID: #{real_id})."
+
         except Exception as token_error:
             logger.error(f"⚠️ Failed to generate authority token: {token_error}")
-            final_html = formatted_content.replace("\n", "<br>")
-            final_text = formatted_content
+            final_html = departments_html + formatted_content.replace("\n", "<br>")
+            final_text = f"{departments_text}\n\n{formatted_content}"
 
-        async def _send(to_email: str):
-            # Use the Postmark inbound email address or the verified domain
-            inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "reports@inbound.eaiser.ai")
-            return await send_email(to_email, subject, final_html, final_text, reply_to=inbound_email)
+        # Send ONE email so every department shares a single thread: the first
+        # recipient goes in To, the rest are CC'd. Reply-all keeps everyone — and
+        # the reporter (via ReplyTo) — in the same conversation.
+        inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "reports@inbound.eaiser.ai")
+        primary, cc_emails = recipients[0], recipients[1:]
+
+        async def _send():
+            return await send_email(primary, subject, final_html, final_text, reply_to=inbound_email, cc=cc_emails)
 
         if background:
-            for r in recipients:
-                asyncio.create_task(_send(r))
-            logger.info(f"📤 Dispatched EAiSER Alert to {len(recipients)} authorities (background mode)")
+            asyncio.create_task(_send())
+            logger.info(f"📤 Dispatched EAiSER Alert thread — To {primary}, Cc {len(cc_emails)} dept(s) (background mode)")
             return {"status": "dispatched", "recipients": recipients}
         else:
-            sent, failed = [], []
-            for r in recipients:
-                ok = await _send(r)
-                (sent if ok else failed).append(r)
-            return {"status": "completed", "sent": sent, "failed": failed}
+            ok = await _send()
+            return {"status": "completed", "sent": recipients if ok else [], "failed": [] if ok else recipients}
 
     except Exception as e:
         logger.error(f"❌ send_formatted_ai_alert failed: {str(e)}", exc_info=True)

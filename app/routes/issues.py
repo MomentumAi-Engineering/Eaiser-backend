@@ -732,10 +732,11 @@ async def send_authority_email(
                 <div class="section">
                     <div class="section-header">4. Incident Routing</div>
                     <div class="routing-box">
-                        <p>This incident has been securely routed to the following departments for appropriate action:</p>
+                        <p>In the spirit of collaboration, every department below has been copied on this email so you can coordinate directly by replying to this thread:</p>
                         <ul class="routing-list">
                             {"".join([f"<li>{auth.get('name', 'Department')} ({auth.get('type', 'General').title()})</li>" for auth in department_list])}
                         </ul>
+                        <p style="margin-top:12px;">If a different department or office is better suited to handle this, or there's a better way for us to route reports like this, please just reply and let us know — we're happy to adjust.</p>
                     </div>
                 </div>
             </div>
@@ -761,48 +762,65 @@ async def send_authority_email(
 """
     errors = []
     successful_emails = []
-    
+
+    # Put EVERY notified department on ONE email thread: the primary (first)
+    # department goes in To, the rest are CC'd, so they all share a single
+    # conversation and can coordinate via reply-all. The email body already
+    # lists each notified department (Section 4 — Incident Routing).
+    seen_emails = set()
+    recipients = []
     for authority in authorities:
-        try:
-            subject, text_content = get_department_email_content(
-                authority.get("type", "general"),
-                {
-                    "issue_type": issue_type,
-                    "address": final_address,
-                    "zip_code": zip_code,
-                    "timestamp_formatted": timestamp_formatted,
-                    "report": report,
-                    "authority_name": authority.get("name", "Department"),
-                    "confidence": confidence,
-                    "category": category,
-                    "timezone_name": timezone_name,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "decline_reason": decline_reason
-                },
-                is_user_review=is_user_review
-            )
-            logger.debug(f"Sending email to [redacted] for {authority.get('type', 'general')} with subject: {subject}")
-            inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "adb1d888168b5611b7b7a489f1c8ab76@inbound.postmarkapp.com")
-            success = await send_email(
-                to_email=authority.get("email", "alert@momntumai.com"),
-                subject=subject_override or subject,
-                html_content=html_content,
-                text_content=text_content,
-                attachments=None,
-                embedded_images=embedded_images,
-                reply_to=inbound_email
-            )
-            if success:
-                successful_emails.append(authority.get("email", "eaiser@momntumai.com"))
-                logger.info(f"Email sent successfully to [redacted] for {authority.get('type', 'general')}")
-            else:
-                logger.warning(f"Email sending failed for [redacted] without raising an exception")
-                errors.append(f"Email sending failed for {authority.get('email', 'eaiser@momntumai.com')}")
-        except Exception as e:
-            logger.error(f"Failed to send email to [redacted]: {str(e)}", exc_info=True)
-            errors.append(f"Failed to send email to {authority.get('email', 'eaiser@momntumai.com')}: {str(e)}")
-    
+        email_addr = (authority.get("email") or "").strip()
+        if email_addr and email_addr.lower() not in seen_emails:
+            seen_emails.add(email_addr.lower())
+            recipients.append(authority)
+    if not recipients:
+        recipients = [{"name": "City Department", "email": "eaiser@momntumai.com", "type": "general"}]
+
+    primary = recipients[0]
+    cc_emails = [a.get("email") for a in recipients[1:] if a.get("email")]
+
+    try:
+        subject, text_content = get_department_email_content(
+            primary.get("type", "general"),
+            {
+                "issue_type": issue_type,
+                "address": final_address,
+                "zip_code": zip_code,
+                "timestamp_formatted": timestamp_formatted,
+                "report": report,
+                "authority_name": primary.get("name", "Department"),
+                "confidence": confidence,
+                "category": category,
+                "timezone_name": timezone_name,
+                "latitude": latitude,
+                "longitude": longitude,
+                "decline_reason": decline_reason
+            },
+            is_user_review=is_user_review
+        )
+        inbound_email = os.getenv("POSTMARK_INBOUND_EMAIL", "adb1d888168b5611b7b7a489f1c8ab76@inbound.postmarkapp.com")
+        logger.info(f"Sending one routed email for issue {issue_id} — To 1 dept + Cc {len(cc_emails)} dept(s)")
+        success = await send_email(
+            to_email=primary.get("email", "alert@momntumai.com"),
+            subject=subject_override or subject,
+            html_content=html_content,
+            text_content=text_content,
+            attachments=None,
+            embedded_images=embedded_images,
+            reply_to=inbound_email,
+            cc=cc_emails
+        )
+        if success:
+            successful_emails = [a.get("email") for a in recipients if a.get("email")]
+            logger.info(f"Routed email delivered for issue {issue_id} to {len(successful_emails)} department(s)")
+        else:
+            logger.warning("Routed department email failed without raising an exception")
+            errors.append("Email sending failed for the routed department thread")
+    except Exception as e:
+        logger.error(f"Failed to send routed department email: {str(e)}", exc_info=True)
+        errors.append(f"Failed to send routed department email: {str(e)}")
+
     try:
         db = await get_db()
         await db.issues.update_one(
@@ -827,28 +845,68 @@ async def send_authority_email(
     return len(errors) == 0
 
 
-async def _send_reporter_copy(reporter_email: Optional[str], issue_id: str, issue_type: str, address: str):
+async def _send_reporter_copy(
+    reporter_email: Optional[str],
+    issue_id: str,
+    issue_type: str,
+    address: str,
+    authorities: Optional[List[Dict[str, Any]]] = None,
+):
     """Email an anonymous reporter a copy/confirmation of their submission if
-    they asked for one. Best-effort — never raises into the create flow."""
+    they asked for one. Best-effort — never raises into the create flow.
+
+    This is the REPORTER's OWN copy: it is sent only to them — the authorities
+    are intentionally NOT copied on this email. Instead we simply list, at the
+    bottom, which authorities were notified, so the reporter knows where it went.
+    """
     if not reporter_email or "@" not in reporter_email:
         return
     try:
+        # Names of the authorities that were notified (de-duplicated, in order).
+        auth_names: List[str] = []
+        seen = set()
+        for a in (authorities or []):
+            name = a.get("name") if isinstance(a, dict) else (a if isinstance(a, str) else None)
+            name = (name or "").strip()
+            if name and name.lower() not in seen:
+                seen.add(name.lower())
+                auth_names.append(name)
+
+        if auth_names:
+            notified_text = "Authorities notified:\n" + "\n".join(f"  - {n}" for n in auth_names)
+            notified_html = (
+                "<p style='margin-top:18px;margin-bottom:4px;'><b>Authorities notified:</b></p>"
+                "<ul style='margin:0;padding-left:18px;color:#334155;'>"
+                + "".join(f"<li>{n}</li>" for n in auth_names)
+                + "</ul>"
+            )
+        else:
+            notified_text = (
+                "Your report is being reviewed by the EAiSER team and will be routed "
+                "to the right department."
+            )
+            notified_html = (
+                "<p style='margin-top:18px;color:#334155;'>Your report is being reviewed by the "
+                "EAiSER team and will be routed to the right department.</p>"
+            )
+
         subject = f"Your EAiSER report ({issue_id}) was submitted"
         text = (
             "Thanks for your report!\n\n"
             f"Issue: {issue_type}\n"
             f"Location: {address}\n"
             f"Reference: {issue_id}\n\n"
-            "We've routed it to the relevant city department. "
-            "Create a free account in the EAiSER app to track its status.\n\n— EAiSER"
+            "Create a free account in the EAiSER app to track its status.\n\n"
+            f"{notified_text}\n\n— EAiSER"
         )
         html = (
             "<p>Thanks for your report!</p>"
             f"<p><b>Issue:</b> {issue_type}<br>"
             f"<b>Location:</b> {address}<br>"
             f"<b>Reference:</b> {issue_id}</p>"
-            "<p>We've routed it to the relevant city department. "
-            "Create a free account in the EAiSER app to track its status.</p><p>— EAiSER</p>"
+            "<p>Create a free account in the EAiSER app to track its status.</p>"
+            f"{notified_html}"
+            "<p style='margin-top:18px;'>— EAiSER</p>"
         )
         await send_email(to_email=reporter_email, subject=subject, html_content=html, text_content=text)
         logger.info(f"Sent reporter copy for issue {issue_id} to the reporter's email")
@@ -1381,7 +1439,7 @@ async def create_issue(
             reporter_email=reporter_email
         )
         logger.info(f"Issue {issue_id} stored successfully with image_id {image_id}")
-        await _send_reporter_copy(reporter_email, issue_id, issue_type, final_address)
+        await _send_reporter_copy(reporter_email, issue_id, issue_type, final_address, report.get("responsible_authorities_or_parties"))
     except Exception as e:
         logger.error(f"Failed to store issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to store issue: {str(e)}")
