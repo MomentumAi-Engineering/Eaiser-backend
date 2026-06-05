@@ -1101,13 +1101,20 @@ Together, let's build smarter communities.
 # ✅ Password Reset Email
 # --------------------------------------------------------------------
 
-async def send_password_reset_email(email: str, token: str) -> bool:
+async def send_password_reset_email(email: str, token: str, is_admin: bool = False) -> bool:
     """
     Sends a secure password reset email with a 15-minute expiry warning.
+
+    When ``is_admin`` is True the reset link points to the admin console
+    (ADMIN_URL) instead of the public site, since admins and users live in
+    separate apps with separate reset pages.
     """
     try:
-        # Determine Frontend URL
-        frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
+        # Determine Frontend URL — admins reset on the admin subdomain.
+        if is_admin:
+            frontend_url = os.getenv("ADMIN_URL", "https://admin.eaiser.ai")
+        else:
+            frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
         if frontend_url.endswith("/"):
             frontend_url = frontend_url[:-1]
 

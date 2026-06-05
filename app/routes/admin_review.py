@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException, Depends, Body, Request, Response, Cookie
+from fastapi import APIRouter, HTTPException, Depends, Body, Request, Response, Cookie, BackgroundTasks
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
 import logging
 import asyncio
+import secrets
+import hashlib
 from fastapi.responses import JSONResponse
 
 from services.mongodb_optimized_service import get_optimized_mongodb_service
@@ -61,6 +63,13 @@ class UserAction(BaseModel):
     admin_id: str
     issue_id: Optional[str] = None
     force_confirm: bool = False
+
+class AdminForgotPasswordRequest(BaseModel):
+    email: str
+
+class AdminResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
 
 # --- Endpoints ---
 
@@ -1740,11 +1749,116 @@ async def reactivate_admin_account(admin_id: str, current_admin: dict = Depends(
             {"_id": obj_id},
             {"$set": {"is_active": True}}
         )
-        
+
         return {"message": "Admin reactivated successfully"}
     except Exception as e:
         logger.error(f"Error reactivating admin: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _invalidate_admin_cache(email: str):
+    """Drop the cached admin record so a password change takes effect immediately."""
+    try:
+        redis_service = await get_redis_cluster_service()
+        if redis_service:
+            await redis_service.delete_cache('user_session', f"admin:email:{email}")
+    except Exception as e:
+        logger.warning(f"Could not invalidate admin cache for {email}: {e}")
+
+
+@router.post("/forgot-password")
+async def admin_forgot_password(request: AdminForgotPasswordRequest, background_tasks: BackgroundTasks):
+    """
+    Send a password reset link to an admin's email.
+    Always returns success to prevent email enumeration.
+    """
+    try:
+        email = request.email.lower().strip()
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            raise HTTPException(status_code=503, detail="Service unavailable")
+
+        collection = await mongo_service.get_collection("admins", read_only=False)
+        admin = await collection.find_one({"email": email})
+
+        # Only generate a token if the admin exists; respond generically either way.
+        if admin:
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+
+            await collection.update_one(
+                {"_id": admin["_id"]},
+                {"$set": {
+                    "reset_password_token": token_hash,
+                    "reset_password_expires": datetime.utcnow() + timedelta(minutes=15)
+                }}
+            )
+
+            from services.email_service import send_password_reset_email
+            background_tasks.add_task(send_password_reset_email, admin["email"], raw_token, True)
+            logger.info(f"🔑 Admin password reset initiated for {email}")
+        else:
+            logger.info(f"🔑 Admin password reset requested for unknown email {email}")
+
+        return {"message": "If an admin account exists with this email, a reset link has been sent."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin forgot password error: {e}")
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")
+
+
+@router.post("/reset-password")
+async def admin_reset_password(request: AdminResetPasswordRequest):
+    """
+    Verify the reset token and set a new admin password.
+    The token is single-use and the cached admin record is invalidated.
+    """
+    try:
+        if len(request.new_password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
+
+        mongo_service = await get_optimized_mongodb_service()
+        if not mongo_service:
+            raise HTTPException(status_code=503, detail="Service unavailable")
+
+        collection = await mongo_service.get_collection("admins", read_only=False)
+        token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+
+        admin = await collection.find_one({
+            "reset_password_token": token_hash,
+            "reset_password_expires": {"$gt": datetime.utcnow()}
+        })
+
+        if not admin:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+        await collection.update_one(
+            {"_id": admin["_id"]},
+            {
+                "$set": {
+                    "password_hash": get_password_hash(request.new_password),
+                    "require_password_change": False
+                },
+                "$unset": {
+                    "reset_password_token": "",
+                    "reset_password_expires": ""
+                }
+            }
+        )
+
+        # Clear cached credentials so the new password works on the next login.
+        await _invalidate_admin_cache(admin["email"])
+
+        logger.info(f"✅ Admin password successfully reset for {admin['email']}")
+        return {"message": "Password has been successfully updated. You can now log in."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin reset password error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 
