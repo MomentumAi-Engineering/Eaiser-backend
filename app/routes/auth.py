@@ -546,6 +546,15 @@ async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTask
                 background_tasks.add_task(send_tos_email, email, name)
             except Exception as tos_error:
                 logger.error(f"Failed to send TOS email to Google user: {tos_error}")
+
+            # Send Welcome Email — ONLY for a newly created account (this is the
+            # signup case). Never sent on subsequent logins.
+            try:
+                from services.email_service import send_user_welcome_email
+                background_tasks.add_task(send_user_welcome_email, email, name)
+                await db["users"].update_one({"email": email}, {"$set": {"welcome_email_sent": True}})
+            except Exception as email_error:
+                logger.error(f"Failed to send welcome email to new Google user: {email_error}")
         else:
             # For existing Google users: backfill missing first_name/last_name/username
             backfill = {}
@@ -560,15 +569,6 @@ async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTask
             if backfill:
                 await db["users"].update_one({"email": email}, {"$set": backfill})
                 user.update(backfill)
-            
-        # Send Welcome Email for new Google User if not sent before
-        if not user.get("welcome_email_sent", False):
-            try:
-                from services.email_service import send_user_welcome_email
-                await send_user_welcome_email(email, name)
-                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
-            except Exception as email_error:
-                logger.error(f"Failed to send welcome email to Google user: {email_error}")
 
         if not user.get("is_active", True):
             raise HTTPException(
@@ -677,10 +677,19 @@ async def apple_login(login_data: AppleLogin, background_tasks: BackgroundTasks)
                 background_tasks.add_task(send_tos_email, email_lower, first_name)
             except Exception as tos_error:
                 logger.error(f"Failed to send TOS email to Apple user: {tos_error}")
+
+            # Send Welcome Email — ONLY for a newly created account (signup case).
+            # Never sent on subsequent logins.
+            try:
+                from services.email_service import send_user_welcome_email
+                background_tasks.add_task(send_user_welcome_email, email_lower, user.get("first_name", ""))
+                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
+            except Exception as email_error:
+                logger.error(f"Failed to send welcome email to new Apple user: {email_error}")
         else:
             user_id = str(user["_id"])
             logger.info(f"🔓 Existing Apple User found: {email_lower}")
-            
+
             # 4. Backfill Logic: Update missing info if Apple provided it this time
             backfill = {}
             if not user.get("first_name") and first_name:
@@ -689,20 +698,11 @@ async def apple_login(login_data: AppleLogin, background_tasks: BackgroundTasks)
                 backfill["last_name"] = last_name
             if user.get("auth_provider") != "apple":
                 backfill["auth_provider"] = "apple"
-            
+
             if backfill:
                 logger.info(f"📝 Backfilling user data: {backfill}")
                 await db["users"].update_one({"_id": user["_id"]}, {"$set": backfill})
                 user.update(backfill)
-
-        # Send Welcome Email for new Apple User if not sent before
-        if not user.get("welcome_email_sent", False):
-            try:
-                from services.email_service import send_user_welcome_email
-                await send_user_welcome_email(email_lower, user.get("first_name", ""))
-                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
-            except Exception as email_error:
-                logger.error(f"Failed to send welcome email to Apple user: {email_error}")
 
         if not user.get("is_active", True):
             raise HTTPException(
