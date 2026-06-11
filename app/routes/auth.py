@@ -260,6 +260,18 @@ async def signup(user: UserCreate, request: Request, background_tasks: Backgroun
         except Exception as tos_error:
             logger.error(f"Failed to dispatch TOS email for new user: {tos_error}")
 
+        # Send Welcome Email in background. Email/password signups previously got
+        # no welcome email (it only fired from /verify-email, which is skipped
+        # when verification is off) — unlike Google/Apple sign-in. Send it here so
+        # every new account is welcomed, and mark it so it isn't sent twice.
+        if not REQUIRE_EMAIL_VERIFICATION:
+            try:
+                from services.email_service import send_user_welcome_email
+                background_tasks.add_task(send_user_welcome_email, email, user.firstName)
+                await db["users"].update_one({"email": email}, {"$set": {"welcome_email_sent": True}})
+            except Exception as welcome_error:
+                logger.error(f"Failed to dispatch welcome email for new user: {welcome_error}")
+
         return {
             "message": "Account created successfully.",
             "email": email
