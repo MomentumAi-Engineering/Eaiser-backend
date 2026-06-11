@@ -382,7 +382,8 @@ async def process_issue_background(
     is_manual: bool = False,
     pre_analyzed: bool = False,
     provided_confidence: Optional[float] = None,
-    device_id: Optional[str] = None
+    device_id: Optional[str] = None,
+    issue_types: Optional[str] = None,
 ):
     """Process issue in background for better performance"""
     start_time = time.time()
@@ -1270,9 +1271,10 @@ async def create_issue_optimized(
             is_manual=is_manual_bool,
             pre_analyzed=pre_analyzed_bool,
             provided_confidence=confidence,
-            device_id=device_id
+            device_id=device_id,
+            issue_types=issue_types,
         )
-        
+
         if not issue_doc:
             # Fallback if processing returned None (error case)
             logger.error(f"Processing returned None for {issue_id}")
@@ -2017,7 +2019,8 @@ async def create_bulk_issues(
                     description=issue_data.get("description", ""),
                     category=issue_data.get("category", "public"),
                     severity=issue_data.get("severity", "medium"),
-                    issue_type=issue_data.get("issue_type", "other")
+                    issue_type=issue_data.get("issue_type", "other"),
+                    issue_types=issue_data.get("issue_types"),
                 )
             
             issue_ids.extend(batch_ids)
