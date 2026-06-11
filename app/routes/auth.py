@@ -867,6 +867,10 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             "email": user.get("email"),
             "role": user.get("role", "user"),
             "avatar": user.get("avatar"),
+            # Sign-in method (google / apple / None for email+password) so the
+            # profile screen can show "Login Preference: Google SSO" instead of
+            # the email row for SSO accounts.
+            "auth_provider": user.get("auth_provider"),
             "push_token": user.get("push_token"),
             "notifications": user.get("notifications", {"email": True, "push": False, "updates": True}),
             "email_verified": True,
