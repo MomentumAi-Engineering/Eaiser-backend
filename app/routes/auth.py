@@ -1027,6 +1027,10 @@ async def accept_tos(current_user: dict = Depends(get_current_user), background_
 
 class DeleteAccountRequest(BaseModel):
     confirmation: str  # Must be "DELETE" to confirm
+    # Optional device id so we also delete reports submitted from this device
+    # (incl. anonymous/guest ones) — otherwise the device-claim on a future
+    # signup would resurrect them onto the new account.
+    device_id: Optional[str] = None
 
 @router.delete("/delete-account")
 async def delete_account(data: DeleteAccountRequest = Body(...), current_user: dict = Depends(get_current_user)):
@@ -1052,9 +1056,19 @@ async def delete_account(data: DeleteAccountRequest = Body(...), current_user: d
         user_id = str(user["_id"])
         logger.warning(f"🗑️ Account deletion initiated for user: {email} (ID: {user_id})")
 
-        # Delete user's issues/reports
-        issues_result = await db["issues"].delete_many({"user_email": email})
-        logger.info(f"  Deleted {issues_result.deleted_count} issues for {email}")
+        # Delete user's issues/reports. Match the email CASE-INSENSITIVELY (the
+        # dashboard query is case-insensitive, so an exact match could leave
+        # case-variant reports behind that reappear on re-login). Also delete any
+        # report carrying this device_id — including anonymous/guest ones —
+        # otherwise the device-claim on a future signup resurrects them.
+        import re as _re
+        email_pattern = {"$regex": f"^{_re.escape(email)}$", "$options": "i"}
+        delete_or = [{"user_email": email_pattern}]
+        device_id = (data.device_id or "").strip()
+        if device_id:
+            delete_or.append({"device_id": device_id})
+        issues_result = await db["issues"].delete_many({"$or": delete_or})
+        logger.info(f"  Deleted {issues_result.deleted_count} issues for {email} (device_id={device_id or 'none'})")
 
         # Delete the user account
         await db["users"].delete_one({"_id": user["_id"]})
