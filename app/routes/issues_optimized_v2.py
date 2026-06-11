@@ -1020,6 +1020,29 @@ async def process_issue_background(
                 except (TypeError, ValueError):
                     location_geojson = None
 
+            # Multi-issue list. Prefer SIMI's analysis; otherwise fall back to the
+            # issue_types the client sent (a pre_analyzed submit skips SIMI, so
+            # without this the report would lose every issue except the primary).
+            simi_detected = simi_data.get("ordered_issue_list", []) if simi_data else []
+            client_detected = []
+            if issue_types:
+                try:
+                    _labels = json.loads(issue_types)
+                    if isinstance(_labels, list):
+                        _seen = set()
+                        for _l in _labels:
+                            _key = str(_l or "").strip().lower().replace("_", " ")
+                            if _key and _key not in _seen:
+                                _seen.add(_key)
+                                client_detected.append({"issue": str(_l)})
+                except Exception as _e:
+                    logger.warning(f"Could not parse issue_types '{issue_types}': {_e}")
+            final_detected_issues = simi_detected or client_detected
+            final_total_issues = (
+                simi_data.get("total_issues", 1) if simi_data
+                else max(1, len(final_detected_issues))
+            )
+
             issue_doc = {
                 "_id": issue_id,
                 "address": final_address,
@@ -1057,12 +1080,13 @@ async def process_issue_background(
                 "scenario": v4_scenario,
                 "internal_review_required": v4_review_required,
                 "image_count": len(all_image_contents) if all_image_contents else (1 if image_content else 0),
-                # 🆕 SIMI Level 3: Store ALL detected issues from single image
-                "detected_issues": simi_data.get("ordered_issue_list", []) if simi_data else [],
+                # 🆕 SIMI Level 3: Store ALL detected issues (SIMI, or the client's
+                # issue_types fallback for pre_analyzed submits that skip SIMI).
+                "detected_issues": final_detected_issues,
                 "known_issues": simi_data.get("known_issues", []) if simi_data else [],
                 "unknown_issues": simi_data.get("unknown_issues", []) if simi_data else [],
                 "scene_description": simi_data.get("issue_summary", "") if simi_data else "",
-                "total_detected_issues": simi_data.get("total_issues", 1) if simi_data else 1,
+                "total_detected_issues": final_total_issues,
             }
             
             # Store issue with optimized batch operation
@@ -1137,6 +1161,11 @@ async def create_issue_optimized(
     category: str = Form('public'),
     severity: str = Form('medium'),
     issue_type: str = Form('other'),
+    # All detected issue labels for a multi-issue report (JSON array of strings),
+    # e.g. ["fallen_tree","road_damage"]. The app sends this from the review
+    # screen; the first entry is the primary issue_type above. Used so the
+    # report-detail "N+ issues" chip/dropdown can list every detected issue.
+    issue_types: Optional[str] = Form(None),
     is_manual: Any = Form(False),
     auto_submit: bool = Form(False),
     # 🚀 PERF: When the client already ran /api/ai/analyze-image, it sends the
