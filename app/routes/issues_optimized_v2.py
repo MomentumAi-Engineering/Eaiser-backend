@@ -381,7 +381,8 @@ async def process_issue_background(
     issue_type: str = 'other',
     is_manual: bool = False,
     pre_analyzed: bool = False,
-    provided_confidence: Optional[float] = None
+    provided_confidence: Optional[float] = None,
+    device_id: Optional[str] = None
 ):
     """Process issue in background for better performance"""
     start_time = time.time()
@@ -1037,6 +1038,10 @@ async def process_issue_background(
                 "report": report,
                 "unified_report": unified_report,
                 "user_email": user_email,
+                # Per-device identity for anonymous reports — lets a later account
+                # "claim" this report (see /issues/claim-device). Stays set so the
+                # claim query can match it after the user signs up.
+                "device_id": (device_id or "").strip() or None,
                 "authority_data": authority_data,
                 "confidence": confidence,
                 "policy_conflict": policy_conflict,
@@ -1143,6 +1148,9 @@ async def create_issue_optimized(
     # departments + "Edit receivers" extra emails). This is the SINGLE source of
     # truth for dispatch — emails go exactly to the checked entries here.
     v5_recipients: Optional[str] = Form(None),
+    # Per-device identity for anonymous reports. Lets a later account "claim"
+    # reports submitted while the user was a guest (see /issues/claim-device).
+    device_id: Optional[str] = Form(None),
     _: None = Depends(rate_limit_dependency)
 ):
     """
@@ -1232,7 +1240,8 @@ async def create_issue_optimized(
             issue_type=issue_type,
             is_manual=is_manual_bool,
             pre_analyzed=pre_analyzed_bool,
-            provided_confidence=confidence
+            provided_confidence=confidence,
+            device_id=device_id
         )
         
         if not issue_doc:
@@ -1525,6 +1534,61 @@ async def get_my_issues(
     except Exception as e:
         logger.error(f"Failed to get user issues for {user_email}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve your issues")
+
+
+class ClaimDeviceRequest(BaseModel):
+    device_id: str
+
+
+@router.post("/issues/claim-device")
+async def claim_device(
+    request: ClaimDeviceRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    🔗 Link reports submitted anonymously from this device to the now-authenticated
+    account. Called by the app right after login/signup. Matches issues by
+    device_id that have no owner yet and assigns them to this user, so the
+    reports they created as a guest appear on their dashboard.
+    """
+    device_id = (request.device_id or "").strip()
+    # Store lowercased to match the my-issues filter (which lowercases user_email).
+    user_email = (current_user.get("sub") or "").strip().lower()
+    if not device_id or not user_email:
+        return {"claimed": 0}
+
+    try:
+        mongodb_service = await get_optimized_mongodb_service()
+        result = await mongodb_service.db.issues.update_many(
+            {
+                "device_id": device_id,
+                "$or": [
+                    {"user_email": None},
+                    {"user_email": ""},
+                    {"user_email": {"$exists": False}},
+                ],
+            },
+            {"$set": {"user_email": user_email}},
+        )
+        claimed = getattr(result, "modified_count", 0)
+        logger.info(f"🔗 claim-device: linked {claimed} issue(s) for device {device_id} → {user_email}")
+
+        # Invalidate this user's dashboard cache so the claimed reports show up immediately.
+        if claimed:
+            try:
+                redis_service = await get_redis_cluster_service()
+                if redis_service:
+                    await redis_service.invalidate_pattern(f"*user_issues*user_email:{user_email}*")
+                    await redis_service.invalidate_pattern(f"*user_email:{user_email}*user_issues*")
+            except Exception as cache_err:
+                logger.warning(f"claim-device: cache invalidation failed (non-fatal): {cache_err}")
+
+        return {"claimed": claimed}
+    except Exception as e:
+        logger.error(f"claim-device failed for device {device_id} → {user_email}: {e}", exc_info=True)
+        # Best-effort — never block the login/signup flow on a claim failure.
+        return {"claimed": 0}
+
 
 @router.get("/issues/analytics/summary", response_model=IssueAnalytics)
 async def get_issues_analytics(
