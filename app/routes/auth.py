@@ -1075,16 +1075,29 @@ async def delete_account(data: DeleteAccountRequest = Body(...), current_user: d
         # otherwise the device-claim on a future signup resurrects them.
         import re as _re
         email_pattern = {"$regex": f"^{_re.escape(email)}$", "$options": "i"}
-        delete_or = [{"user_email": email_pattern}]
+        delete_or = [
+            {"user_email": email_pattern},
+            {"reporter_email": email_pattern},  # email-me-a-copy address
+        ]
         device_id = (data.device_id or "").strip()
         if device_id:
             delete_or.append({"device_id": device_id})
         issues_result = await db["issues"].delete_many({"$or": delete_or})
-        logger.info(f"  Deleted {issues_result.deleted_count} issues for {email} (device_id={device_id or 'none'})")
+        logger.warning(f"  🗑️ Deleted {issues_result.deleted_count} issues for {email} (device_id={device_id or 'none'})")
 
         # Delete the user account
         await db["users"].delete_one({"_id": user["_id"]})
         logger.warning(f"✅ Account permanently deleted: {email}")
+
+        # Invalidate the cached issues feed so the just-deleted reports don't keep
+        # showing up (the global list is Redis-cached and would otherwise serve
+        # stale data until its TTL expires).
+        try:
+            from services.redis_service import get_redis_service
+            _redis = await get_redis_service()
+            await _redis.invalidate_issues_cache()
+        except Exception as cache_err:
+            logger.error(f"Failed to invalidate issues cache after deletion: {cache_err}")
 
         return {
             "message": "Your account and all associated data have been permanently deleted.",
