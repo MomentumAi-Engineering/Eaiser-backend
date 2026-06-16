@@ -68,6 +68,7 @@ Tier 2 — Dangerous Infrastructure:
   - damaged_sidewalk (Label: Damaged Sidewalk)
   - damaged_traffic_sign (Label: Damaged Traffic Sign)
   - clogged_drain (Label: Clogged Drain / Sewer)
+  - road_debris (Label: Road Debris) — Loose objects, scattered material, or fallen items on the roadway, shoulder, or median (e.g., tire shreds, lumber, furniture, mattresses, branches not from a standing tree, dropped cargo). Use this for loose debris that is NOT bagged household trash (bagged trash → garbage).
 
 Tier 3 — Public Nuisance / Health:
   - garbage (Label: Garbage)
@@ -79,7 +80,8 @@ Tier 3 — Public Nuisance / Health:
 - Set internal_review_required to true
 
 SPECIAL HANDLING RULES:
-1. CONTROLLED FIRE: 
+0. ROAD DEBRIS — LONG FLEXIBLE ITEMS (ALWAYS HIGH): If the road_debris is a cargo strap, ratchet strap, tie-down, rope, cable, twine, or netting (any long flexible item) anywhere on the roadway, shoulder, or median, set its severity to HIGH and never lower it — even if it looks small, light, or off the roadway. These items get sucked into wheel wells, wrap around axles, or whip across windshields at speed.
+1. CONTROLLED FIRE:
    - If the image shows a bonfire, BBQ, camping fire, or candle, do NOT use "Fire Hazard". 
    - Instead, classify as an UNKNOWN ISSUE (e.g., "Controlled Recreational Fire").
    - Severity MUST be set to "Low".

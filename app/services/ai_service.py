@@ -280,6 +280,15 @@ STEP 2: ISSUE IDENTIFICATION
     of the road/area (continuous standing water blocking passage, an overflowing
     drain/river, or water deep enough to stall vehicles). When unsure, prefer the
     road-damage/pothole classification over flooding.
+- **ROAD DEBRIS**:
+  - Loose objects or scattered material on the roadway, shoulder, or median
+    (tire shreds, lumber, furniture, mattresses, fallen cargo, branches not from
+    a standing tree) → use "road_debris". Loose roadway debris that is NOT bagged
+    household trash is "road_debris", not "garbage".
+  - ALWAYS set severity "high" when the debris is a cargo strap, ratchet strap,
+    tie-down, rope, cable, twine, or netting (any long flexible item), anywhere on
+    the roadway, shoulder, or median — even if it looks small or off-roadway. These
+    get sucked into wheel wells, wrap around axles, or whip across windshields.
 - If the image shows a "normal" scene (e.g., a clean road, a happy dog, a normal building, a selfie):
 - Set "issue_type": "none"
 - Set "confidence": 0 to 60 (Low)
