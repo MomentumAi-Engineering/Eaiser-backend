@@ -16,6 +16,94 @@ logger = logging.getLogger("email_service")
 logger.setLevel(logging.INFO)
 
 # --------------------------------------------------------------------
+# ✅ Shared branded email shell (EAiSER logo header + MomntumAi social footer)
+# All outbound emails wrap their content with build_branded_email() for one
+# consistent, professional look. Built by string concatenation (NOT f-strings)
+# so CSS braces never need escaping.
+# --------------------------------------------------------------------
+EAISER_LOGO_URL = "https://eaiser.ai/newlogo.png"
+SUPPORT_EMAIL = "support@momntumai.com"
+# (label, profile URL, white PNG icon URL) — icons8 serves email-safe PNGs.
+SOCIAL_LINKS = [
+    ("X", "https://x.com/Momntum_Ai", "https://img.icons8.com/ios-filled/50/C8A84E/twitterx.png"),
+    ("LinkedIn", "https://www.linkedin.com/company/momntum-ai-us", "https://img.icons8.com/ios-filled/50/C8A84E/linkedin.png"),
+    ("Instagram", "https://www.instagram.com/momntum.ai/", "https://img.icons8.com/ios-filled/50/C8A84E/instagram-new.png"),
+]
+
+
+def _social_icons_html() -> str:
+    cells = ""
+    for name, url, icon in SOCIAL_LINKS:
+        cells += (
+            '<a href="' + url + '" target="_blank" style="display:inline-block;margin:0 7px;text-decoration:none;">'
+            '<img src="' + icon + '" alt="' + name + '" width="22" height="22" '
+            'style="width:22px;height:22px;border:0;outline:none;"></a>'
+        )
+    return cells
+
+
+def build_branded_email(title: str, inner_html: str, preheader: str = "") -> str:
+    """Wrap inner content in the shared EAiSER/MomntumAi email shell."""
+    safe_pre = (preheader or title or "EAiSER").replace("<", "").replace(">", "")
+    head = (
+        '<!DOCTYPE html><html lang="en"><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="color-scheme" content="light only">'
+        '</head>'
+        '<body style="margin:0;padding:0;background:#eef1f5;-webkit-font-smoothing:antialiased;">'
+    )
+    pre = (
+        '<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">'
+        + safe_pre + '</div>'
+    )
+    wrap_open = (
+        '<div style="background:#eef1f5;padding:28px 14px;">'
+        '<div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;'
+        'overflow:hidden;box-shadow:0 8px 30px rgba(15,23,42,0.08);border:1px solid #e2e8f0;">'
+    )
+    header = (
+        '<div style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);'
+        'padding:34px 24px;text-align:center;border-bottom:3px solid #C8A84E;">'
+        '<img src="' + EAISER_LOGO_URL + '" alt="EAiSER" width="60" height="60" '
+        'style="width:60px;height:60px;border-radius:15px;border:0;display:inline-block;">'
+        '<div style="color:#C8A84E;font-family:Arial,Helvetica,sans-serif;font-size:13px;'
+        'font-weight:700;letter-spacing:3px;margin-top:12px;">E A i S E R</div>'
+        '<div style="color:#94a3b8;font-family:Arial,Helvetica,sans-serif;font-size:11px;'
+        'letter-spacing:1px;margin-top:3px;">by MomntumAi</div>'
+        '</div>'
+    )
+    content = (
+        '<div style="padding:34px 30px;font-family:Arial,Helvetica,sans-serif;'
+        'color:#334155;font-size:15px;line-height:1.65;">' + inner_html + '</div>'
+    )
+    footer = (
+        '<div style="background:#0f172a;padding:26px 24px;text-align:center;">'
+        '<div style="margin-bottom:14px;">' + _social_icons_html() + '</div>'
+        '<div style="color:#94a3b8;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.7;">'
+        'EAiSER — AI-powered civic issue reporting, by MomntumAi.<br>'
+        '© 2026 MomntumAi · <a href="mailto:' + SUPPORT_EMAIL + '" '
+        'style="color:#C8A84E;text-decoration:none;">' + SUPPORT_EMAIL + '</a>'
+        '</div></div>'
+    )
+    wrap_close = '</div></div>'
+    tail = '</body></html>'
+    return head + pre + wrap_open + header + content + footer + wrap_close + tail
+
+
+# Reusable inline styles for inner content, so every email looks consistent.
+EMAIL_STYLES = {
+    "h1": "margin:0 0 16px;font-size:22px;font-weight:700;color:#0f172a;",
+    "p": "margin:0 0 14px;font-size:15px;line-height:1.65;color:#475569;",
+    "btn": ("display:inline-block;background:#C8A84E;color:#1a1205;text-decoration:none;"
+            "font-weight:700;font-size:15px;padding:14px 32px;border-radius:10px;"),
+    "btn_wrap": "text-align:center;margin:28px 0 8px;",
+    "box": ("background:#f1f5f9;border-left:4px solid #C8A84E;padding:16px 18px;"
+            "border-radius:0 8px 8px 0;margin:20px 0;font-size:14px;color:#334155;"),
+    "muted": "margin:18px 0 0;font-size:13px;color:#94a3b8;line-height:1.6;",
+}
+
+# --------------------------------------------------------------------
 # ✅ Core Async Email Sender with Improved Error Handling
 # --------------------------------------------------------------------
 async def send_email(
@@ -386,7 +474,11 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
 
         # Safe defaults so the body always includes the departments list even if
         # the richer template below is skipped.
-        final_html = departments_html + formatted_content.replace("\n", "<br>")
+        final_html = build_branded_email(
+            f"EAiSER Alert – {issue_type}",
+            departments_html + formatted_content.replace("\n", "<br>"),
+            preheader=f"EAiSER Alert – {issue_type} (Priority: {priority})",
+        )
         final_text = f"{departments_text}\n\n{formatted_content}"
 
         # Only skip if dry_run is explicitly enabled
@@ -419,36 +511,33 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
 
                 # Construct final HTML and Text bodies
                 formatted_html = formatted_content.replace('\n', '<br>')
-                final_html = f"""
-                <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border-radius: 24px; overflow: hidden; background-color: white; border: 1px solid #e2e8f0; box-shadow: 0 20px 50px rgba(0,0,0,0.1);">
-                    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 40px 30px; text-align: center; border-bottom: 4px solid #fbbf24;">
-                        <h2 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px;">🚀 EAiSER <span style="color:#fbbf24;">SMART ALERT</span></h2>
-                        <div style="display: inline-block; padding: 4px 12px; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.2); border-radius: 50px; font-size: 11px; font-weight: 700; color: #fbbf24; margin-top: 15px; text-transform: uppercase; letter-spacing: 1px;">
-                            Official Intelligence Transmission
-                        </div>
-                    </div>
-                    
-                    <div style="padding: 40px 30px; font-size: 16px; color: #334155; line-height: 1.8;">
-                        {departments_html}
-                        <div style="background: #f8fafc; border-radius: 16px; padding: 25px; border: 1px solid #f1f5f9; margin-bottom: 30px;">
-                            {formatted_html}
-                        </div>
+                alert_badge = (
+                    '<div style="text-align:center;margin-bottom:24px;">'
+                    '<div style="display:inline-block;padding:4px 12px;background:rgba(200,168,78,0.12);border:1px solid rgba(200,168,78,0.3);border-radius:50px;font-size:11px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:1px;">'
+                    'Official Intelligence Transmission'
+                    '</div></div>'
+                )
+                report_body = (
+                    '<div style="background:#f8fafc;border-radius:16px;padding:22px;border:1px solid #f1f5f9;margin-bottom:24px;font-size:15px;color:#334155;line-height:1.8;">'
+                    + formatted_html +
+                    '</div>'
+                )
+                inner_html = alert_badge + departments_html + report_body + button_html
+                final_html = build_branded_email(
+                    f"EAiSER Smart Alert – {issue_type}",
+                    inner_html,
+                    preheader=f"EAiSER Alert – {issue_type} (Priority: {priority}, ID: {report_id})",
+                )
 
-                        {button_html}
-                    </div>
-
-                    <div style="padding: 25px 30px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 12px; color: #94a3b8;">
-                        © 2026 EAiSER AI • Intelligent Civic Response Engine<br>
-                        This is a privileged operational alert for verified authorities.
-                    </div>
-                </div>
-                """
-                
                 final_text = f"{departments_text}\n\n{formatted_content}\n\nREPLY TO THIS EMAIL to communicate with the reporter (Issue ID: #{real_id})."
 
         except Exception as token_error:
             logger.error(f"⚠️ Failed to generate authority token: {token_error}")
-            final_html = departments_html + formatted_content.replace("\n", "<br>")
+            final_html = build_branded_email(
+                f"EAiSER Alert – {issue_type}",
+                departments_html + formatted_content.replace("\n", "<br>"),
+                preheader=f"EAiSER Alert – {issue_type} (Priority: {priority})",
+            )
             final_text = f"{departments_text}\n\n{formatted_content}"
 
         # Send ONE email so every department shares a single thread: the first
@@ -505,64 +594,18 @@ async def notify_user_status_change(user_email: str, issue_id: str, status: str,
         frontend_url = os.getenv("FRONTEND_URL", "https://www.eaiser.ai")
         dashboard_url = f"{frontend_url}/dashboard"
 
-        # Premium Templates with Momntum AI branding
-        logo_url = "https://www.momntumai.com/wp-content/uploads/2024/02/momntum-logo-white.png" # Example placeholder/typical URL
-        
-        # Base Styles
-        base_html_start = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <meta charset="UTF-8">
-        <style>
-          body {{ background-color: #f8fafc; font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; color: #1e293b; }}
-          .wrapper {{ padding: 40px 20px; }}
-          .container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }}
-          .header {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 40px 40px; text-align: center; border-bottom: 4px solid #fbbf24; }}
-          .logo {{ max-height: 40px; margin-bottom: 15px; }}
-          .header h1 {{ margin: 0; color: #ffffff; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }}
-          .content {{ padding: 40px; font-size: 16px; line-height: 1.6; color: #475569; }}
-          .greeting {{ font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 20px; }}
-          .highlight-box {{ background: #f1f5f9; border-left: 4px solid #3b82f6; padding: 20px; border-radius: 0 8px 8px 0; margin: 25px 0; }}
-          .highlight-box.approved {{ border-left-color: #22c55e; background: #f0fdf4; }}
-          .highlight-box.declined {{ border-left-color: #ef4444; background: #fef2f2; }}
-          .cta-container {{ text-align: center; margin: 40px 0 20px; }}
-          .cta-btn {{ background: #fbbf24; color: #000000 !important; padding: 16px 36px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px rgba(251, 191, 36, 0.2); transition: all 0.2s; }}
-          .footer {{ text-align: center; padding: 30px; background: #f8fafc; font-size: 13px; color: #94a3b8; border-top: 1px solid #e2e8f0; }}
-        </style>
-        </head>
-        <body>
-          <div class="wrapper">
-            <div class="container">
-              <div class="header">
-                <!-- Using text fallback if logo fails to load -->
-                <div style="color: #fbbf24; font-size: 28px; font-weight: 900; letter-spacing: 1px; margin-bottom: 10px;">Momntum<span style="color: #ffffff;">Ai</span></div>
-                <h1>EAiSER Report Update</h1>
-              </div>
-              <div class="content">
-                <div class="greeting">Hi {user_name},</div>
-        """
-        
-        base_html_end = f"""
-                <p>If you have any questions or additional information, please reply to this email and our support team will follow up as soon as possible.</p>
-                
-                <p style="margin-top: 30px; font-weight: 600; color: #1e293b;">
-                  Best regards,<br>
-                  The EAiSER Team
-                </p>
-                
-                <div class="cta-container">
-                  <a href="{dashboard_url}" class="cta-btn">Back to Dashboard</a>
-                </div>
-              </div>
-              <div class="footer">
-                © {datetime.utcnow().year} Momntum Ai. Empowering Communities.
-              </div>
-            </div>
-          </div>
-        </body>
-        </html>
-        """
+        # Branded shell inner content — greeting + (status block) + closing + CTA.
+        base_html_start = (
+            '<div style="' + EMAIL_STYLES["h1"] + '">Hi ' + str(user_name) + ',</div>'
+        )
+
+        base_html_end = (
+            '<p style="' + EMAIL_STYLES["p"] + '">If you have any questions or additional information, please reply to this email and our support team will follow up as soon as possible.</p>'
+            '<p style="' + EMAIL_STYLES["p"] + 'margin-top:24px;font-weight:600;color:#1e293b;">Best regards,<br>The EAiSER Team</p>'
+            '<div style="' + EMAIL_STYLES["btn_wrap"] + '">'
+            '<a href="' + dashboard_url + '" style="' + EMAIL_STYLES["btn"] + '">Back to Dashboard</a>'
+            '</div>'
+        )
 
         if status == "approved":
             # Extract authorities
@@ -584,15 +627,24 @@ async def notify_user_status_change(user_email: str, issue_id: str, status: str,
             else:
                 auth_display = "the relevant authorities"
 
-            html_content = base_html_start + f"""
-                <p>We have completed the review of your report.</p>
-                
-                <div class="highlight-box approved">
-                  <strong>Issue ID:</strong> {issue_id}<br><br>
-                  Based on the information shared, we have successfully provided the details to <strong>{auth_display}</strong> for further action.
-                </div>
-            """ + base_html_end
-            
+            approved_box = (
+                '<div style="background:#f0fdf4;border-left:4px solid #22c55e;padding:16px 18px;border-radius:0 8px 8px 0;margin:20px 0;font-size:14px;color:#334155;">'
+                '<strong>Issue ID:</strong> ' + str(issue_id) + '<br><br>'
+                'Based on the information shared, we have successfully provided the details to <strong>' + str(auth_display) + '</strong> for further action.'
+                '</div>'
+            )
+            inner_html = (
+                base_html_start
+                + '<p style="' + EMAIL_STYLES["p"] + '">We have completed the review of your report.</p>'
+                + approved_box
+                + base_html_end
+            )
+            html_content = build_branded_email(
+                "EAiSER Report Update",
+                inner_html,
+                preheader="We have completed the review of your report.",
+            )
+
             text_content = (
                 f"Hi {user_name},\n\n"
                 f"We have completed the review of your EAiSER report (Issue ID: {issue_id}).\n\n"
@@ -605,15 +657,24 @@ async def notify_user_status_change(user_email: str, issue_id: str, status: str,
             subject += "."  # The prompt has a dot at the end of the approved subject
         else:
             # Declined / Rejected
-            html_content = base_html_start + f"""
-                <p>We have completed the review of your report.</p>
-                
-                <div class="highlight-box">
-                  <strong>Issue ID:</strong> {issue_id}<br><br>
-                  At this time, we have not identified any issues that require notification to authorities. 
-                </div>
-            """ + base_html_end
-            
+            declined_box = (
+                '<div style="background:#fef2f2;border-left:4px solid #ef4444;padding:16px 18px;border-radius:0 8px 8px 0;margin:20px 0;font-size:14px;color:#334155;">'
+                '<strong>Issue ID:</strong> ' + str(issue_id) + '<br><br>'
+                'At this time, we have not identified any issues that require notification to authorities. '
+                '</div>'
+            )
+            inner_html = (
+                base_html_start
+                + '<p style="' + EMAIL_STYLES["p"] + '">We have completed the review of your report.</p>'
+                + declined_box
+                + base_html_end
+            )
+            html_content = build_branded_email(
+                "EAiSER Report Update",
+                inner_html,
+                preheader="We have completed the review of your report.",
+            )
+
             text_content = (
                 f"Hi {user_name},\n\n"
                 f"We have completed the review of your EAiSER report (Issue ID: {issue_id}).\n\n"
@@ -665,242 +726,46 @@ async def send_admin_welcome_email(
         subject = f"Welcome to EAiSER — {role.replace('_', ' ').title()} Access Granted"
 
         # ----------------------------
-        # HTML EMAIL (ANIMATED + PRO)
+        # HTML EMAIL (branded shell)
         # ----------------------------
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Welcome to EAiSER</title>
-<style>
-  body {{
-    background-color: #f8fafc;
-    margin: 0;
-    padding: 0;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }}
-  .wrapper {{
-    background-color: #f8fafc;
-    padding: 40px 20px;
-  }}
-  .container {{
-    max-width: 620px;
-    margin: 0 auto;
-    background: #ffffff;
-    border-radius: 24px;
-    overflow: hidden;
-    box-shadow: 0 25px 50px -12px rgba(0,0,0,0.1);
-    border: 1px solid #e2e8f0;
-  }}
-  .header {{
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-    padding: 45px 40px;
-    text-align: center;
-    position: relative;
-  }}
-  .header-accent {{
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 4px;
-    background: linear-gradient(to right, #fbbf24, #f59e0b);
-  }}
-  .header h1 {{
-    margin: 0;
-    font-size: 28px;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    color: #ffffff;
-  }}
-  .header h1 span {{
-    color: #fbbf24;
-  }}
-  .header p {{
-    margin: 10px 0 0;
-    font-size: 13px;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    font-weight: 600;
-  }}
-  .content {{
-    padding: 40px;
-    color: #334155;
-    font-size: 16px;
-    line-height: 1.7;
-  }}
-  .greeting {{
-    font-size: 22px;
-    font-weight: 700;
-    color: #0f172a;
-    margin-bottom: 8px;
-  }}
-  .access-badge {{
-    display: inline-block;
-    padding: 5px 14px;
-    background: #fffbeb;
-    border: 1px solid #fde68a;
-    color: #b45309;
-    border-radius: 50px;
-    font-size: 12px;
-    font-weight: 700;
-    margin-bottom: 25px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }}
-  .credential-card {{
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 16px;
-    padding: 28px;
-    margin: 30px 0;
-  }}
-  .credential-card h3 {{
-    margin: 0 0 18px 0;
-    font-size: 13px;
-    color: #64748b;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-weight: 700;
-  }}
-  .credential-row {{
-    margin-bottom: 15px;
-  }}
-  .label {{
-    font-size: 11px;
-    color: #94a3b8;
-    display: block;
-    margin-bottom: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-weight: 600;
-  }}
-  .value {{
-    font-size: 16px;
-    color: #1e293b;
-    font-weight: 600;
-  }}
-  .password-box {{
-    background: #ffffff;
-    border: 1px dashed #cbd5e1;
-    padding: 12px 18px;
-    border-radius: 10px;
-    font-family: 'Monaco', 'Consolas', monospace;
-    font-size: 16px;
-    color: #0f172a;
-    font-weight: 700;
-    display: table;
-    margin-top: 6px;
-    letter-spacing: 1px;
-  }}
-  .permissions-box {{
-    border-left: 4px solid #fbbf24;
-    padding-left: 20px;
-    margin: 30px 0;
-    background: #fffbeb;
-    padding: 20px;
-    border-radius: 0 12px 12px 0;
-  }}
-  .permissions-box h4 {{
-    margin: 0 0 6px 0;
-    color: #1e293b;
-    font-size: 15px;
-    font-weight: 700;
-  }}
-  .permissions-box p {{
-    margin: 0;
-    font-size: 14px;
-    color: #64748b;
-    line-height: 1.6;
-  }}
-  .cta-block {{
-    text-align: center;
-    margin: 40px 0 15px;
-  }}
-  .cta-button {{
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-    color: #ffffff !important;
-    padding: 16px 40px;
-    border-radius: 12px;
-    text-decoration: none;
-    font-size: 16px;
-    font-weight: 700;
-    display: inline-block;
-    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.2);
-    letter-spacing: 0.3px;
-  }}
-  .footer {{
-    padding: 30px 40px;
-    background: #f8fafc;
-    text-align: center;
-    border-top: 1px solid #e2e8f0;
-    font-size: 12px;
-    color: #94a3b8;
-  }}
-  .footer p {{
-    margin: 5px 0;
-  }}
-</style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="container">
-      <div class="header">
-        <div class="header-accent"></div>
-        <h1>EAiSER <span>Console</span></h1>
-        <p>Administrative Access Gateway</p>
-      </div>
-
-      <div class="content">
-        <div class="greeting">System Access Granted</div>
-        <div class="access-badge">Role: {role.replace('_', ' ').title()}</div>
-
-        <p>Hello <strong>{admin_name}</strong>,</p>
-        <p>You have been officially onboarded to the EAiSER administrative network by <strong>{created_by}</strong>. Your account is now active and ready for deployment.</p>
-
-        <div class="credential-card">
-          <h3>🔐 Security Credentials</h3>
-          <div class="credential-row">
-            <span class="label">Access Email</span>
-            <span class="value">{admin_email}</span>
-          </div>
-          <div class="credential-row" style="margin-bottom: 0;">
-            <span class="label">Temporary Access Token</span>
-            <div class="password-box">{temporary_password}</div>
-          </div>
-          <p style="margin: 15px 0 0 0; font-size: 12px; color: #ef4444; font-weight: 600;">
-            ⚠️ For security compliance, you must update this password upon initial authentication.
-          </p>
-        </div>
-
-        <div class="permissions-box">
-          <h4>🛡️ Privileged Scope</h4>
-          <p>{permissions_text}</p>
-        </div>
-
-        <div class="cta-block">
-          <a href="{ADMIN_DASHBOARD_URL}" class="cta-button">
-            Launch Admin Console →
-          </a>
-        </div>
-
-        <p style="text-align:center; color:#94a3b8; font-size:14px; margin-top:30px;">
-          Welcome to the team. Let's make a difference.
-        </p>
-      </div>
-
-      <div class="footer">
-        <p>© 2026 MomntumAi · EAiSER Intelligence Platform</p>
-        <p>This is an automated security transmission. Please do not reply.</p>
-      </div>
-    </div>
-  </div>
-</body>
-</html>
-"""
+        role_title = role.replace('_', ' ').title()
+        credential_card = (
+            '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:24px 26px;margin:24px 0;">'
+            '<h3 style="margin:0 0 16px;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:1px;font-weight:700;">&#128272; Security Credentials</h3>'
+            '<div style="margin-bottom:14px;">'
+            '<span style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Access Email</span>'
+            '<span style="font-size:16px;color:#1e293b;font-weight:600;">' + str(admin_email) + '</span>'
+            '</div>'
+            '<div>'
+            '<span style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Temporary Access Token</span>'
+            '<div style="background:#ffffff;border:1px dashed #cbd5e1;padding:12px 18px;border-radius:10px;font-family:Monaco,Consolas,monospace;font-size:16px;color:#0f172a;font-weight:700;display:table;margin-top:6px;letter-spacing:1px;">' + str(temporary_password) + '</div>'
+            '</div>'
+            '<p style="margin:15px 0 0;font-size:12px;color:#ef4444;font-weight:600;">&#9888; For security compliance, you must update this password upon initial authentication.</p>'
+            '</div>'
+        )
+        permissions_box = (
+            '<div style="background:#fffbeb;border-left:4px solid #C8A84E;padding:18px 20px;border-radius:0 12px 12px 0;margin:24px 0;">'
+            '<h4 style="margin:0 0 6px;color:#1e293b;font-size:15px;font-weight:700;">&#128737; Privileged Scope</h4>'
+            '<p style="margin:0;font-size:14px;color:#64748b;line-height:1.6;">' + str(permissions_text) + '</p>'
+            '</div>'
+        )
+        inner_html = (
+            '<h1 style="' + EMAIL_STYLES["h1"] + '">System Access Granted</h1>'
+            '<div style="display:inline-block;padding:5px 14px;background:#fffbeb;border:1px solid #fde68a;color:#b45309;border-radius:50px;font-size:12px;font-weight:700;margin-bottom:18px;text-transform:uppercase;letter-spacing:0.5px;">Role: ' + role_title + '</div>'
+            '<p style="' + EMAIL_STYLES["p"] + '">Hello <strong>' + str(admin_name) + '</strong>,</p>'
+            '<p style="' + EMAIL_STYLES["p"] + '">You have been officially onboarded to the EAiSER administrative network by <strong>' + str(created_by) + '</strong>. Your account is now active and ready for deployment.</p>'
+            + credential_card
+            + permissions_box
+            + '<div style="' + EMAIL_STYLES["btn_wrap"] + '">'
+            '<a href="' + ADMIN_DASHBOARD_URL + '" style="' + EMAIL_STYLES["btn"] + '">Launch Admin Console &rarr;</a>'
+            '</div>'
+            '<p style="' + EMAIL_STYLES["muted"] + 'text-align:center;">Welcome to the team. Let\'s make a difference.</p>'
+        )
+        html_content = build_branded_email(
+            "Admin access granted",
+            inner_html,
+            preheader="Your EAiSER admin account is active — credentials inside.",
+        )
 
         # ----------------------------
         # TEXT EMAIL (Fallback)
@@ -957,54 +822,22 @@ async def send_verification_email(user_email: str, user_name: str, token: str) -
             
         verification_link = f"{frontend_url}/verify-email?token={token}"
         subject = "Verify your EAiSER AI Account"
-        
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  body {{ background-color: #f8fafc; font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }}
-  .wrapper {{ padding: 40px 20px; background-color: #f8fafc; }}
-  .container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 24px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.1); }}
-  .header {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 45px 40px; text-align: center; position: relative; }}
-  .header-accent {{ position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(to right, #fbbf24, #f59e0b); }}
-  .header h1 {{ margin: 0; color: #fbbf24; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }}
-  .header p {{ margin: 10px 0 0; color: #94a3b8; font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; }}
-  .content {{ padding: 40px; color: #334155; line-height: 1.7; font-size: 16px; }}
-  .content h2 {{ color: #0f172a; font-size: 22px; font-weight: 700; margin-top: 0; }}
-  .cta {{ text-align: center; margin: 35px 0; }}
-  .cta a {{ background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); color: #000000 !important; padding: 16px 40px; border-radius: 12px; text-decoration: none; font-weight: 700; font-size: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(251, 191, 36, 0.25); }}
-  .link-fallback {{ font-size: 13px; color: #64748b; word-break: break-all; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; margin-top: 20px; }}
-  .expiry {{ display: inline-block; padding: 6px 14px; background: #fef2f2; color: #dc2626; border-radius: 8px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
-  .footer {{ text-align: center; padding: 30px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; background: #f8fafc; }}
-</style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="container">
-      <div class="header">
-        <div class="header-accent"></div>
-        <h1>EAiSER AI</h1>
-        <p>Account Verification</p>
-      </div>
-      <div class="content">
-        <h2>Welcome to the Mission, {user_name}!</h2>
-        <p>Please verify your email address to activate your account and start reporting civic issues with AI precision.</p>
-        <div class="cta">
-          <a href="{verification_link}">Verify My Account →</a>
-        </div>
-        <div class="link-fallback">
-          Or copy this link into your browser:<br/>{verification_link}
-        </div>
-        <p style="text-align: center;"><span class="expiry">⏰ This link will expire in 24 hours.</span></p>
-      </div>
-      <div class="footer">© 2026 EAiSER AI · Automated Civic Intelligence Network</div>
-    </div>
-  </div>
-</body>
-</html>
-"""
+
+        inner_html = (
+            '<h1 style="' + EMAIL_STYLES["h1"] + '">Welcome to the Mission, ' + str(user_name) + '!</h1>'
+            '<p style="' + EMAIL_STYLES["p"] + '">Please verify your email address to activate your account and start reporting civic issues with AI precision.</p>'
+            '<div style="' + EMAIL_STYLES["btn_wrap"] + '">'
+            '<a href="' + verification_link + '" style="' + EMAIL_STYLES["btn"] + '">Verify My Account &rarr;</a>'
+            '</div>'
+            '<div style="' + EMAIL_STYLES["box"] + 'word-break:break-all;">'
+            'Or copy this link into your browser:<br/>' + verification_link + '</div>'
+            '<p style="' + EMAIL_STYLES["muted"] + 'text-align:center;">This link will expire in 24 hours.</p>'
+        )
+        html_content = build_branded_email(
+            "Verify your account",
+            inner_html,
+            preheader="Verify your email to activate your EAiSER AI account.",
+        )
         text_content = f"Welcome to EAiSER AI, {user_name}!\n\nPlease verify your email: {verification_link}"
         
         return await send_email(user_email, subject, html_content, text_content)
@@ -1019,213 +852,35 @@ async def send_user_welcome_email(user_email: str, user_name: str) -> bool:
     """
     try:
         subject = "Welcome to EAiSER AI – Your Journey to a Smarter Community Begins 🚀"
-        
+
         # ----------------------------
-        # HTML EMAIL (PREMIUM MODERN DESIGN)
+        # HTML EMAIL (branded shell)
         # ----------------------------
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  body {{
-    background-color: #f8fafc;
-    font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    margin: 0;
-    padding: 0;
-    color: #1e293b;
-  }}
-  .wrapper {{
-    background-color: #f8fafc;
-    padding: 40px 20px;
-  }}
-  .container {{
-    max-width: 600px;
-    margin: 0 auto;
-    background: #ffffff;
-    border-radius: 20px;
-    overflow: hidden;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.08);
-    border: 1px solid #e2e8f0;
-  }}
-  .header {{
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    padding: 60px 40px;
-    text-align: center;
-    position: relative;
-  }}
-  .header h1 {{
-    margin: 0;
-    color: #fbbf24; /* Amber 400 */
-    font-size: 32px;
-    font-weight: 800;
-    letter-spacing: -1px;
-    text-transform: uppercase;
-  }}
-  .header .badge {{
-    display: inline-block;
-    background: rgba(251, 191, 36, 0.1);
-    border: 1px solid rgba(251, 191, 36, 0.3);
-    color: #fbbf24;
-    padding: 5px 15px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 600;
-    margin-top: 15px;
-  }}
-  .content {{
-    padding: 40px;
-  }}
-  .greeting {{
-    font-size: 24px;
-    font-weight: 700;
-    color: #0f172a;
-    margin-bottom: 20px;
-  }}
-  .intro {{
-    font-size: 16px;
-    line-height: 1.8;
-    margin-bottom: 40px;
-    color: #475569;
-  }}
-  .feature-grid {{
-    margin: 40px 0;
-  }}
-  .feature-item {{
-    display: flex;
-    align-items: flex-start;
-    margin-bottom: 25px;
-    padding: 20px;
-    background: #f1f5f9;
-    border-radius: 12px;
-    transition: transform 0.2s ease;
-  }}
-  .icon {{
-    font-size: 24px;
-    margin-right: 15px;
-    background: #fff;
-    width: 45px;
-    height: 45px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 10px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-  }}
-  .feature-text {{
-    flex: 1;
-  }}
-  .feature-title {{
-    font-weight: 700;
-    color: #1e293b;
-    margin-bottom: 4px;
-    font-size: 16px;
-  }}
-  .feature-desc {{
-    font-size: 14px;
-    color: #64748b;
-    line-height: 1.5;
-  }}
-  .cta-container {{
-    text-align: center;
-    margin: 50px 0 20px;
-  }}
-  .cta-btn {{
-    background: #1e293b;
-    color: #ffffff !important;
-    padding: 18px 45px;
-    border-radius: 12px;
-    text-decoration: none;
-    font-weight: 700;
-    font-size: 16px;
-    display: inline-block;
-    box-shadow: 0 10px 25px rgba(30, 41, 59, 0.2);
-    transition: all 0.3s ease;
-  }}
-  .cta-btn:hover {{
-    transform: translateY(-2px);
-    box-shadow: 0 15px 30px rgba(30, 41, 59, 0.3);
-  }}
-  .footer {{
-    text-align: center;
-    padding: 40px;
-    background: #f8fafc;
-    font-size: 13px;
-    color: #94a3b8;
-    border-top: 1px solid #e2e8f0;
-  }}
-  .social-links {{
-    margin-top: 20px;
-  }}
-  .social-links a {{
-    margin: 0 10px;
-    color: #94a3b8;
-    text-decoration: none;
-  }}
-</style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="container">
-      <div class="header">
-        <h1>EAiSER AI</h1>
-        <div class="badge">BETA ACCESS GRANTED</div>
-      </div>
-      
-      <div class="content">
-        <div class="greeting">Welcome to the inner circle, {user_name}!</div>
-        <p class="intro">
-          You've just unlocked the most powerful tool for community transformation. EAiSER isn't just an app—it's an AI-driven mission to eliminate civic hazards and build a more responsive world, one report at a time.
-        </p>
+        def _feature(icon: str, title: str, desc: str) -> str:
+            return (
+                '<div style="background:#f1f5f9;border-radius:12px;padding:18px 20px;margin-bottom:14px;">'
+                '<div style="font-weight:700;color:#1e293b;font-size:16px;margin-bottom:4px;">'
+                + icon + ' ' + title + '</div>'
+                '<div style="font-size:14px;color:#64748b;line-height:1.5;">' + desc + '</div>'
+                '</div>'
+            )
 
-        <div class="feature-grid">
-          <div class="feature-item">
-            <div class="icon">📸</div>
-            <div class="feature-text">
-              <div class="feature-title">Impact via Imagery</div>
-              <div class="feature-desc">Snap a photo and let our Neural Engine handle the rest. We identify complexity, severity, and root causes instantly.</div>
-            </div>
-          </div>
-
-          <div class="feature-item">
-            <div class="icon">⚡</div>
-            <div class="feature-text">
-              <div class="feature-title">Autonomous Routing</div>
-              <div class="feature-desc">Say goodbye to bureaucratic hurdles. EAiSER routes your data directly to the precise authority responsible for action.</div>
-            </div>
-          </div>
-
-          <div class="feature-item">
-            <div class="icon">📈</div>
-            <div class="feature-text">
-              <div class="feature-title">Real-time Visibility</div>
-              <div class="feature-desc">Monitor the status of your reports on a live dashboard. See exactly when officials receive, review, and resolve issues.</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="cta-container">
-          <a href="https://www.eaiser.ai/dashboard" class="cta-btn">Initialize My Dashboard</a>
-        </div>
-        
-        <p style="text-align:center; color:#94a3b8; font-size:14px; margin-top:30px;">
-          Together, we're building the future of civic technology.
-        </p>
-      </div>
-
-      <div class="footer">
-        <strong>MomntumAi LLC</strong><br>
-        2026 EAiSER AI · Automated Civic Network<br>
-        <div class="social-links">
-          <a href="#">Terms</a> • <a href="#">Privacy</a> • <a href="#">Support</a>
-        </div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>
-"""
+        inner_html = (
+            '<h1 style="' + EMAIL_STYLES["h1"] + '">Welcome to the inner circle, ' + str(user_name) + '!</h1>'
+            '<p style="' + EMAIL_STYLES["p"] + '">You\'ve just unlocked the most powerful tool for community transformation. EAiSER isn\'t just an app&mdash;it\'s an AI-driven mission to eliminate civic hazards and build a more responsive world, one report at a time.</p>'
+            + _feature("&#128247;", "Impact via Imagery", "Snap a photo and let our Neural Engine handle the rest. We identify complexity, severity, and root causes instantly.")
+            + _feature("&#9889;", "Autonomous Routing", "Say goodbye to bureaucratic hurdles. EAiSER routes your data directly to the precise authority responsible for action.")
+            + _feature("&#128200;", "Real-time Visibility", "Monitor the status of your reports on a live dashboard. See exactly when officials receive, review, and resolve issues.")
+            + '<div style="' + EMAIL_STYLES["btn_wrap"] + '">'
+            '<a href="https://www.eaiser.ai/dashboard" style="' + EMAIL_STYLES["btn"] + '">Initialize My Dashboard</a>'
+            '</div>'
+            '<p style="' + EMAIL_STYLES["muted"] + 'text-align:center;">Together, we\'re building the future of civic technology.</p>'
+        )
+        html_content = build_branded_email(
+            "Welcome to EAiSER AI",
+            inner_html,
+            preheader="Your journey to a smarter community begins now.",
+        )
         # ----------------------------
         # TEXT FALLBACK
         # ----------------------------
@@ -1272,52 +927,21 @@ async def send_password_reset_email(email: str, token: str, is_admin: bool = Fal
 
         reset_link = f"{frontend_url}/reset-password?token={token}"
         subject = "Reset Your EAiSER Password"
-        
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  body {{ background-color: #f8fafc; font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }}
-  .wrapper {{ padding: 40px 20px; background-color: #f8fafc; }}
-  .container {{ max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 24px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.1); }}
-  .header {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 40px; text-align: center; position: relative; }}
-  .header-accent {{ position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(to right, #fbbf24, #f59e0b); }}
-  .header h2 {{ color: #ffffff; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }}
-  .header p {{ color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; margin: 10px 0 0; font-weight: 600; }}
-  .content {{ padding: 40px; color: #475569; line-height: 1.7; font-size: 16px; }}
-  .cta {{ text-align: center; margin: 35px 0; }}
-  .cta a {{ display: inline-block; background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); color: #0f172a !important; padding: 16px 40px; border-radius: 12px; text-decoration: none; font-weight: 700; font-size: 16px; box-shadow: 0 10px 25px rgba(251, 191, 36, 0.25); }}
-  .safety-note {{ background: #f8fafc; border-radius: 12px; padding: 20px; border: 1px solid #e2e8f0; font-size: 14px; color: #64748b; margin-top: 25px; }}
-  .expiry {{ display: inline-block; padding: 5px 12px; background: #fef2f2; color: #dc2626; border-radius: 8px; font-size: 12px; font-weight: 600; }}
-  .footer {{ padding: 25px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; background: #f8fafc; }}
-</style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="container">
-      <div class="header">
-        <div class="header-accent"></div>
-        <h2>🔒 Secure Password Reset</h2>
-        <p>Identity Protection</p>
-      </div>
-      <div class="content">
-        <p>We received a request to reset your EAiSER account password. Click the button below to choose a new one.</p>
-        <p><span class="expiry">⏰ This link expires in 15 minutes</span></p>
-        <div class="cta">
-          <a href="{reset_link}">Reset My Password →</a>
-        </div>
-        <div class="safety-note">
-          🛡️ If you didn't request this, you can safely ignore this email. Your password will remain unchanged.
-        </div>
-      </div>
-      <div class="footer">© 2026 EAiSER AI · Secure Identity Protection</div>
-    </div>
-  </div>
-</body>
-</html>
-"""
+
+        inner_html = (
+            '<h1 style="' + EMAIL_STYLES["h1"] + '">Secure Password Reset</h1>'
+            '<p style="' + EMAIL_STYLES["p"] + '">We received a request to reset your EAiSER account password. Click the button below to choose a new one.</p>'
+            '<p style="' + EMAIL_STYLES["p"] + 'font-weight:600;color:#dc2626;">This link expires in 15 minutes.</p>'
+            '<div style="' + EMAIL_STYLES["btn_wrap"] + '">'
+            '<a href="' + reset_link + '" style="' + EMAIL_STYLES["btn"] + '">Reset My Password &rarr;</a>'
+            '</div>'
+            '<div style="' + EMAIL_STYLES["box"] + '">If you didn\'t request this, you can safely ignore this email. Your password will remain unchanged.</div>'
+        )
+        html_content = build_branded_email(
+            "Reset your password",
+            inner_html,
+            preheader="Reset your EAiSER password — link expires in 15 minutes.",
+        )
         text_content = f"Reset your EAiSER password: {reset_link}\n\nThis link will expire in 15 minutes."
 
         return await send_email(email, subject, html_content, text_content)
@@ -1342,60 +966,20 @@ async def send_tos_email(email: str, name: str) -> bool:
         # Path to the final Terms PDF
         tos_pdf = r"c:/Users/chris/OneDrive/Desktop/MomntumAi/momentum-frontend/public/TERMSand.pdf"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    body {{ font-family: 'Inter', system-ui, -apple-system, sans-serif; background-color: #f8fafc; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }}
-    .wrapper {{ padding: 40px 20px; background-color: #f8fafc; }}
-    .container {{ max-width: 560px; margin: 0 auto; background-color: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.08); border: 1px solid #e2e8f0; }}
-    .header {{ background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%); padding: 60px 30px; text-align: center; border-bottom: 1px solid #e2e8f0; position: relative; }}
-    .header-accent {{ position: absolute; top: 0; left: 0; right: 0; height: 5px; background: linear-gradient(to right, #fbbf24, #f59e0b); }}
-    .header h1 {{ color: #0f172a; font-size: 26px; margin: 0; font-weight: 800; letter-spacing: -0.5px; }}
-    .content {{ padding: 45px 40px; }}
-    p {{ color: #475569; font-size: 16px; line-height: 1.8; margin-bottom: 25px; }}
-    .check-badge {{ 
-      display: inline-flex; 
-      align-items: center; 
-      gap: 10px; 
-      background: #ecfdf5; 
-      border: 1px solid #10b981; 
-      padding: 14px 24px; 
-      border-radius: 50px; 
-      color: #065f46; 
-      font-weight: 700; 
-      font-size: 15px; 
-      margin: 30px 0;
-      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.1);
-    }}
-    .check-icon {{ font-size: 18px; margin-right: 8px; }}
-    .tos-link {{ color: #3b82f6; text-decoration: none; font-weight: 600; border-bottom: 2px solid rgba(59,130,246,0.1); transition: all 0.2s; }}
-    .tos-link:hover {{ color: #2563eb; border-bottom-color: #2563eb; }}
-    .footer {{ padding: 30px; text-align: center; font-size: 13px; color: #94a3b8; border-top: 1px solid #e2e8f0; background: #f8fafc; }}
-  </style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="container">
-      <div class="header">
-        <div class="header-accent"></div>
-        <h1>Terms of Service Confirmation</h1>
-      </div>
-      <div class="content">
-        <p>Hi {name or 'User'},</p>
-        <div class="check-badge"><span class="check-icon">✅</span> Terms of Service Accepted</div>
-        <p>Thank you for using EAiSER AI. This email confirms that you have reviewed and accepted our Terms of Service and Privacy Policy.</p>
-        <p>As requested, we have attached a copy of these legal documents for your records. We're thrilled to have you on board. Together, we're building smarter, safer communities.</p>
-        <p style="font-weight: 700; color: #0f172a; margin-top: 40px;">— The EAiSER & MomntumAi Team</p>
-      </div>
-      <div class="footer">© {datetime.utcnow().year} EAiSER AI · Intelligent Civic Response</div>
-    </div>
-  </div>
-</body>
-</html>
-"""
+        display_name = name or 'User'
+        inner_html = (
+            '<h1 style="' + EMAIL_STYLES["h1"] + '">Terms of Service Confirmation</h1>'
+            '<p style="' + EMAIL_STYLES["p"] + '">Hi ' + str(display_name) + ',</p>'
+            '<div style="' + EMAIL_STYLES["box"] + 'font-weight:700;color:#065f46;">&#10004; Terms of Service Accepted</div>'
+            '<p style="' + EMAIL_STYLES["p"] + '">Thank you for using EAiSER AI. This email confirms that you have reviewed and accepted our Terms of Service and Privacy Policy.</p>'
+            '<p style="' + EMAIL_STYLES["p"] + '">As requested, we have attached a copy of these legal documents for your records. We\'re thrilled to have you on board. Together, we\'re building smarter, safer communities.</p>'
+            '<p style="' + EMAIL_STYLES["p"] + 'font-weight:700;color:#0f172a;">&mdash; The EAiSER &amp; MomntumAi Team</p>'
+        )
+        html_content = build_branded_email(
+            "Terms of Service Confirmation",
+            inner_html,
+            preheader="Your accepted Terms of Service — copy attached for your records.",
+        )
         text_content = f"Hi {name or 'User'},\n\nThank you for using EAiSER.Ai. This email serves as confirmation that you have agreed to our Terms of Service. We have attached a copy for your records.\n\nThanks,\nThe EAiSER & MomntumAi Team"
 
         attachments = [tos_pdf] if os.path.exists(tos_pdf) else None
@@ -1423,77 +1007,44 @@ async def send_gov_welcome_email(
     """
     try:
         subject = f"Security Clearance Granted — EAiSER Government Portal ({department})"
-        
-        # Style inspired by the admin welcome email but tailored for Gov/Civic feel
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  body {{ background-color: #f8fafc; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }}
-  .wrapper {{ background-color: #f8fafc; padding: 40px 20px; }}
-  .container {{ max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }}
-  .header {{ background: #000000; padding: 45px 40px; text-align: center; border-bottom: 4px solid #fbbf24; }}
-  .header h1 {{ margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; color: #ffffff; }}
-  .header h1 span {{ color: #fbbf24; }}
-  .header p {{ margin: 10px 0 0; font-size: 13px; color: #71717a; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; }}
-  .content {{ padding: 40px 50px; color: #334155; font-size: 16px; line-height: 1.7; }}
-  .greeting {{ font-size: 20px; font-weight: 800; color: #000000; margin-bottom: 8px; }}
-  .dept-badge {{ display: inline-block; padding: 5px 14px; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.2); color: #d97706; border-radius: 50px; font-size: 11px; font-weight: 800; margin-bottom: 25px; text-transform: uppercase; }}
-  .credential-card {{ background: #fafafa; border: 1px solid #f1f1f1; border-radius: 16px; padding: 30px; margin: 30px 0; }}
-  .label {{ font-size: 10px; color: #999; display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }}
-  .value {{ font-size: 15px; color: #111; font-weight: 700; }}
-  .password-box {{ background: #ffffff; border: 1px dashed #ddd; padding: 12px 18px; border-radius: 10px; font-family: 'Consolas', monospace; font-size: 17px; color: #000; font-weight: 800; display: table; margin-top: 8px; }}
-  .scope-box {{ background: #f0fdf4; border: 1px solid #dcfce7; padding: 20px; border-radius: 12px; margin-bottom: 30px; }}
-  .scope-box h4 {{ margin: 0 0 6px 0; color: #166534; font-size: 14px; font-weight: 800; }}
-  .scope-box p {{ margin: 0; font-size: 13px; color: #15803d; font-weight: 500; }}
-  .cta-block {{ text-align: center; margin-top: 40px; }}
-  .cta-button {{ background: #000; color: #fff !important; padding: 16px 40px; border-radius: 12px; text-decoration: none; font-size: 15px; font-weight: 800; display: inline-block; box-shadow: 0 10px 20px rgba(0,0,0,0.1); }}
-  .footer {{ padding: 30px; background: #fafafa; text-align: center; border-top: 1px solid #f1f1f1; font-size: 12px; color: #a1a1aa; }}
-</style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="container">
-      <div class="header">
-        <h1>EA<span>i</span>SER <span>Gov</span></h1>
-        <p>Authority Command Center</p>
-      </div>
-      <div class="content">
-        <div class="greeting">Official Clearance Granted</div>
-        <div class="dept-badge">{department} — {city}</div>
-        <p>Hello <strong>{name}</strong>,</p>
-        <p>Your official credentials for the EAiSER Government Portal have been provisioned by the EAiSER Global Operations team. You now have access to real-time citizen report routing and AI-driven department insights.</p>
-        
-        <div class="credential-card">
-          <div style="margin-bottom: 20px;">
-            <span class="label">Portal ID / Email</span>
-            <span class="value">{email.lower()}</span>
-          </div>
-          <div>
-            <span class="label">Temporary Security Password</span>
-            <div class="password-box">{temporary_password}</div>
-          </div>
-        </div>
 
-        <div class="scope-box">
-          <h4>🛰️ Operation Scope</h4>
-          <p>You are authorized to monitor and manage reports for the <strong>{department}</strong> within ZIP context <strong>{zip_code}</strong>. This dashboard is strictly for official use.</p>
-        </div>
-
-        <div class="cta-block">
-          <a href="{GOV_PORTAL_URL}" class="cta-button">Access Gov Dashboard →</a>
-        </div>
-      </div>
-      <div class="footer">
-        <p>© 2026 EAiSER AI • Intelligent Civic Infrastructure</p>
-      </div>
-    </div>
-  </div>
-</body>
-</html>
-"""
+        # ----------------------------
+        # HTML EMAIL (branded shell)
+        # ----------------------------
+        credential_card = (
+            '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:24px 26px;margin:24px 0;">'
+            '<div style="margin-bottom:18px;">'
+            '<span style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:700;">Portal ID / Email</span>'
+            '<span style="font-size:15px;color:#111;font-weight:700;">' + email.lower() + '</span>'
+            '</div>'
+            '<div>'
+            '<span style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:700;">Temporary Security Password</span>'
+            '<div style="background:#ffffff;border:1px dashed #cbd5e1;padding:12px 18px;border-radius:10px;font-family:Consolas,monospace;font-size:17px;color:#000;font-weight:800;display:table;margin-top:8px;">' + str(temporary_password) + '</div>'
+            '</div>'
+            '</div>'
+        )
+        scope_box = (
+            '<div style="background:#f0fdf4;border:1px solid #dcfce7;padding:18px 20px;border-radius:12px;margin:24px 0;">'
+            '<h4 style="margin:0 0 6px;color:#166534;font-size:14px;font-weight:800;">&#128640; Operation Scope</h4>'
+            '<p style="margin:0;font-size:13px;color:#15803d;font-weight:500;line-height:1.6;">You are authorized to monitor and manage reports for the <strong>' + str(department) + '</strong> within ZIP context <strong>' + str(zip_code) + '</strong>. This dashboard is strictly for official use.</p>'
+            '</div>'
+        )
+        inner_html = (
+            '<h1 style="' + EMAIL_STYLES["h1"] + '">Official Clearance Granted</h1>'
+            '<div style="display:inline-block;padding:5px 14px;background:#fffbeb;border:1px solid #fde68a;color:#b45309;border-radius:50px;font-size:11px;font-weight:800;margin-bottom:18px;text-transform:uppercase;">' + str(department) + ' &mdash; ' + str(city) + '</div>'
+            '<p style="' + EMAIL_STYLES["p"] + '">Hello <strong>' + str(name) + '</strong>,</p>'
+            '<p style="' + EMAIL_STYLES["p"] + '">Your official credentials for the EAiSER Government Portal have been provisioned by the EAiSER Global Operations team. You now have access to real-time citizen report routing and AI-driven department insights.</p>'
+            + credential_card
+            + scope_box
+            + '<div style="' + EMAIL_STYLES["btn_wrap"] + '">'
+            '<a href="' + GOV_PORTAL_URL + '" style="' + EMAIL_STYLES["btn"] + '">Access Gov Dashboard &rarr;</a>'
+            '</div>'
+        )
+        html_content = build_branded_email(
+            "Government portal access",
+            inner_html,
+            preheader="Your EAiSER Government Portal credentials are ready.",
+        )
         text_content = f"""
 Official Clearance Granted — EAiSER Gov
 
