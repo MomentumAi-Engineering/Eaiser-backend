@@ -21,7 +21,9 @@ logger.setLevel(logging.INFO)
 # consistent, professional look. Built by string concatenation (NOT f-strings)
 # so CSS braces never need escaping.
 # --------------------------------------------------------------------
-EAISER_LOGO_URL = "https://eaiser.ai/newlogo.png"
+# Use the www host directly — the bare eaiser.ai/newlogo.png 307-redirects, and
+# email clients don't follow redirects for <img>, so the logo would show blank.
+EAISER_LOGO_URL = "https://www.eaiser.ai/newlogo.png"
 SUPPORT_EMAIL = "support@momntumai.com"
 # (label, profile URL, white PNG icon URL) — icons8 serves email-safe PNGs.
 SOCIAL_LINKS = [
