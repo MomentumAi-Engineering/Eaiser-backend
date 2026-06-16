@@ -156,6 +156,107 @@ class AIServiceV3:
                 "data": None
             }
 
+    async def analyze_multi_image(self, image_contents: List[bytes]) -> Dict[str, Any]:
+        """
+        MIMI — multi-image analyzer. Sends ALL photos to Gemini together and
+        returns ONE V3-schema report covering every DISTINCT issue across the
+        frames, deduplicating issues that appear in more than one photo. Same
+        output shape as analyze_single_image so map_v3_to_legacy and downstream
+        code keep working. Falls back to single-image analysis for one photo.
+        """
+        if not image_contents:
+            return {"success": False, "error": "No images provided", "data": None}
+        if len(image_contents) == 1:
+            return await self.analyze_single_image(image_contents[0])
+
+        # Cache by the combined hash of every frame so resubmits/retries skip Gemini.
+        cache_key = None
+        try:
+            import hashlib as _hashlib
+            from services.ai_service_optimized import get_cached_data
+            _h = _hashlib.md5()
+            for c in image_contents:
+                _h.update(c)
+            cache_key = f"v3_multi:v1:{_h.hexdigest()}"
+            cached = await get_cached_data(cache_key, 1800)
+            if cached:
+                logger.info("⚡ V3 multi-image cache HIT — skipped redundant Gemini vision call")
+                return cached
+        except Exception:
+            cache_key = None
+
+        try:
+            # 1. Decode all frames (cap at 6 for cost/latency)
+            pil_images = []
+            for content in image_contents[:6]:
+                try:
+                    img = Image.open(io.BytesIO(content))
+                    if img.width > 1024 or img.height > 1024:
+                        img.thumbnail((1024, 1024))
+                    pil_images.append(img)
+                except Exception as img_err:
+                    logger.warning(f"MIMI: failed to open an image: {img_err}")
+            if not pil_images:
+                return {"success": False, "error": "No decodable images", "data": None}
+            if len(pil_images) == 1:
+                return await self.analyze_single_image(image_contents[0])
+
+            # 2. Model with the V3 system prompt
+            prompt = await self._get_prompt_v3()
+            pool = get_key_pool()
+            model, slot = pool.get_model(model_name=self.model_name, system_instruction=prompt)
+
+            # 3. Feed all frames with an explicit multi-image instruction
+            content_parts = [{
+                "text": (
+                    f"These are {len(pil_images)} photos of the SAME civic scene taken from "
+                    f"different angles or distances. Analyze ALL of them together. Identify every "
+                    f"DISTINCT issue visible across the photos, and DEDUPLICATE any issue that "
+                    f"appears in more than one photo (count it once). Apply all severity rules "
+                    f"(including the always-High rule for cargo straps/rope/netting). Return the "
+                    f"SAME structured JSON report, with ordered_issue_list covering all images."
+                )
+            }]
+            for idx, img in enumerate(pil_images):
+                content_parts.append({"text": f"\nImage {idx + 1}:"})
+                content_parts.append(img)
+            content_parts.append({"text": "\nReturn the structured JSON report covering all images."})
+
+            try:
+                response = await asyncio.to_thread(
+                    model.generate_content,
+                    content_parts,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.0,
+                        response_mime_type="application/json",
+                    )
+                )
+                pool.report_success(slot, estimated_tokens=8000)
+            except Exception as gen_err:
+                pool.report_error(slot, str(gen_err))
+                raise gen_err
+
+            if not response or not response.text:
+                raise ValueError("Empty response from Gemini (multi-image)")
+
+            report = json.loads(response.text)
+            if "ordered_issue_list" not in report:
+                raise ValueError("Missing ordered_issue_list in MIMI response")
+
+            result = {"success": True, "data": report}
+            if cache_key:
+                try:
+                    from services.ai_service_optimized import set_cached_data
+                    await set_cached_data(cache_key, result, 1800)
+                except Exception:
+                    pass
+            logger.info(f"✅ MIMI multi-image analysis OK — {len(report.get('ordered_issue_list', []))} issue(s) across {len(pil_images)} frames")
+            return result
+
+        except Exception as e:
+            logger.error(f"V3 multi-image analysis failed: {e}", exc_info=True)
+            return {"success": False, "error": str(e), "data": None}
+
     async def validate_image_consistency(self, image_contents: List[bytes]) -> Dict[str, Any]:
         """
         🔍 Cross-Image Validation: Sends ALL images to Gemini to verify they depict 
