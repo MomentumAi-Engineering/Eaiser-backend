@@ -1109,6 +1109,11 @@ async def process_issue_background(
                 "longitude": longitude,
                 "issue_type": display_issue_type,
                 "primary_issue_type": issue_type,  # 🆕 Preserve the actual primary for internal use
+                # The resident's own submitted text (manual report input, or the
+                # edited summary from the review screen). Stored top-level so the
+                # report-detail screen shows the USER's words, not the AI scene
+                # description. Empty for pure photo reports with no typed text.
+                "description": (description or "").strip(),
                 "severity": severity,
                 "category": category,
                 "priority": priority,
