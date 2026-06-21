@@ -17,6 +17,39 @@ from services.redis_service import get_redis_service
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+
+def resolve_city_status(issue: Dict[str, Any]) -> str:
+    """Authoritatively resolve a report's routing state: 'LIVE' or 'NOT_LIVE'.
+
+    A report is LIVE only when its ZIP belongs to a city that is a live EAiSER
+    partner (per city_config.json — currently only Fairview/37062). Everything
+    else is NOT_LIVE, i.e. an "unserved area" that is routed to the EAiSER team.
+
+    We honour a value already stored on the document, but when it's missing
+    (older reports, or reports submitted outside the v5 consent flow) we derive
+    it from the ZIP so the iOS timeline/cards still show the "EAiSER Review"
+    stage. Pure zip-config lookup — no DB call.
+    """
+    stored = str(issue.get("v5_city_status") or "").upper()
+    if stored in ("LIVE", "NOT_LIVE"):
+        return stored
+
+    # Prefer the structured zip_code; fall back to a 5-digit match in the address.
+    zip_code = str(issue.get("zip_code") or "").strip()
+    if not re.fullmatch(r"\d{5}", zip_code):
+        m = re.search(r"\b(\d{5})\b", str(issue.get("address") or ""))
+        zip_code = m.group(1) if m else ""
+
+    try:
+        from services.routing_engine_v5 import get_city_state
+        return get_city_state(zip_code).get("status", "NOT_LIVE")
+    except Exception as e:
+        # Default to NOT_LIVE: better to over-show the EAiSER review step than to
+        # hide it for an unserved report. Logged so a bad config is noticeable.
+        logger.warning(f"resolve_city_status fallback for zip '{zip_code}': {e}")
+        return "NOT_LIVE"
+
+
 # Log Motor version for debugging
 try:
     import motor
@@ -609,9 +642,12 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
             "image_id": 1,
             "decline_reason": 1,
             "decline_history": 1,
-            "available_authorities": 1
+            "available_authorities": 1,
+            # Routing state — unserved-area / city-not-a-partner reports
+            # (NOT_LIVE) show the "EAiSER Review" stage in the timeline.
+            "v5_city_status": 1
         }
-        
+
         # Define valid mission states (Excluding 'failed' and system errors)
         valid_statuses = [
             "needs_review", "waiting_review", "pending", 
@@ -681,6 +717,9 @@ async def get_issues(limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
                  authority_name = [str(authority_name)]
             issue["authority_name"] = authority_name
 
+            # Resolve routing state so unserved-area reports show "EAiSER Review".
+            issue["v5_city_status"] = resolve_city_status(issue)
+
             # Format MongoDB ID as string
             issue["_id"] = str(issue["_id"])
 
@@ -720,9 +759,13 @@ async def get_user_issues(user_email: str, limit: int = 50, skip: int = 0) -> Li
             "image_id": 1,
             "decline_reason": 1,
             "decline_history": 1,
-            "available_authorities": 1
+            "available_authorities": 1,
+            # Routing state — lets the dashboard card show the "EAiSER Review"
+            # stage for unserved-area / city-not-a-partner reports (NOT_LIVE),
+            # matching the report-detail timeline.
+            "v5_city_status": 1
         }
-        
+
         # Define valid mission states (Excluding technical failures if preferred, but here inclusive for dashboard parity)
         valid_statuses = [
             "needs_review", "waiting_review", "pending", "under_review",
@@ -775,6 +818,8 @@ async def get_user_issues(user_email: str, limit: int = 50, skip: int = 0) -> Li
             issue.setdefault("priority", "Medium")
             issue.setdefault("status", "pending")
             issue.setdefault("timestamp_formatted", datetime.now().strftime("%m/%d/%Y %H:%M"))
+            # Resolve routing state so unserved-area reports show "EAiSER Review".
+            issue["v5_city_status"] = resolve_city_status(issue)
 
         return issues
 
@@ -837,7 +882,11 @@ async def get_report(issue_id: str) -> Dict[str, Any]:
         
         issue["timestamp_formatted"] = issue.get("timestamp_formatted", datetime.now().strftime("%m/%d/%Y %H:%M"))
         issue["timezone_name"] = issue.get("timezone_name", "UTC")
-        
+
+        # Resolve routing state so unserved-area reports show "EAiSER Review"
+        # in the report-detail timeline even when v5_city_status wasn't stored.
+        issue["v5_city_status"] = resolve_city_status(issue)
+
         # Validate image_id
         image_id = issue.get("image_id")
         if image_id and not isinstance(image_id, str):

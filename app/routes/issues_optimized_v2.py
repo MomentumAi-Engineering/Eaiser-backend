@@ -382,7 +382,8 @@ async def process_issue_background(
     is_manual: bool = False,
     pre_analyzed: bool = False,
     provided_confidence: Optional[float] = None,
-    device_id: Optional[str] = None
+    device_id: Optional[str] = None,
+    issue_types: Optional[str] = None,
 ):
     """Process issue in background for better performance"""
     start_time = time.time()
@@ -392,6 +393,8 @@ async def process_issue_background(
     issue_detected = False
     priority = "Medium"
     simi_data = None  # 🆕 SIMI Level 3: Full multi-issue analysis data
+    mimi_detected = []  # 🆕 MIMI: deduped issue list from multi-image analysis (2+ photos)
+    mimi_task = None
     # category, severity, issue_type are passed as arguments, but we'll ensure they are used/updated correctly
     
     try:
@@ -443,6 +446,10 @@ async def process_issue_background(
             from services.ai_service_v3 import get_ai_service_v3
             v3_service = get_ai_service_v3()
             consistency_task = asyncio.create_task(v3_service.validate_image_consistency(all_image_contents))
+            # 🆕 MIMI: analyze ALL photos together (deduped) in parallel — its result
+            # becomes authoritative for multi-image reports (overrides the single-image
+            # / pre_analyzed classification below).
+            mimi_task = asyncio.create_task(v3_service.analyze_multi_image(all_image_contents))
 
         # 🚀 PERF: Skip the redundant V3 vision classification when the client already
         # analyzed this image via /api/ai/analyze-image (pre_analyzed=True). The
@@ -463,9 +470,11 @@ async def process_issue_background(
                         detail_msg += f" (Detected: {', '.join(detected_issues[:3])})"
                     
                     logger.warning(f"❌ Image consistency FAILED for issue {issue_id}: {consistency_reason}")
-                    # Cancel the AI classification task since images don't match
+                    # Cancel the AI classification + MIMI tasks since images don't match
                     if ai_task and not ai_task.done():
                         ai_task.cancel()
+                    if mimi_task and not mimi_task.done():
+                        mimi_task.cancel()
                     raise HTTPException(status_code=400, detail=detail_msg)
                 else:
                     logger.info(f"✅ Image consistency PASSED for issue {issue_id} ({len(all_image_contents)} images)")
@@ -538,6 +547,50 @@ async def process_issue_background(
             except Exception:
                 pass
             logger.info(f"⚡ Reused client classification for {issue_id} (pre_analyzed, conf={confidence}%) — skipped redundant vision call")
+
+        # 🆕 MIMI override: for multi-image reports, the combined multi-image
+        # analysis (which saw EVERY photo) is authoritative — override the
+        # single-image / pre_analyzed classification with its deduped result.
+        if mimi_task:
+            try:
+                mimi_result = await mimi_task
+                if mimi_result and mimi_result.get("success"):
+                    mdata = mimi_result.get("data", {}) or {}
+                    ordered = mdata.get("ordered_issue_list", []) or []
+                    if ordered:
+                        def _norm(lbl):
+                            return str(lbl or "").strip().lower().replace(" / ", "_").replace("/", "_").replace(" ", "_")
+                        _seen = set()
+                        for it in ordered:
+                            key = _norm(it.get("issue") or it.get("label"))
+                            if key and key not in _seen:
+                                _seen.add(key)
+                                mimi_detected.append({"issue": key})
+                        primary = _norm(ordered[0].get("issue"))
+                        if primary:
+                            issue_type = primary
+                            try:
+                                from services.ai_service import load_json_data as _load_json_data
+                                _cat_map = await _load_json_data("issue_category_map.json")
+                                category = _cat_map.get(issue_type, category or "public")
+                            except Exception:
+                                pass
+                        mmeta = mdata.get("report_meta", {}) or {}
+                        fp = mmeta.get("final_priority") or severity or "Medium"
+                        severity = fp
+                        fp_l = str(fp).lower()
+                        if fp_l in ["high", "critical", "severe", "emergency"]:
+                            priority = "High"
+                        elif fp_l in ["low", "minor"]:
+                            priority = "Low"
+                        else:
+                            priority = "Medium"
+                        issue_detected = True
+                        logger.info(f"🆕 MIMI override for {issue_id}: type={issue_type}, severity={severity}, {len(mimi_detected)} issue(s) across all photos")
+            except asyncio.CancelledError:
+                pass
+            except Exception as mimi_err:
+                logger.warning(f"MIMI multi-image analysis failed (non-blocking, keeping single-image result): {mimi_err}")
 
         # Await Geocode if it's running
         city = ""
@@ -1020,6 +1073,31 @@ async def process_issue_background(
                 except (TypeError, ValueError):
                     location_geojson = None
 
+            # Multi-issue list. Prefer SIMI's analysis; otherwise fall back to the
+            # issue_types the client sent (a pre_analyzed submit skips SIMI, so
+            # without this the report would lose every issue except the primary).
+            simi_detected = simi_data.get("ordered_issue_list", []) if simi_data else []
+            client_detected = []
+            if issue_types:
+                try:
+                    _labels = json.loads(issue_types)
+                    if isinstance(_labels, list):
+                        _seen = set()
+                        for _l in _labels:
+                            _key = str(_l or "").strip().lower().replace("_", " ")
+                            if _key and _key not in _seen:
+                                _seen.add(_key)
+                                client_detected.append({"issue": str(_l)})
+                except Exception as _e:
+                    logger.warning(f"Could not parse issue_types '{issue_types}': {_e}")
+            # MIMI (multi-image) result wins when present — it saw every photo and
+            # is deduped; then SIMI; then the client's issue_types fallback.
+            final_detected_issues = mimi_detected or simi_detected or client_detected
+            final_total_issues = (
+                simi_data.get("total_issues", 1) if simi_data
+                else max(1, len(final_detected_issues))
+            )
+
             issue_doc = {
                 "_id": issue_id,
                 "address": final_address,
@@ -1031,6 +1109,11 @@ async def process_issue_background(
                 "longitude": longitude,
                 "issue_type": display_issue_type,
                 "primary_issue_type": issue_type,  # 🆕 Preserve the actual primary for internal use
+                # The resident's own submitted text (manual report input, or the
+                # edited summary from the review screen). Stored top-level so the
+                # report-detail screen shows the USER's words, not the AI scene
+                # description. Empty for pure photo reports with no typed text.
+                "description": (description or "").strip(),
                 "severity": severity,
                 "category": category,
                 "priority": priority,
@@ -1057,12 +1140,13 @@ async def process_issue_background(
                 "scenario": v4_scenario,
                 "internal_review_required": v4_review_required,
                 "image_count": len(all_image_contents) if all_image_contents else (1 if image_content else 0),
-                # 🆕 SIMI Level 3: Store ALL detected issues from single image
-                "detected_issues": simi_data.get("ordered_issue_list", []) if simi_data else [],
+                # 🆕 SIMI Level 3: Store ALL detected issues (SIMI, or the client's
+                # issue_types fallback for pre_analyzed submits that skip SIMI).
+                "detected_issues": final_detected_issues,
                 "known_issues": simi_data.get("known_issues", []) if simi_data else [],
                 "unknown_issues": simi_data.get("unknown_issues", []) if simi_data else [],
                 "scene_description": simi_data.get("issue_summary", "") if simi_data else "",
-                "total_detected_issues": simi_data.get("total_issues", 1) if simi_data else 1,
+                "total_detected_issues": final_total_issues,
             }
             
             # Store issue with optimized batch operation
@@ -1137,6 +1221,11 @@ async def create_issue_optimized(
     category: str = Form('public'),
     severity: str = Form('medium'),
     issue_type: str = Form('other'),
+    # All detected issue labels for a multi-issue report (JSON array of strings),
+    # e.g. ["fallen_tree","road_damage"]. The app sends this from the review
+    # screen; the first entry is the primary issue_type above. Used so the
+    # report-detail "N+ issues" chip/dropdown can list every detected issue.
+    issue_types: Optional[str] = Form(None),
     is_manual: Any = Form(False),
     auto_submit: bool = Form(False),
     # 🚀 PERF: When the client already ran /api/ai/analyze-image, it sends the
@@ -1241,9 +1330,10 @@ async def create_issue_optimized(
             is_manual=is_manual_bool,
             pre_analyzed=pre_analyzed_bool,
             provided_confidence=confidence,
-            device_id=device_id
+            device_id=device_id,
+            issue_types=issue_types,
         )
-        
+
         if not issue_doc:
             # Fallback if processing returned None (error case)
             logger.error(f"Processing returned None for {issue_id}")
@@ -1988,7 +2078,8 @@ async def create_bulk_issues(
                     description=issue_data.get("description", ""),
                     category=issue_data.get("category", "public"),
                     severity=issue_data.get("severity", "medium"),
-                    issue_type=issue_data.get("issue_type", "other")
+                    issue_type=issue_data.get("issue_type", "other"),
+                    issue_types=issue_data.get("issue_types"),
                 )
             
             issue_ids.extend(batch_ids)

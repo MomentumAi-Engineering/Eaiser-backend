@@ -3,6 +3,7 @@
   "garbage": "public",
   "broken_streetlight": "public",
   "road_damage": "public",
+  "road_debris": "public",
   "graffiti_vandalism": "public",
   "damaged_sidewalk": "public",
   "damaged_traffic_sign": "public",

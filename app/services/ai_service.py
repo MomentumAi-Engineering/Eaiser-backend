@@ -269,8 +269,26 @@ STEP 2: ISSUE IDENTIFICATION
 - **ROAD DAMAGE ERRORS (CRITICAL)**: 
   - If the image shows potholes, cracks, or broken asphalt, use "pothole" or "road_damage".
   - **DANGER**: Do NOT classify potholes or road work as "car_accident" just because there are orange cones, barriers, or high-viz vests. 
-  - ONLY use "car_accident" if you see an actual collison, a damaged car, wreckage, or a car crash. 
+  - ONLY use "car_accident" if you see an actual collison, a damaged car, wreckage, or a car crash.
   - Traffic cones often mean road maintenance or potholes, not an accident.
+- **WATER / FLOODING ERRORS (CRITICAL)**:
+  - A little water is NOT a flood. Rain puddles, water collected INSIDE potholes,
+    a wet/damp/shiny road surface, or small puddles after rain are NOT "flood"/"flooding".
+  - If the road is broken/cracked with potholes and some of those potholes simply
+    hold rainwater, the issue is "pothole" or "road_damage" — NOT "flood"/"flooding".
+  - ONLY use "flood"/"flooding" when water clearly COVERS or SUBMERGES a large part
+    of the road/area (continuous standing water blocking passage, an overflowing
+    drain/river, or water deep enough to stall vehicles). When unsure, prefer the
+    road-damage/pothole classification over flooding.
+- **ROAD DEBRIS**:
+  - Loose objects or scattered material on the roadway, shoulder, or median
+    (tire shreds, lumber, furniture, mattresses, fallen cargo, branches not from
+    a standing tree) → use "road_debris". Loose roadway debris that is NOT bagged
+    household trash is "road_debris", not "garbage".
+  - ALWAYS set severity "high" when the debris is a cargo strap, ratchet strap,
+    tie-down, rope, cable, twine, or netting (any long flexible item), anywhere on
+    the roadway, shoulder, or median — even if it looks small or off-roadway. These
+    get sucked into wheel wells, wrap around axles, or whip across windshields.
 - If the image shows a "normal" scene (e.g., a clean road, a happy dog, a normal building, a selfie):
 - Set "issue_type": "none"
 - Set "confidence": 0 to 60 (Low)

@@ -64,6 +64,40 @@
       }
     ]
   },
+  "road_debris": {
+    "tier": "known",
+    "default_owner": [
+      "public_works"
+    ],
+    "low": [
+      "public_works"
+    ],
+    "medium": [
+      "public_works"
+    ],
+    "high": [
+      "public_works",
+      "police"
+    ],
+    "emergency": [
+      "public_works",
+      "police",
+      "county_ema"
+    ],
+    "location_rules": [
+      {
+        "condition": "on_state_route",
+        "routes": [
+          "SR-96",
+          "SR-100"
+        ],
+        "add_recipients": [
+          "tdot"
+        ]
+      }
+    ],
+    "notes": "v6.1 Road Debris (renamed from Debris). Police added at High for scene-securing. Cargo straps/rope/netting always promote to High upstream (SIMI/MIMI). Loose roadway debris that is NOT bagged household trash routes here instead of garbage."
+  },
   "damaged_sidewalk": {
     "tier": "known",
     "default_owner": [
@@ -551,6 +585,13 @@
     "notes": "Fire/EMS primary (medical). Police for scene-securing. Resident calls 911."
   },
   "_aliases": {
+    "debris": "road_debris",
+    "scattered_debris": "road_debris",
+    "loose_debris": "road_debris",
+    "roadway_debris": "road_debris",
+    "tire_debris": "road_debris",
+    "tire_shred": "road_debris",
+    "cargo_strap": "road_debris",
     "asphalt_damage": "road_damage",
     "clogged_drain___sewer": "clogged_drain",
     "clogged_drain_sewer": "clogged_drain",

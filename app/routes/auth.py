@@ -260,6 +260,18 @@ async def signup(user: UserCreate, request: Request, background_tasks: Backgroun
         except Exception as tos_error:
             logger.error(f"Failed to dispatch TOS email for new user: {tos_error}")
 
+        # Send Welcome Email in background. Email/password signups previously got
+        # no welcome email (it only fired from /verify-email, which is skipped
+        # when verification is off) — unlike Google/Apple sign-in. Send it here so
+        # every new account is welcomed, and mark it so it isn't sent twice.
+        if not REQUIRE_EMAIL_VERIFICATION:
+            try:
+                from services.email_service import send_user_welcome_email
+                background_tasks.add_task(send_user_welcome_email, email, user.firstName)
+                await db["users"].update_one({"email": email}, {"$set": {"welcome_email_sent": True}})
+            except Exception as welcome_error:
+                logger.error(f"Failed to dispatch welcome email for new user: {welcome_error}")
+
         return {
             "message": "Account created successfully.",
             "email": email
@@ -534,6 +546,15 @@ async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTask
                 background_tasks.add_task(send_tos_email, email, name)
             except Exception as tos_error:
                 logger.error(f"Failed to send TOS email to Google user: {tos_error}")
+
+            # Send Welcome Email — ONLY for a newly created account (this is the
+            # signup case). Never sent on subsequent logins.
+            try:
+                from services.email_service import send_user_welcome_email
+                background_tasks.add_task(send_user_welcome_email, email, name)
+                await db["users"].update_one({"email": email}, {"$set": {"welcome_email_sent": True}})
+            except Exception as email_error:
+                logger.error(f"Failed to send welcome email to new Google user: {email_error}")
         else:
             # For existing Google users: backfill missing first_name/last_name/username
             backfill = {}
@@ -548,15 +569,6 @@ async def google_login(login_data: GoogleLogin, background_tasks: BackgroundTask
             if backfill:
                 await db["users"].update_one({"email": email}, {"$set": backfill})
                 user.update(backfill)
-            
-        # Send Welcome Email for new Google User if not sent before
-        if not user.get("welcome_email_sent", False):
-            try:
-                from services.email_service import send_user_welcome_email
-                await send_user_welcome_email(email, name)
-                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
-            except Exception as email_error:
-                logger.error(f"Failed to send welcome email to Google user: {email_error}")
 
         if not user.get("is_active", True):
             raise HTTPException(
@@ -665,10 +677,19 @@ async def apple_login(login_data: AppleLogin, background_tasks: BackgroundTasks)
                 background_tasks.add_task(send_tos_email, email_lower, first_name)
             except Exception as tos_error:
                 logger.error(f"Failed to send TOS email to Apple user: {tos_error}")
+
+            # Send Welcome Email — ONLY for a newly created account (signup case).
+            # Never sent on subsequent logins.
+            try:
+                from services.email_service import send_user_welcome_email
+                background_tasks.add_task(send_user_welcome_email, email_lower, user.get("first_name", ""))
+                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
+            except Exception as email_error:
+                logger.error(f"Failed to send welcome email to new Apple user: {email_error}")
         else:
             user_id = str(user["_id"])
             logger.info(f"🔓 Existing Apple User found: {email_lower}")
-            
+
             # 4. Backfill Logic: Update missing info if Apple provided it this time
             backfill = {}
             if not user.get("first_name") and first_name:
@@ -677,20 +698,11 @@ async def apple_login(login_data: AppleLogin, background_tasks: BackgroundTasks)
                 backfill["last_name"] = last_name
             if user.get("auth_provider") != "apple":
                 backfill["auth_provider"] = "apple"
-            
+
             if backfill:
                 logger.info(f"📝 Backfilling user data: {backfill}")
                 await db["users"].update_one({"_id": user["_id"]}, {"$set": backfill})
                 user.update(backfill)
-
-        # Send Welcome Email for new Apple User if not sent before
-        if not user.get("welcome_email_sent", False):
-            try:
-                from services.email_service import send_user_welcome_email
-                await send_user_welcome_email(email_lower, user.get("first_name", ""))
-                await db["users"].update_one({"_id": user["_id"]}, {"$set": {"welcome_email_sent": True}})
-            except Exception as email_error:
-                logger.error(f"Failed to send welcome email to Apple user: {email_error}")
 
         if not user.get("is_active", True):
             raise HTTPException(
@@ -855,6 +867,10 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             "email": user.get("email"),
             "role": user.get("role", "user"),
             "avatar": user.get("avatar"),
+            # Sign-in method (google / apple / None for email+password) so the
+            # profile screen can show "Login Preference: Google SSO" instead of
+            # the email row for SSO accounts.
+            "auth_provider": user.get("auth_provider"),
             "push_token": user.get("push_token"),
             "notifications": user.get("notifications", {"email": True, "push": False, "updates": True}),
             "email_verified": True,
@@ -1027,6 +1043,10 @@ async def accept_tos(current_user: dict = Depends(get_current_user), background_
 
 class DeleteAccountRequest(BaseModel):
     confirmation: str  # Must be "DELETE" to confirm
+    # Optional device id so we also delete reports submitted from this device
+    # (incl. anonymous/guest ones) — otherwise the device-claim on a future
+    # signup would resurrect them onto the new account.
+    device_id: Optional[str] = None
 
 @router.delete("/delete-account")
 async def delete_account(data: DeleteAccountRequest = Body(...), current_user: dict = Depends(get_current_user)):
@@ -1052,13 +1072,36 @@ async def delete_account(data: DeleteAccountRequest = Body(...), current_user: d
         user_id = str(user["_id"])
         logger.warning(f"🗑️ Account deletion initiated for user: {email} (ID: {user_id})")
 
-        # Delete user's issues/reports
-        issues_result = await db["issues"].delete_many({"user_email": email})
-        logger.info(f"  Deleted {issues_result.deleted_count} issues for {email}")
+        # Delete user's issues/reports. Match the email CASE-INSENSITIVELY (the
+        # dashboard query is case-insensitive, so an exact match could leave
+        # case-variant reports behind that reappear on re-login). Also delete any
+        # report carrying this device_id — including anonymous/guest ones —
+        # otherwise the device-claim on a future signup resurrects them.
+        import re as _re
+        email_pattern = {"$regex": f"^{_re.escape(email)}$", "$options": "i"}
+        delete_or = [
+            {"user_email": email_pattern},
+            {"reporter_email": email_pattern},  # email-me-a-copy address
+        ]
+        device_id = (data.device_id or "").strip()
+        if device_id:
+            delete_or.append({"device_id": device_id})
+        issues_result = await db["issues"].delete_many({"$or": delete_or})
+        logger.warning(f"  🗑️ Deleted {issues_result.deleted_count} issues for {email} (device_id={device_id or 'none'})")
 
         # Delete the user account
         await db["users"].delete_one({"_id": user["_id"]})
         logger.warning(f"✅ Account permanently deleted: {email}")
+
+        # Invalidate the cached issues feed so the just-deleted reports don't keep
+        # showing up (the global list is Redis-cached and would otherwise serve
+        # stale data until its TTL expires).
+        try:
+            from services.redis_service import get_redis_service
+            _redis = await get_redis_service()
+            await _redis.invalidate_issues_cache()
+        except Exception as cache_err:
+            logger.error(f"Failed to invalidate issues cache after deletion: {cache_err}")
 
         return {
             "message": "Your account and all associated data have been permanently deleted.",
