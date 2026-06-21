@@ -3,7 +3,7 @@
     "public_works": [
       {
         "name": "Fairview Public Works",
-        "email": "fairview-publicworks@momntumai-routing.dev",
+        "email": "chrishabh2002@gmail.com",
         "type": "public_works",
         "phone": "(615) 799-0353",
         "contact_name": "Todd Bratcher",
@@ -14,7 +14,7 @@
     "police": [
       {
         "name": "Fairview Police Department",
-        "email": "fairview-police@momntumai-routing.dev",
+        "email": "chrishabh100@gmail.com",
         "type": "police",
         "phone": "(615) 799-2431",
         "contact_name": "Chief Zack Humphreys",
@@ -25,7 +25,7 @@
     "fire": [
       {
         "name": "Fairview Fire Department",
-        "email": "fairview-fire@momntumai-routing.dev",
+        "email": "chrishabh1000@gmail.com",
         "type": "fire",
         "phone": "(615) 799-3473",
         "contact_name": "Chief Scott Hughes",
@@ -36,7 +36,7 @@
     "code_enforcement": [
       {
         "name": "Fairview Codes Enforcement",
-        "email": "fairview-codes@momntumai-routing.dev",
+        "email": "chrishabh07@gmail.com",
         "type": "code_enforcement",
         "phone": "(615) 387-6082",
         "contact_name": "Devon Halliburton",
@@ -47,7 +47,7 @@
     "building_inspector": [
       {
         "name": "Fairview Building Inspector",
-        "email": "fairview-building@momntumai-routing.dev",
+        "email": "rishav@momntumai.com",
         "type": "building_inspector",
         "phone": "(615) 387-6082",
         "contact_name": "Tom Ponder",
@@ -58,7 +58,7 @@
     "city_manager": [
       {
         "name": "Fairview City Manager",
-        "email": "fairview-citymgr@momntumai-routing.dev",
+        "email": "raj@momntumai.com",
         "type": "city_manager",
         "phone": "(615) 387-6084",
         "contact_name": "Tom Daugherty",
@@ -69,7 +69,7 @@
     "county_ema": [
       {
         "name": "Williamson County EMA",
-        "email": "todd.horton@williamsoncounty-tn.gov",
+        "email": "joel@momntumai.com",
         "type": "county_ema",
         "phone": "(615) 790-5754",
         "contact_name": "Todd Horton",
@@ -80,7 +80,7 @@
     "tdot": [
       {
         "name": "Tennessee DOT",
-        "email": "tdot-roadrepair@momntumai-routing.dev",
+        "email": "chrishabh2002@gmail.com",
         "type": "tdot",
         "phone": "833-836-8349",
         "contact_name": "TDOT Road Repair",
@@ -91,7 +91,7 @@
     "electric_utility": [
       {
         "name": "Middle Tennessee Electric",
-        "email": "mte-emergency@momntumai-routing.dev",
+        "email": "chrishabh100@gmail.com",
         "type": "electric_utility",
         "phone": "(615) 794-3561",
         "phone_emergency": "(877) 777-9111",
@@ -103,7 +103,7 @@
     "gas_utility": [
       {
         "name": "Spire Tennessee",
-        "email": "spire-emergency@momntumai-routing.dev",
+        "email": "chrishabh1000@gmail.com",
         "type": "gas_utility",
         "phone": "(800) 752-7504",
         "contact_name": "Spire Emergency",
@@ -114,7 +114,7 @@
     "water_utility": [
       {
         "name": "Water Authority of Dickson County",
-        "email": "wadc-emergency@momntumai-routing.dev",
+        "email": "chrishabh07@gmail.com",
         "type": "water_utility",
         "phone": "(615) 441-9511",
         "contact_name": "WADC Emergency",
@@ -143,7 +143,7 @@
     "general": [
       {
         "name": "MomntumAI Ops Queue",
-        "email": "ops-queue@momntumai-routing.dev",
+        "email": "eaiser@momntumai.com",
         "type": "general",
         "timezone": "UTC"
       }

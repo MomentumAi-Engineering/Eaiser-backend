@@ -83,9 +83,14 @@ async def setup_gov_account(
         raise HTTPException(status_code=403, detail="Only System Admins can provision new Super Admin accounts")
 
     db = await get_db()
-    # Check if exists in government_users
-    if await db["government_users"].find_one({"email": account.email.lower()}):
-        raise HTTPException(status_code=400, detail="Account with this email already exists")
+    # Uniqueness is scoped to (email + department + city): the same person may
+    # belong to multiple departments, but not be added twice to the same one.
+    if await db["government_users"].find_one({
+        "email": account.email.lower(),
+        "department": account.department,
+        "city": account.city,
+    }):
+        raise HTTPException(status_code=400, detail="Account with this email already exists in this department")
     
     # Generate temporary password
     temp_password = secrets.token_urlsafe(8)
