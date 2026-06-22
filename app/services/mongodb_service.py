@@ -198,11 +198,15 @@ async def init_db():
         for attempt in range(max_retries):
             try:
                 logger.info(f"🔄 Connection attempt {attempt + 1}/{max_retries}...")
-                
-                # Use a shorter timeout for ping to fail fast
+
+                # The ping wrapper timeout MUST be >= serverSelectionTimeoutMS,
+                # otherwise it kills a connection that is simply slow (this Atlas
+                # cluster currently needs ~15s for SRV discovery + TLS + primary
+                # election) and we burn every retry on false timeouts. Give the
+                # driver the full server-selection window to succeed.
                 await asyncio.wait_for(
                     client.admin.command('ping'),
-                    timeout=5.0 if env != "production" else 10.0
+                    timeout=20.0 if env != "production" else 32.0
                 )
                 
                 logger.info(f"✅ MongoDB ping successful on attempt {attempt + 1}")
@@ -377,9 +381,12 @@ async def get_db():
     if (now - _last_health_check) > _HEALTH_CHECK_INTERVAL:
         _last_health_check = now
         try:
+            # 10s (was 3s): this Atlas cluster's ping can take several seconds
+            # when busy; a 3s cap caused false "connection dropped" alarms that
+            # triggered needless reconnect storms.
             await asyncio.wait_for(
                 client.admin.command('ping'),
-                timeout=3.0
+                timeout=10.0
             )
         except Exception as e:
             logger.warning(f"⚠️ MongoDB health check failed: {e} — attempting reconnect...")

@@ -14,6 +14,40 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
+# ── "No real issue" / junk report detection ──────────────────────────────
+# When the AI can't find an actionable civic problem it classifies the report
+# as "No Visible Public Infrastructure Issue" (issue_detected=False). These —
+# along with not-a-civic-issue / unusable-image / unknown reports — must NOT be
+# shown to officials or routed to any authority. They are noise.
+NO_ISSUE_TYPES = {
+    "no visible public infrastructure issue",
+    "no visible issue",
+    "no issue",
+    "not a civic issue",
+    "no civic issue",
+    "image unusable",
+    "none",
+    "",
+}
+NO_ISSUE_STATUSES = {"no_issue_detected", "not_a_civic_issue", "image_unusable", "unknown_only"}
+
+
+def _is_no_issue(iss: dict) -> bool:
+    """True if this report has no real, actionable infrastructure issue."""
+    if not isinstance(iss, dict):
+        return False
+    itype = str(iss.get("issue_type") or "").strip().lower()
+    if itype in NO_ISSUE_TYPES:
+        return True
+    if str(iss.get("analysis_status") or "").strip().lower() in NO_ISSUE_STATUSES:
+        return True
+    # issue_detected can live top-level or nested under report / ai_evaluation
+    rep = iss.get("report") if isinstance(iss.get("report"), dict) else {}
+    for src in (iss, rep, rep.get("ai_evaluation") or {}, iss.get("ai_evaluation") or {}):
+        if isinstance(src, dict) and src.get("issue_detected") is False:
+            return True
+    return False
+
 @router.get("/reports")
 async def get_gov_reports(
     current_user: dict = Depends(get_current_user)
@@ -83,6 +117,9 @@ async def get_gov_reports(
     
     formatted_reports = []
     for iss in issues:
+        # 🚫 Hide "no real issue" / junk reports from the portal entirely.
+        if _is_no_issue(iss):
+            continue
         # Resolve risk/severity
         severity = iss.get("severity", "Medium")
         if isinstance(severity, dict): severity = severity.get("label", "Medium")

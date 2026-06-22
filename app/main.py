@@ -840,7 +840,14 @@ async def startup_event():
     logger.info("🚀 Starting Eaiser AI backend server...")
     try:
         if init_db:
-            await init_db()
+            # Do NOT block startup on the DB connection. This Atlas cluster can
+            # take 15-30s to connect; awaiting here keeps uvicorn from opening
+            # the port, so every request fails with ERR_CONNECTION_REFUSED until
+            # the DB is ready. Connect in the background instead — get_db()
+            # lazily establishes/awaits the connection on first use, so requests
+            # get a real HTTP response (and the port is up immediately).
+            asyncio.create_task(init_db())
+            logger.info("🔄 MongoDB connection started in background (non-blocking)")
     except Exception as e:
         logger.error(f"💥 Standard MongoDB Service initialization failed: {str(e)}")
 

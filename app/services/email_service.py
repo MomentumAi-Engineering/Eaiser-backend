@@ -428,6 +428,21 @@ async def send_formatted_ai_alert(report: Dict[str, Any], background: bool = Tru
     try:
         env = os.getenv("ENV", "development").lower()
         dry_run = os.getenv("EMAIL_DRY_RUN", "false").lower() == "true"
+
+        # 🚫 Never route a "no real issue" / junk report to any authority. When
+        # the AI finds nothing actionable it marks issue_detected=False and types
+        # the report "No Visible Public Infrastructure Issue" — those must be
+        # dropped here so officials' inboxes only ever see genuine incidents.
+        _ai_eval = report.get("ai_evaluation") or {}
+        _ov_type = str((report.get("issue_overview") or {}).get("type") or report.get("issue_type") or "").strip().lower()
+        _no_issue_types = {
+            "no visible public infrastructure issue", "no visible issue", "no issue",
+            "not a civic issue", "no civic issue", "image unusable", "none", "",
+        }
+        if _ai_eval.get("issue_detected") is False or _ov_type in _no_issue_types:
+            logger.info(f"⏭️ Skipping authority routing — no actionable issue (type={_ov_type!r}).")
+            return {"status": "skipped_no_issue", "recipients": []}
+
         formatted_content = report.get("formatted_report", "")
         # 🛟 Never send an empty body. Some report paths (V3 engine, no-issue /
         # manual-review, pre-check rejections) don't produce `formatted_report`,
