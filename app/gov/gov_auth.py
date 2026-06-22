@@ -191,9 +191,13 @@ async def list_gov_accounts(admin: dict = Depends(require_permission("view_autho
     query = {}
     
     if is_gov_super_admin:
-        # Gov Super Admin sees Operations Staff & Crew Members in their city
+        # Gov Super Admin sees Operations Managers, Operations Staff & Crew
+        # Members in their city. ops_manager MUST be included here — the
+        # uniqueness check on create scopes by (email + department + city)
+        # regardless of role, so leaving managers out of this list makes a
+        # provisioned manager invisible while still tripping "already exists".
         query["city"] = admin.get("org")
-        query["role"] = {"$in": ["operations", "crew_member"]}
+        query["role"] = {"$in": ["ops_manager", "operations", "crew_member"]}
     elif is_operations:
         # Operations Staff sees ONLY Crew Members in their specific city AND department
         query["city"] = admin.get("org")
