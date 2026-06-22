@@ -112,66 +112,42 @@ async def setup_gov_account(
     
     result = await db["government_users"].insert_one(new_user)
     
-    # Send Welcome Email
-    from services.email_service import send_email
-    subject = f"Welcome to EAiSER Government Portal - {account.city} {account.department}"
-    
-    # Professional Email Template
-    html_content = f"""
-    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 30px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-        <div style="text-align: center; margin-bottom: 25px;">
-            <h1 style="color: #2563eb; margin: 0; font-size: 24px;">EAiSER <span style="color: #1e293b;">Gov Portal</span></h1>
-            <p style="color: #64748b; font-size: 14px; margin-top: 5px;">Official Authority Activation</p>
-        </div>
-        
-        <div style="border-top: 2px solid #2563eb; padding-top: 20px;">
-            <p>Hello <strong>{account.name}</strong>,</p>
-            <p>An official administrative account has been provisioned for you to manage civic reports for:</p>
-            <div style="background-color: #f8fafc; padding: 12px 20px; border-radius: 8px; font-weight: 600; color: #1e293b; display: inline-block;">
-                📍 {account.city} — {account.department}
-            </div>
-            
-            <p style="margin-top: 25px;">Your secure access credentials are detailed below:</p>
-            
-            <div style="background: #f3f4f6; padding: 20px; border-radius: 12px; margin: 20px 0; border: 1px solid #e2e8f0;">
-                <p style="margin: 0 0 10px 0;"><strong>Portal URL:</strong> <a href="https://gov.eaiser.ai" style="color: #2563eb; text-decoration: none; font-weight: 600;">gov.eaiser.ai</a></p>
-                <p style="margin: 0 0 10px 0;"><strong>Access Email:</strong> <span style="font-family: monospace;">{account.email.lower()}</span></p>
-                <p style="margin: 0;"><strong>Temporary Key:</strong> <code style="background: #ffffff; padding: 4px 8px; border-radius: 6px; border: 1px dashed #cbd5e1; font-weight: 700; color: #0f172a;">{temp_password}</code></p>
-            </div>
-            
-            <p style="font-size: 14px; color: #64748b; background-color: #fffbeb; padding: 10px; border-left: 4px solid #f59e0b; border-radius: 4px;">
-                <strong>Security Protocol:</strong> You are required to change this temporary password upon your first successful authentication.
-            </p>
-        </div>
-        
-        <div style="margin-top: 35px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center;">
-            <p style="font-size: 13px; color: #94a3b8; margin: 0;">Thank you for your service to the community.</p>
-            <p style="font-size: 11px; color: #cbd5e1; margin-top: 10px;">EAiSER Administration Control Center • Internal Transmission</p>
-        </div>
-    </div>
-    """
-    
-    text_content = f"""
-Welcome to EAiSER Platform
+    # Send the official welcome email using the SHARED branded template
+    # (EAiSER logo header + MomntumAi social footer), not a one-off inline
+    # template. We AWAIT it instead of firing a silent background task so the
+    # response can report whether delivery actually succeeded — the silent
+    # background task is exactly what hid the "email never arrived" failure.
+    from services.email_service import send_gov_welcome_email
+    email_sent = False
+    try:
+        email_sent = await send_gov_welcome_email(
+            email=account.email.lower(),
+            name=account.name,
+            department=account.department,
+            city=account.city,
+            zip_code=account.zip_code,
+            temporary_password=temp_password,
+        )
+    except Exception as e:
+        logger.error(f"❌ Gov welcome email failed for {account.email.lower()}: {e}", exc_info=True)
 
-Hello {account.name},
+    if not email_sent:
+        logger.warning(
+            f"⚠️ Account {account.email.lower()} created but welcome email was NOT delivered. "
+            f"Check POSTMARK_API_TOKEN, verified sender, and that the Postmark stream is active."
+        )
 
-An official account has been created for you ("{target_role.replace('_', ' ').title()}") for {account.city} - {account.department}.
-
-Login via EAiSER App/Portal.
-Email: {account.email.lower()}
-Temporary Password: {temp_password}
-
-Please change your password after logging in.
-"""
-    
-    background_tasks.add_task(send_email, account.email.lower(), subject, html_content, text_content)
-    
     return {
         "success": True,
-        "message": "Government account created and welcome email sent.",
+        "message": (
+            "Government account created and welcome email sent."
+            if email_sent
+            else "Government account created. The welcome email could not be delivered — "
+                 "share the temporary password manually."
+        ),
         "account_id": str(result.inserted_id),
-        "temp_password": temp_password # Optional: return to admin UI for immediate reference
+        "email_sent": email_sent,
+        "temp_password": temp_password  # returned so the admin can hand it off immediately
     }
 
 @router.get("/accounts")
@@ -259,17 +235,37 @@ async def gov_login(creds: GovLoginRequest):
     Dedicated login for the EAiSER Government Portal.
     """
     db = await get_db()
-    user = await db["government_users"].find_one({"email": creds.email.lower()})
-    
-    if not user or not verify_password(creds.password, user["hashed_password"]):
-        logger.warning(f"Failed gov login attempt for {creds.email}")
+    req_platform = creds.platform or "unknown"
+
+    # The same person can hold accounts in several departments (uniqueness is
+    # scoped to email + department + city). A plain find_one({"email"}) would
+    # grab an arbitrary one — usually the oldest — and reject a perfectly valid
+    # password that belongs to a *different* one of those accounts. So match the
+    # password against EVERY account on this email and pick the right one.
+    candidates = await db["government_users"].find({"email": creds.email.lower()}).to_list(length=50)
+    matched = [u for u in candidates if u.get("hashed_password") and verify_password(creds.password, u["hashed_password"])]
+
+    if not matched:
+        logger.warning(f"Failed gov login attempt for {creds.email} ({len(candidates)} account(s) on this email)")
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    
+
+    # Prefer an ACTIVE account whose role fits the platform they're signing in
+    # from (portal vs mobile app), so e.g. a stale crew_member duplicate never
+    # blocks an Ops Manager logging into the web portal.
+    def _fits_platform(u):
+        r = str(u.get("role", "")).lower()
+        if req_platform == "app":
+            return r == "crew_member"
+        return r in ["operations", "super_admin", "ops_manager", "admin"]
+
+    active = [u for u in matched if u.get("is_active", True)]
+    pool = active or matched
+    user = next((u for u in pool if _fits_platform(u)), pool[0])
+
     if not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Account is deactivated. Please contact EAiSER Admin.")
-        
+
     role = user.get("role", "viewer")
-    req_platform = creds.platform or "unknown"
         
     # Enforce strict cross-platform boundaries with NO exceptions
     if role == "crew_member" and req_platform != "app":
