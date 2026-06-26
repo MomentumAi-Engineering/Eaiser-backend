@@ -30,6 +30,32 @@ class GovLoginRequest(BaseModel):
     email: str
     password: str
     platform: Optional[str] = None # 'app' or 'portal'
+    requested_role: Optional[str] = None  # which access door: admin / ops_manager / ops / crew
+
+
+# Strict access-door → allowed account roles. A login through a given door only
+# succeeds for an account whose role is in this set — so a Super Admin's
+# credentials entered in the Operations Manager door are rejected outright,
+# never issuing a token. Mirrors the frontend ROLE_OPTIONS.
+LOGIN_DOOR_ROLES = {
+    "admin": {"super_admin", "admin", "gov_admin", "access"},
+    "super_admin": {"super_admin", "admin", "gov_admin", "access"},
+    "ops_manager": {"ops_manager"},
+    "ops": {"operations"},
+    "operations": {"operations"},
+    "crew": {"crew_member"},
+    "crew_member": {"crew_member"},
+}
+
+DOOR_LABEL = {
+    "admin": "Super Admin",
+    "super_admin": "Super Admin",
+    "ops_manager": "Operations Manager",
+    "ops": "Operations Staff",
+    "operations": "Operations Staff",
+    "crew": "Field Crew",
+    "crew_member": "Field Crew",
+}
 
 class AccountStatusUpdate(BaseModel):
     account_id: str
@@ -248,6 +274,25 @@ async def gov_login(creds: GovLoginRequest):
     if not matched:
         logger.warning(f"Failed gov login attempt for {creds.email} ({len(candidates)} account(s) on this email)")
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # 🔒 STRICT ACCESS-DOOR ENFORCEMENT (backend, not bypassable).
+    # If the client said which door they used (Super Admin / Ops Manager / Ops
+    # Staff / Crew), only an account whose role belongs to that door may proceed.
+    # This stops e.g. a Super Admin's credentials opening anything via the
+    # Operations Manager door — no token is issued on a mismatch.
+    if creds.requested_role:
+        door = str(creds.requested_role).strip().lower()
+        allowed_roles = LOGIN_DOOR_ROLES.get(door)
+        if allowed_roles:
+            role_matched = [u for u in matched if str(u.get("role", "")).lower() in allowed_roles]
+            if not role_matched:
+                label = DOOR_LABEL.get(door, "this access level")
+                logger.warning(f"🚫 Door mismatch: {creds.email} tried {label} door but holds no matching role.")
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"These credentials are not authorized for {label}. Please use your correct access level.",
+                )
+            matched = role_matched
 
     # Prefer an ACTIVE account whose role fits the platform they're signing in
     # from (portal vs mobile app), so e.g. a stale crew_member duplicate never
