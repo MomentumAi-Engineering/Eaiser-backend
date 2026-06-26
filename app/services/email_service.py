@@ -16,6 +16,50 @@ logger = logging.getLogger("email_service")
 logger.setLevel(logging.INFO)
 
 # --------------------------------------------------------------------
+# 🚫 Non-deliverable / placeholder recipient domains
+# --------------------------------------------------------------------
+# Every hard bounce permanently damages the sending domain's reputation, which
+# is what pushes legitimate welcome emails into recipients' spam folders. The
+# bulk of our bounces come from emailing seeded "demo authority" addresses that
+# were never real mailboxes (e.g. fairview-fire@momntumai-routing.dev) plus the
+# reserved RFC-2606 test domains. We refuse to even attempt delivery to these,
+# so they never count against us at Postmark.
+#
+# Extend at runtime without a code change via EMAIL_BLOCKED_DOMAINS (a
+# comma-separated list, e.g. "foo.dev,bar.test").
+_DEFAULT_BLOCKED_DOMAINS = {
+    "momntumai-routing.dev",  # placeholder routing domain for un-onboarded demo authorities
+    "example.com", "example.org", "example.net",  # RFC-2606 reserved
+    "test", "localhost", "invalid", "local",       # reserved / non-routable TLDs
+}
+_ENV_BLOCKED = {
+    d.strip().lower()
+    for d in os.getenv("EMAIL_BLOCKED_DOMAINS", "").split(",")
+    if d.strip()
+}
+NON_DELIVERABLE_DOMAINS = _DEFAULT_BLOCKED_DOMAINS | _ENV_BLOCKED
+
+
+def is_deliverable_address(addr: str) -> bool:
+    """
+    True only if `addr` is syntactically valid AND not on a known
+    non-deliverable / placeholder domain. Used to skip sends that would
+    otherwise hard-bounce and erode sender reputation.
+    """
+    import re as _re
+    a = (addr or "").strip().lower()
+    if not _re.match(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$", a):
+        return False
+    domain = a.rsplit("@", 1)[-1]
+    if domain in NON_DELIVERABLE_DOMAINS:
+        return False
+    # Also block any *.<reserved-tld> (e.g. anything.test, anything.local)
+    tld = domain.rsplit(".", 1)[-1]
+    if tld in {"test", "example", "invalid", "localhost", "local"}:
+        return False
+    return True
+
+# --------------------------------------------------------------------
 # ✅ Shared branded email shell (EAiSER logo header + MomntumAi social footer)
 # All outbound emails wrap their content with build_branded_email() for one
 # consistent, professional look. Built by string concatenation (NOT f-strings)
@@ -139,24 +183,24 @@ async def send_email(
         logger.error("❌ Missing POSTMARK_API_TOKEN environment variable.")
         return False
 
-    # 🔒 Validate the recipient before hitting Postmark. Sending to malformed /
-    # junk addresses drives up the bounce rate, which is what got the stream
-    # paused. Skip anything that isn't a syntactically valid single address.
-    import re
+    # 🔒 Validate the recipient before hitting Postmark. Sending to malformed,
+    # junk, or known-placeholder addresses drives up the bounce rate, which is
+    # what got the stream paused and pushes real welcome emails into spam. Skip
+    # anything that isn't a deliverable address (valid syntax + real domain).
     addr = (to_email or "").strip()
-    if not re.match(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$", addr):
-        logger.warning(f"⚠️ Skipping send — invalid recipient email: {to_email!r}")
+    if not is_deliverable_address(addr):
+        logger.warning(f"⚠️ Skipping send — non-deliverable recipient (invalid or placeholder domain): {to_email!r}")
         return False
     to_email = addr
 
-    # 📋 Clean the CC list: keep only valid addresses, drop duplicates and the
-    # primary recipient so nobody is listed twice on the thread.
+    # 📋 Clean the CC list: keep only deliverable addresses, drop duplicates and
+    # the primary recipient so nobody is listed twice on the thread.
     cc_clean: List[str] = []
     if cc:
         seen = {to_email.lower()}
         for c in cc:
             c = (c or "").strip()
-            if c and c.lower() not in seen and re.match(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$", c):
+            if c and c.lower() not in seen and is_deliverable_address(c):
                 seen.add(c.lower())
                 cc_clean.append(c)
 

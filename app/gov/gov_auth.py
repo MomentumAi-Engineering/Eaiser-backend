@@ -439,44 +439,42 @@ async def reset_gov_password(
             "updated_at": datetime.utcnow()
         }}
     )
-    
-    # --- Prepare Professional Reset Email ---
-    from services.email_service import send_email
-    subject = f"EAiSER Portal — Emergency Access Reset: {user.get('city')}"
-    
-    html_content = f"""
-    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px; border: 1px solid #e5e7eb; border-radius: 20px; background-color: #ffffff;">
-        <div style="text-align: center; margin-bottom: 30px;">
-            <h1 style="color: #2563eb; margin: 0; font-size: 24px;">EAiSER <span style="color: #0f172a;">Gov Portal</span></h1>
-            <p style="color: #64748b; font-size: 13px; text-transform: uppercase; letter-spacing: 2px; margin-top: 5px;">Security Protocol</p>
-        </div>
-        
-        <div style="border-top: 2px solid #2563eb; padding-top: 25px;">
-            <p style="font-weight: 600; font-size: 18px; color: #0f172a;">Password Reset Executed</p>
-            <p style="color: #475569; line-height: 1.6;">Hello <strong>{user.get('name')}</strong>,</p>
-            <p style="color: #475569; line-height: 1.6;">Per your request or an administrative action, your security credentials for the <strong>{user.get('department')}</strong> have been reset.</p>
-            
-            <div style="background-color: #f8fafc; border: 1px dashed #cbd5e1; padding: 25px; border-radius: 12px; margin: 30px 0; text-align: center;">
-                <p style="margin: 0 0 10px 0; font-size: 12px; color: #64748b; text-transform: uppercase;">Your New Temporary Key</p>
-                <code style="font-size: 20px; color: #1e293b; font-weight: 700; background: #ffffff; padding: 5px 15px; border-radius: 6px;">{temp_password}</code>
-            </div>
-            
-            <p style="color: #475569; font-size: 14px;">Log in at <a href="https://gov.eaiser.ai" style="color: #2563eb; text-decoration: none; font-weight: 600;">gov.eaiser.ai</a> to finalize your access reactivation.</p>
-        </div>
-        
-        <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #f1f5f9; text-align: center;">
-            <p style="font-size: 11px; color: #94a3b8; margin: 0;">EAiSER Administration Control Center • Automated Transmission</p>
-        </div>
-    </div>
-    """
-    
-    text_content = f"Your EAiSER Government Portal password has been reset. New Temporary password: {temp_password}"
-    
-    background_tasks.add_task(send_email, user["email"], subject, html_content, text_content)
-    
+
+    # Re-send the SAME branded welcome email used at account creation (EAiSER
+    # logo header + temp password card + portal CTA) so a "resend credentials"
+    # action is indistinguishable from the original invite. We AWAIT it instead
+    # of firing a silent background task so the response can report whether
+    # delivery actually succeeded — that silent task is exactly what hid the
+    # "the welcome email never arrived" failures.
+    from services.email_service import send_gov_welcome_email
+    email_sent = False
+    try:
+        email_sent = await send_gov_welcome_email(
+            email=user["email"],
+            name=user.get("name", "Team Member"),
+            department=user.get("department", ""),
+            city=user.get("city", ""),
+            zip_code=user.get("zip_code", ""),
+            temporary_password=temp_password,
+        )
+    except Exception as e:
+        logger.error(f"❌ Gov credential resend failed for {user['email']}: {e}", exc_info=True)
+
+    if not email_sent:
+        logger.warning(
+            f"⚠️ Password reset for {user['email']} succeeded but the email was NOT delivered. "
+            f"Hand off the temporary password manually."
+        )
+
     return {
-        "success": True, 
-        "message": "Password reset successfully. Official has been notified.",
+        "success": True,
+        "message": (
+            "Credentials reset and welcome email re-sent."
+            if email_sent
+            else "Credentials reset. The welcome email could not be delivered — "
+                 "share the temporary password manually."
+        ),
+        "email_sent": email_sent,
         "temp_password": temp_password
     }
 
