@@ -282,69 +282,55 @@ async def create_indexes() -> None:
     if db is None:
         raise RuntimeError("Database is not initialized for index creation")
 
-    try:
-        issues = db["issues"]
-        users = db["users"]
-
-        # Index used by aggregation hint in get_issues()
-        await issues.create_index([("timestamp", -1)], name="timestamp_desc")
-
-        # Common filters and sorts
-        await issues.create_index([("status", 1), ("timestamp", -1)], name="status_timestamp")
-        await issues.create_index([("zip_code", 1)], name="zip_code")
-        await issues.create_index([("issue_type", 1)], name="issue_type")
-        await issues.create_index([("user_email", 1)], name="user_email")
-        # Compound index for my-issues query: filter by email + status, sort by timestamp
-        await issues.create_index(
-            [("user_email", 1), ("status", 1), ("timestamp", -1)],
-            name="user_email_status_timestamp"
-        )
-        await issues.create_index([("latitude", 1), ("longitude", 1)], name="lat_lon")
-
-        # Users collection unique email
+    async def _ix(coll, keys, **opts):
+        """Create one index, tolerating 'already exists (possibly under a
+        different name)'. A single conflict must never abort the rest — that bug
+        previously left most gov-portal indexes uncreated."""
         try:
-            await users.create_index([("email", 1)], name="email_unique", unique=True)
+            await db[coll].create_index(keys, **opts)
         except Exception as e:
-            # Code 85: IndexOptionsConflict - usually means it exists with different options or same options
-            if "IndexOptionsConflict" in str(e) or "already exists" in str(e) or getattr(e, "code", 0) == 85:
-                 logger.info(f"ℹ️ Index 'email_unique' already exists. Skipping.")
+            msg = str(e)
+            if getattr(e, "code", 0) == 85 or "already exists" in msg or "IndexOptionsConflict" in msg:
+                logger.debug(f"ℹ️ Index {opts.get('name')} on {coll} already present — skipping.")
             else:
-                 logger.warning(f"⚠️ Failed to create 'email_unique' index: {str(e)}")
+                logger.warning(f"⚠️ Index {opts.get('name')} on {coll} failed: {msg}")
 
-        # Authority Mapping Review indexes
-        authority_mapping_review = db["authority_mapping_review"]
-        await authority_mapping_review.create_index([("resolved", 1)], name="resolved")
-        await authority_mapping_review.create_index([("issue_type", 1)], name="issue_type")
-        await authority_mapping_review.create_index([("flagged_at", -1)], name="flagged_at_desc")
-        await authority_mapping_review.create_index([("case_id", 1)], name="case_id")
+    try:
+        # ── issues: core query paths ──
+        await _ix("issues", [("timestamp", -1)], name="timestamp_desc")
+        await _ix("issues", [("status", 1), ("timestamp", -1)], name="status_timestamp")
+        await _ix("issues", [("zip_code", 1)], name="zip_code")
+        await _ix("issues", [("issue_type", 1)], name="issue_type")
+        await _ix("issues", [("user_email", 1)], name="user_email")
+        await _ix("issues", [("user_email", 1), ("status", 1), ("timestamp", -1)], name="user_email_status_timestamp")
+        await _ix("issues", [("latitude", 1), ("longitude", 1)], name="lat_lon")
+        await _ix("users", [("email", 1)], name="email_unique", unique=True)
 
-        # 🚀 Gov Portal high-traffic indexes (added for 10K user scaling)
-        try:
-            # Dashboard filtering: severity + timestamp sort
-            await issues.create_index(
-                [("severity", 1), ("timestamp", -1)],
-                name="severity_timestamp", background=True
-            )
-            # Operations: status + priority sorting
-            await issues.create_index(
-                [("status", 1), ("priority", 1), ("timestamp", -1)],
-                name="status_priority_timestamp", background=True
-            )
-            # Analytics: category + status grouping
-            await issues.create_index(
-                [("category", 1), ("status", 1)],
-                name="category_status", background=True
-            )
-            # Notification tracking
-            await issues.create_index(
-                [("email_status", 1)],
-                name="email_status", background=True
-            )
-            logger.info("✅ Gov Portal scaling indexes created/verified")
-        except Exception as e:
-            logger.warning(f"⚠️ Gov Portal index creation issue (non-fatal): {e}")
+        # ── authority mapping review ──
+        await _ix("authority_mapping_review", [("resolved", 1)], name="resolved")
+        await _ix("authority_mapping_review", [("issue_type", 1)], name="issue_type")
+        await _ix("authority_mapping_review", [("flagged_at", -1)], name="flagged_at_desc")
+        await _ix("authority_mapping_review", [("case_id", 1)], name="case_id")
 
-        logger.info("✅ Core MongoDB indexes created/verified")
+        # ── 🚀 Gov Portal scaling indexes ──
+        await _ix("issues", [("severity", 1), ("timestamp", -1)], name="severity_timestamp", background=True)
+        await _ix("issues", [("status", 1), ("priority", 1), ("timestamp", -1)], name="status_priority_timestamp", background=True)
+        await _ix("issues", [("category", 1), ("status", 1)], name="category_status", background=True)
+        await _ix("issues", [("email_status", 1)], name="email_status", background=True)
+        # Multi-issue routing: portal $or matches detected_issues.issue
+        await _ix("issues", [("detected_issues.issue", 1)], name="detected_issue", background=True)
+        # Department-scoped report query: zip + issue_type + status
+        await _ix("issues", [("zip_code", 1), ("issue_type", 1), ("status", 1)], name="zip_issue_status", background=True)
+        # Crew "assigned to me" lookups
+        await _ix("issues", [("assigned_to", 1)], name="assigned_to", background=True)
+        # Departments read on EVERY portal request (find_one by city+name) + list (by city)
+        await _ix("gov_departments", [("city", 1), ("name", 1)], name="city_name", background=True)
+        # Login + accounts list hammer government_users by email / city+role / city+department
+        await _ix("government_users", [("email", 1)], name="email", background=True)
+        await _ix("government_users", [("city", 1), ("role", 1)], name="city_role", background=True)
+        await _ix("government_users", [("city", 1), ("department", 1)], name="city_department", background=True)
+
+        logger.info("✅ Core + Gov Portal MongoDB indexes created/verified")
     except Exception as e:
         logger.warning(f"⚠️ Index creation encountered an issue: {str(e)}")
 

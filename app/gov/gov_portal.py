@@ -48,13 +48,86 @@ def _is_no_issue(iss: dict) -> bool:
             return True
     return False
 
+
+# ── EAiSER-owned reports ──────────────────────────────────────────────────
+# A report only reaches a CITY department once the EAiSER admin has cleared and
+# dispatched it. Until then — while it is being processed, is pending review, is
+# screened out as no-issue, or was rejected — it belongs to EAiSER, NOT the
+# city. This is the "any doubt → EAiSER admin; no issue → EAiSER, never a
+# department" rule. After approval the status becomes submitted/accepted (and
+# later assigned/in_progress/resolved), none of which are listed here.
+EAISER_ONLY_STATUSES = {
+    "pending", "processing", "needs_review", "pending_review",
+    "screened_out", "dispatch_decision", "rejected", "declined",
+    "no_issue_detected", "not_a_civic_issue", "image_unusable", "unknown_only",
+}
+
+
+def _is_eaiser_only(iss: dict) -> bool:
+    """True if the report is still EAiSER's (under review / doubtful / junk / rejected) — not a city department's."""
+    if not isinstance(iss, dict):
+        return False
+    return str(iss.get("status") or "").strip().lower() in EAISER_ONLY_STATUSES
+
+
+# ── Issue-type alias expansion ────────────────────────────────────────────
+# Stored reports use issue_type VARIANTS the AI/older pipeline emitted (e.g.
+# "tree_fallen" instead of the canonical "fallen_tree"). A department owns the
+# canonical type, so without alias expansion those reports never match and stay
+# invisible even after being cleared. We build canonical → [all aliases] from
+# issue_department_map.json so a dept that owns "fallen_tree" also matches
+# "tree_fallen", "tree_down", etc.
+import os as _os
+import json as _json
+
+_CANON_TO_ALIASES = None
+
+
+def _load_canon_aliases():
+    global _CANON_TO_ALIASES
+    if _CANON_TO_ALIASES is not None:
+        return _CANON_TO_ALIASES
+    rev = {}
+    try:
+        path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "data", "issue_department_map.json")
+        with open(path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        for alias, canon in (data.get("_aliases") or {}).items():
+            rev.setdefault(str(canon), set()).add(str(alias))
+    except Exception as e:
+        logger.warning(f"⚠️ Could not load issue alias map: {e}")
+    # Roadkill variants the AI emits but the map doesn't alias → dead_animal.
+    for a in ("animal_carcass", "wildlife_hit", "animal_accident", "roadkill"):
+        rev.setdefault("dead_animal", set()).add(a)
+    _CANON_TO_ALIASES = rev
+    return rev
+
+
+def expand_issue_types(types):
+    """Each canonical type → {itself, Title Case display, all known aliases}."""
+    rev = _load_canon_aliases()
+    out = set()
+    for t in types or []:
+        t = str(t)
+        out.add(t)
+        out.add(t.replace("_", " ").title())
+        for a in rev.get(t, ()):  # aliases that resolve to this canonical type
+            out.add(a)
+            out.add(a.replace("_", " ").title())
+    return list(out)
+
 @router.get("/reports")
 async def get_gov_reports(
+    department: str = None,
     current_user: dict = Depends(get_current_user)
 ):
     """
     Fetch real reports (issues) tailored to the logged-in official.
     Filters by the Official's ZIP code and Department.
+
+    `department` (optional): a management user (super_admin / ops_manager) can
+    pass a department name to scope the result to that department's cleared
+    reports — used by the per-department dashboard drill-down.
     """
     if current_user.get("type") != "gov_portal":
         # Allow Super Admins from the main dashboard to view too if they want
@@ -91,26 +164,52 @@ async def get_gov_reports(
     clean_role = str(user_role).lower().strip()
     is_management = clean_role in ["super_admin", "ops_manager", "admin"] or str(user_dept).upper() in ["ALL", "CITY_MANAGEMENT", "MANAGEMENT"]
 
+    async def _allowed_types_for(dept_name):
+        """A department's issue_types (seeded source of truth, alias-expanded),
+        falling back to the legacy name→type map. Returns [] if the dept has no
+        configured types."""
+        if not dept_name:
+            return []
+        import re as _re
+        doc = await db["gov_departments"].find_one({
+            "city": current_user.get("org"),
+            "name": {"$regex": f"^{_re.escape(str(dept_name).strip())}$", "$options": "i"},
+        })
+        types = list(doc["issue_types"]) if (doc and doc.get("issue_types")) \
+            else normalized_map.get(str(dept_name).upper().strip(), [])
+        return expand_issue_types(types) if types else []
+
+    # Decide the scope: which department's issue_types to restrict to (None = no
+    # restriction) and whether to apply the EAiSER "cleared only" gate.
+    apply_gate = True
+    scope_types = None
     if clean_role == "crew_member":
-        # Crew members only see what is specifically assigned to them!
+        # Crew see only what's specifically assigned to them (already past review).
         query = {"assigned_to": current_user.get("email")}
-        # Ignore zip_code and issue_type restrictions for direct assignments
+        apply_gate = False
+        scope_types = None
     elif not is_management:
-        if user_dept:
-            # Case-insensitive lookup
-            lookup_dept = str(user_dept).upper().strip()
-            allowed_types = normalized_map.get(lookup_dept)
-            
-            if allowed_types:
-                query["issue_type"] = {"$in": allowed_types}
-            else:
-                logger.warning(f"⚠️ ISOLATION: Unmapped department '{user_dept}' for user {current_user.get('email')}")
-                query["issue_type"] = {"$in": []}
-        else:
-             query["issue_type"] = {"$in": []}
+        scope_types = await _allowed_types_for(user_dept)
+    elif department:
+        # Management drilling into ONE department's dashboard — show that
+        # department's cleared reports, exactly as a dept member would see.
+        scope_types = await _allowed_types_for(department)
     else:
-        # High-level roles see all in ZIP
-        pass
+        # Management overview — every report, full oversight, no gate.
+        scope_types = None
+        apply_gate = False
+
+    if clean_role != "crew_member" and scope_types is not None:
+        if scope_types:
+            # MULTI-ISSUE: match the primary issue_type OR any detected issue, so
+            # a department sees every report that involves one of its issue types.
+            query["$or"] = [
+                {"issue_type": {"$in": scope_types}},
+                {"detected_issues.issue": {"$in": scope_types}},
+            ]
+        else:
+            logger.warning(f"⚠️ No issue_types for department scope '{department or user_dept}'")
+            query["issue_type"] = {"$in": []}
 
     cursor = db["issues"].find(query).sort("timestamp", -1)
     issues = await cursor.to_list(length=100)
@@ -120,30 +219,80 @@ async def get_gov_reports(
         # 🚫 Hide "no real issue" / junk reports from the portal entirely.
         if _is_no_issue(iss):
             continue
+        # 🛡️ Doubtful / unreviewed / rejected reports stay with the EAiSER admin.
+        # The gate applies to department-scoped views (dept members, and a
+        # management user drilling into a specific department); the management
+        # OVERVIEW (no department) sees everything for full oversight.
+        if apply_gate and _is_eaiser_only(iss):
+            continue
         # Resolve risk/severity
         severity = iss.get("severity", "Medium")
         if isinstance(severity, dict): severity = severity.get("label", "Medium")
-        
+
+        report_id = iss.get("issue_id") or str(iss.get("_id"))
+        img_lookup_id = str(iss.get("_id") or report_id)
+
+        # ── Original citizen image(s) — exactly what was submitted from mobile.
+        # A report can carry one OR several images. Order of preference:
+        #   image_urls[] (multi Cloudinary) → image_url (single Cloudinary)
+        #   → image_id (single GridFS, served via /api/issues/{id}/image).
+        # GridFS path is relative (/api/...); the frontend resolves it against
+        # the API origin. Cloudinary entries are already absolute http URLs.
+        original_images = []
+        iu = iss.get("image_urls")
+        if isinstance(iu, list):
+            original_images = [u for u in iu if u]
+        if not original_images and iss.get("image_url"):
+            original_images = [iss.get("image_url")]
+        if not original_images and iss.get("image_id"):
+            original_images = [f"/api/issues/{img_lookup_id}/image"]
+
+        before_primary = original_images[0] if original_images else ""
+
         report = {
-            "id": iss.get("issue_id") or str(iss.get("_id")),
+            "id": report_id,
+            "report_id": iss.get("report_id"),
             "type": (iss.get("issue_type") or "Other").replace("_", " ").title(),
             "raw_type": iss.get("issue_type"), # Keep raw for exact matching if needed
+            # All issues the AI detected in this report (for multi-issue photos),
+            # so a department can see every relevant issue, not just the primary.
+            "detected_issues": [
+                (di.get("issue") if isinstance(di, dict) else di)
+                for di in (iss.get("detected_issues") or [])
+            ],
             "location": iss.get("address", "Unknown Location"),
+            "address": iss.get("address"),
             "location_zip": iss.get("zip_code"), # Required for frontend filtering
             "zip": iss.get("zip_code"),
             "status": iss.get("status", "open").title(),
-            "risk": severity.title(),
+            "raw_status": iss.get("status"),
+            "risk": str(severity).title(),
+            "severity": str(severity).title(),
+            "priority": iss.get("priority"),
+            "confidence": iss.get("confidence"),
             "date": iss.get("timestamp_formatted") or "Recently",
+            "timestamp": iss.get("timestamp"),
             "desc": iss.get("description") or iss.get("report", {}).get("issue_overview", {}).get("summary_explanation", "No description provided."),
-            "image": iss.get("image_url", ""),
+            "recommended_actions": iss.get("recommended_actions") or [],
+            "reporter": iss.get("user_email"),
+            # Before = original citizen submission (one or many). After = field
+            # evidence proving the work was done (uploaded by crew).
+            "images": original_images,                     # all "before" images
+            "image": before_primary,                       # first before (back-compat)
+            "media_url": before_primary,                   # first before (back-compat)
+            "resolution_media_url": iss.get("resolution_media_url"),  # "after" image
             "department": user_dept or "GENERAL",
             "coordinates": [iss.get("latitude", 0), iss.get("longitude", 0)],
             "assigned_to": iss.get("assigned_to"),
             "assigned_by": iss.get("assigned_by"),
             "assigned_at": iss.get("assigned_at"),
-            "media_url": iss.get("media_url") or iss.get("image_url", ""),
-            "resolution_media_url": iss.get("resolution_media_url"),
-            "resolved_by": iss.get("resolved_by")
+            "resolved_by": iss.get("resolved_by"),
+            # Verification workflow: an "after" photo (resolution_media_url) makes
+            # a report ready for ops review; verify → resolved, decline → reopen.
+            "verified_by": iss.get("verified_by"),
+            "verified_at": iss.get("verified_at"),
+            "decline_reason": iss.get("decline_reason"),
+            "declined_by": iss.get("declined_by"),
         }
         formatted_reports.append(report)
         
@@ -569,6 +718,13 @@ class StatusUpdate(BaseModel):
     resolved_by: Optional[str] = None
     resolved_at: Optional[str] = None
 
+VERIFY_ROLES = {"super_admin", "admin", "operations", "ops_manager"}
+
+
+def _can_verify(user: dict) -> bool:
+    return str(user.get("role") or "").lower() in VERIFY_ROLES
+
+
 @router.patch("/reports/{issue_id}/status")
 async def update_incident_status(
     issue_id: str,
@@ -576,7 +732,26 @@ async def update_incident_status(
     current_user: dict = Depends(get_current_user)
 ):
     db = await get_db()
-    
+
+    try:
+        query_id = ObjectId(issue_id)
+    except:
+        query_id = issue_id
+
+    # 🔒 Resolution gate: a report can ONLY be marked resolved after the crew has
+    # uploaded a verification ("after") photo AND an operations staff member (or
+    # above) approves it. Crew cannot self-resolve, and nothing resolves without
+    # the photo. Use the /verify endpoint for the happy path — this guards direct
+    # PATCH callers too.
+    if update.status in ("resolved", "completed"):
+        issue = await db["issues"].find_one({"_id": query_id})
+        if not issue:
+            raise HTTPException(status_code=404, detail="Report not found")
+        if not issue.get("resolution_media_url"):
+            raise HTTPException(status_code=400, detail="A crew verification photo is required before resolving. Ask the assigned crew to upload the 'after' photo.")
+        if not _can_verify(current_user):
+            raise HTTPException(status_code=403, detail="Only operations staff can verify and resolve a report.")
+
     update_data = {"status": update.status}
     if update.resolution_notes:
         update_data["resolution_notes"] = update.resolution_notes
@@ -584,18 +759,13 @@ async def update_incident_status(
         update_data["resolved_by"] = update.resolved_by
     if update.resolved_at:
         update_data["resolved_at"] = update.resolved_at
-        
-    try:
-        query_id = ObjectId(issue_id)
-    except:
-        query_id = issue_id
 
     await db["issues"].update_one(
         {"_id": query_id},
         {"$set": update_data}
     )
     
-    # If the issue is moving out of "assigned" (e.g. to pending_verification or resolved) 
+    # If the issue is moving out of "assigned" (e.g. to pending_verification or resolved)
     # we must free up the crew member so they are no longer stuck showing "BUSY"
     if update.status in ["resolved", "completed", "pending_verification"]:
         await db["government_users"].update_many(
@@ -605,8 +775,97 @@ async def update_incident_status(
                  "assignment": None
              }}
         )
-        
+
     return {"success": True}
+
+
+class DeclineRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.post("/reports/{issue_id}/verify")
+async def verify_resolution(
+    issue_id: str,
+    current_user: dict = Depends(require_permission("verify_resolution")),
+):
+    """
+    Operations staff approves the crew's verification photo → marks the report
+    RESOLVED. Requires the 'after' photo to exist; crew cannot self-verify.
+    """
+    db = await get_db()
+    try:
+        query_id = ObjectId(issue_id)
+    except Exception:
+        query_id = issue_id
+
+    issue = await db["issues"].find_one({"_id": query_id})
+    if not issue:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if not issue.get("resolution_media_url"):
+        raise HTTPException(status_code=400, detail="No crew verification photo to verify yet.")
+
+    await db["issues"].update_one(
+        {"_id": query_id},
+        {"$set": {
+            "status": "resolved",
+            "verified_by": current_user.get("name") or current_user.get("email"),
+            "verified_by_email": current_user.get("email"),
+            "verified_at": datetime.utcnow().isoformat(),
+            "resolved_at": issue.get("resolved_at") or datetime.utcnow().isoformat(),
+        }},
+    )
+    # Free up whoever was assigned.
+    await db["government_users"].update_many(
+        {"assignment": str(query_id)},
+        {"$set": {"status": "available", "assignment": None}},
+    )
+    return {"success": True, "status": "resolved"}
+
+
+@router.post("/reports/{issue_id}/decline")
+async def decline_resolution(
+    issue_id: str,
+    payload: DeclineRequest,
+    current_user: dict = Depends(require_permission("verify_resolution")),
+):
+    """
+    Operations staff rejects the crew's verification photo → reopens the report
+    (back to in_progress) so the crew can redo the work and re-upload. The
+    rejected photo is kept in history; the 'after' slot is cleared.
+    """
+    db = await get_db()
+    try:
+        query_id = ObjectId(issue_id)
+    except Exception:
+        query_id = issue_id
+
+    issue = await db["issues"].find_one({"_id": query_id})
+    if not issue:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    history = issue.get("rejected_resolutions") or []
+    if issue.get("resolution_media_url"):
+        history.append({
+            "url": issue.get("resolution_media_url"),
+            "declined_by": current_user.get("name") or current_user.get("email"),
+            "declined_at": datetime.utcnow().isoformat(),
+            "reason": (payload.reason or "").strip(),
+        })
+
+    await db["issues"].update_one(
+        {"_id": query_id},
+        {
+            "$set": {
+                "status": "in_progress",          # reopen for the crew to redo
+                "decline_reason": (payload.reason or "").strip(),
+                "declined_by": current_user.get("name") or current_user.get("email"),
+                "declined_at": datetime.utcnow().isoformat(),
+                "rejected_resolutions": history,
+            },
+            "$unset": {"resolution_media_url": "", "resolved_at": "", "resolved_by": ""},
+        },
+    )
+    return {"success": True, "status": "in_progress"}
 
 @router.post("/reports/{issue_id}/evidence")
 async def upload_evidence(

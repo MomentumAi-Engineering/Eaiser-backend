@@ -484,6 +484,9 @@ class DepartmentCreate(BaseModel):
     name: str
     description: str
     icon: Optional[str] = "🏗️"
+    # Canonical issue_types this department owns (drives report routing in the
+    # portal). Optional so older clients keep working.
+    issue_types: Optional[List[str]] = None
 
 @router.post("/departments")
 async def create_gov_department(
@@ -501,7 +504,7 @@ async def create_gov_department(
 
     db = await get_db()
     city = admin.get("org")
-    
+
     # Check if exists
     if await db["gov_departments"].find_one({"city": city, "name": dept.name}):
         raise HTTPException(status_code=400, detail="Department already exists in this city")
@@ -510,27 +513,128 @@ async def create_gov_department(
         "name": dept.name,
         "description": dept.description,
         "icon": dept.icon,
+        "issue_types": dept.issue_types or [],
         "city": city,
         "created_at": datetime.utcnow(),
         "created_by": admin.get("email")
     }
-    
+
     result = await db["gov_departments"].insert_one(new_dept)
     return {"success": True, "id": str(result.inserted_id)}
+
+@router.post("/departments/seed-defaults")
+async def seed_default_gov_departments(
+    admin: dict = Depends(require_permission("manage_authorities"))
+):
+    """
+    Idempotently create the standard set of city departments (Public Works,
+    Sanitation, Water, Electrical & Traffic, Code Enforcement, Fire, Police)
+    for the caller's city, each pre-mapped to the issue types it owns so
+    reports route correctly. Existing departments are kept; missing ones are
+    added and legacy ones get their issue_types back-filled.
+    """
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") == "super_admin"
+    is_system_admin = admin.get("type") in ["admin", "access"]
+    if not is_system_admin and not is_gov_super_admin:
+        raise HTTPException(status_code=403, detail="Only a city Super Admin can seed default departments")
+
+    city = admin.get("org")
+    if not city:
+        raise HTTPException(status_code=400, detail="No city associated with this account")
+
+    db = await get_db()
+    try:
+        from app.gov.default_departments import seed_default_departments
+    except ImportError:
+        from gov.default_departments import seed_default_departments
+    touched = await seed_default_departments(db, city, admin.get("email") or "system")
+    return {"success": True, "created_or_updated": touched, "count": len(touched)}
 
 @router.get("/departments")
 async def list_gov_departments(admin: dict = Depends(require_permission("view_authorities"))):
     """
     List all departments for the city.
+
+    For a city Super Admin we also lazily ensure the standard default
+    departments exist (idempotent) — this back-fills every already-existing city
+    on its next portal load, so admins don't have to seed manually. Ops/crew
+    reads never mutate.
     """
     db = await get_db()
     city = admin.get("org")
+
+    is_super = admin.get("type") == "gov_portal" and admin.get("role") == "super_admin"
+    is_system_admin = admin.get("type") in ["admin", "access"]
+    if city and (is_super or is_system_admin):
+        try:
+            try:
+                from app.gov.default_departments import seed_default_departments
+            except ImportError:
+                from gov.default_departments import seed_default_departments
+            await seed_default_departments(db, city, admin.get("email") or "system")
+        except Exception as e:
+            logger.warning(f"⚠️ Default-department auto-seed skipped for '{city}': {e}")
+
     cursor = db["gov_departments"].find({"city": city}).sort("name", 1)
     depts = await cursor.to_list(length=100)
     for d in depts:
         d["id"] = str(d["_id"])
         del d["_id"]
     return depts
+
+class DepartmentUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    issue_types: Optional[List[str]] = None
+
+@router.put("/departments/{dept_id}")
+async def update_gov_department(
+    dept_id: str,
+    update: DepartmentUpdate,
+    admin: dict = Depends(require_permission("manage_authorities"))
+):
+    """
+    Edit a department (name / description / color / issue_types). Scoped to the
+    caller's city. Only provided fields are changed.
+    """
+    is_gov_super_admin = admin.get("type") == "gov_portal" and admin.get("role") == "super_admin"
+    is_system_admin = admin.get("type") in ["admin", "access"]
+    if not is_system_admin and not is_gov_super_admin:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    db = await get_db()
+    city = admin.get("org")
+
+    target = await db["gov_departments"].find_one({"_id": ObjectId(dept_id), "city": city})
+    if not target:
+        raise HTTPException(status_code=404, detail="Department not found or unauthorized")
+
+    changes = {}
+    if update.name is not None and update.name.strip():
+        new_name = update.name.strip()
+        # Block renaming onto another existing department in the same city.
+        clash = await db["gov_departments"].find_one({
+            "city": city,
+            "name": new_name,
+            "_id": {"$ne": ObjectId(dept_id)},
+        })
+        if clash:
+            raise HTTPException(status_code=400, detail="Another department already uses that name")
+        changes["name"] = new_name
+    if update.description is not None:
+        changes["description"] = update.description.strip()
+    if update.icon is not None:
+        changes["icon"] = update.icon
+    if update.issue_types is not None:
+        changes["issue_types"] = update.issue_types
+
+    if not changes:
+        return {"success": True, "updated": 0}
+
+    changes["updated_at"] = datetime.utcnow()
+    await db["gov_departments"].update_one({"_id": ObjectId(dept_id)}, {"$set": changes})
+    return {"success": True, "updated": 1}
 
 @router.delete("/departments/{dept_id}")
 async def delete_gov_department(
@@ -543,10 +647,10 @@ async def delete_gov_department(
     db = await get_db()
     city = admin.get("org")
     result = await db["gov_departments"].delete_one({"_id": ObjectId(dept_id), "city": city})
-    
+
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Department not found or unauthorized")
-        
+
     return {"success": True}
 
 # --- Contractor Management --

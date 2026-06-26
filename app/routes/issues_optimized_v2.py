@@ -2534,75 +2534,110 @@ async def delete_issue_optimized(
         performance_metrics.record_request(time.time() - start_time, error=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete issue: {str(e)}")
 
+# Cache for a year + immutable: an issue image never changes once stored, so the
+# browser/CDN should never re-request it. This is the single biggest win for
+# "images load fast and don't hang" — the second view is instant.
+_IMG_CACHE = "public, max-age=31536000, immutable"
+
+
+def _cloudinary_thumb(url: str, w: int) -> str:
+    """Insert an on-the-fly resize/optimize transform into a Cloudinary URL.
+    Returns the URL unchanged if it isn't a Cloudinary /upload/ URL."""
+    if not w or "/upload/" not in url:
+        return url
+    tx = f"f_auto,q_auto,c_limit,w_{w}/"
+    return url.replace("/upload/", f"/upload/{tx}", 1)
+
+
+def _resize_jpeg(data: bytes, w: int) -> bytes:
+    """Downscale image bytes to width `w` (keeps aspect) and return JPEG bytes."""
+    import io
+    from PIL import Image
+    im = Image.open(io.BytesIO(data))
+    if im.mode not in ("RGB", "L"):
+        im = im.convert("RGB")
+    if w and im.width > w:
+        im = im.resize((w, max(1, round(im.height * w / im.width))), Image.LANCZOS)
+    out = io.BytesIO()
+    im.save(out, format="JPEG", quality=78, optimize=True, progressive=True)
+    return out.getvalue()
+
+
 @router.get("/issues/{issue_id}/image")
 @router.get("/issues/image/{issue_id}")
 async def get_issue_image_optimized(
     issue_id: str,
+    w: int = 0,   # optional width — request a thumbnail (e.g. ?w=400) for fast list/card loads
     _: None = Depends(rate_limit_dependency)
 ):
     """
-    🖼️ Serve issue evidence image from Cloudinary or GridFS
+    🖼️ Serve issue evidence image from Cloudinary or GridFS.
+
+    Pass ?w=<px> for a lightweight thumbnail (Cloudinary transforms on the CDN;
+    GridFS images are resized in-process via Pillow). All responses are cached
+    immutably for a year so repeat views are instant.
     """
     try:
-        from fastapi.responses import StreamingResponse, RedirectResponse
+        from fastapi.responses import StreamingResponse, RedirectResponse, Response
+        w = max(0, min(int(w or 0), 2000))  # clamp to a sane range
         mongodb_service = await get_optimized_mongodb_service()
         if not mongodb_service:
             raise HTTPException(status_code=503, detail="Database service unavailable")
-        
+
         issue = await mongodb_service.get_issue_by_id(issue_id)
         if not issue:
             raise HTTPException(status_code=404, detail="Issue not found")
-        
-        # ── Step 1: Check for Cloudinary/HTTP URLs ──
-        # Priority: image_url (single) → image_urls[0] (multi-image array)
-        # Skip self-referencing relative paths like "/api/issues/{id}/image"
+
+        # ── Step 1: Cloudinary/HTTP URLs → redirect (optionally CDN-resized) ──
         cloud_url = None
-        
-        # Check image_url field
         raw_url = issue.get("image_url", "")
         if raw_url and str(raw_url).startswith("http"):
             cloud_url = raw_url
-        
-        # Check image_urls array (multi-image Cloudinary uploads)
         if not cloud_url:
             image_urls_arr = issue.get("image_urls")
             if image_urls_arr and isinstance(image_urls_arr, list) and len(image_urls_arr) > 0:
                 first_url = str(image_urls_arr[0])
                 if first_url.startswith("http"):
                     cloud_url = first_url
-        
         if cloud_url:
-            return RedirectResponse(url=cloud_url, status_code=302)
-        
-        # ── Step 2: Try GridFS by image_id ──
+            return RedirectResponse(url=_cloudinary_thumb(cloud_url, w), status_code=302)
+
+        cache_headers = {"Cache-Control": _IMG_CACHE,
+                         "Content-Disposition": f"inline; filename=issue_{issue_id}.jpg"}
+
+        # ── Step 2: GridFS by image_id ──
         if issue.get("image_id"):
             image_stream = await mongodb_service.get_issue_image_stream(issue_id)
             if image_stream:
-                return StreamingResponse(
-                    image_stream,
-                    media_type="image/jpeg",
-                    headers={
-                        "Cache-Control": "public, max-age=86400",
-                        "Content-Disposition": f"inline; filename=issue_{issue_id}.jpg"
-                    }
-                )
-        
-        # ── Step 3: Fallback — search GridFS by filename pattern ──
+                if w:
+                    # Resize for a fast thumbnail; fall back to the raw stream on error.
+                    try:
+                        raw = image_stream if isinstance(image_stream, (bytes, bytearray)) else b"".join(
+                            [chunk async for chunk in image_stream]) if hasattr(image_stream, "__aiter__") \
+                            else await image_stream.read()
+                        return Response(content=_resize_jpeg(bytes(raw), w),
+                                        media_type="image/jpeg", headers=cache_headers)
+                    except Exception as thumb_err:
+                        logger.debug(f"Thumbnail resize failed for {issue_id}, serving full image: {thumb_err}")
+                        image_stream = await mongodb_service.get_issue_image_stream(issue_id)
+                return StreamingResponse(image_stream, media_type="image/jpeg", headers=cache_headers)
+
+        # ── Step 3: Fallback — GridFS by filename pattern ──
         if mongodb_service.fs:
             try:
                 gridout = await mongodb_service.fs.open_download_stream_by_name(f"issue_{issue_id}.jpg")
                 if gridout:
-                    return StreamingResponse(
-                        gridout,
-                        media_type="image/jpeg",
-                        headers={
-                            "Cache-Control": "public, max-age=86400",
-                            "Content-Disposition": f"inline; filename=issue_{issue_id}.jpg"
-                        }
-                    )
+                    if w:
+                        try:
+                            data = await gridout.read()
+                            return Response(content=_resize_jpeg(bytes(data), w),
+                                            media_type="image/jpeg", headers=cache_headers)
+                        except Exception:
+                            gridout = await mongodb_service.fs.open_download_stream_by_name(f"issue_{issue_id}.jpg")
+                    return StreamingResponse(gridout, media_type="image/jpeg", headers=cache_headers)
             except Exception as gridfs_err:
                 logger.debug(f"GridFS filename lookup failed for issue_{issue_id}.jpg: {gridfs_err}")
-        
+
         raise HTTPException(status_code=404, detail="Image not found for this issue")
     except HTTPException:
         raise

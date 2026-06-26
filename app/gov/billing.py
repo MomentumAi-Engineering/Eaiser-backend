@@ -275,8 +275,10 @@ async def submit_checkout(payload: CheckoutRequest, background_tasks: Background
     }
     await db["government_users"].insert_one(user_doc)
 
-    # 5. Seed default org data (departments, categories, etc.) — non-blocking
-    background_tasks.add_task(_seed_default_org_data, org_id, slug)
+    # 5. Seed default org data (departments, categories, etc.) — non-blocking.
+    # Pass cityName so the gov-portal departments (keyed by city) are created
+    # too, not just the legacy org-scoped mirror.
+    background_tasks.add_task(_seed_default_org_data, org_id, slug, payload.cityName, payload.email.lower())
 
     # 6. Decide payment route
     stripe_key = os.getenv("STRIPE_SECRET_KEY")
@@ -765,9 +767,22 @@ async def _create_stripe_checkout_session(payload: CheckoutRequest, slug: str, o
         return None
 
 
-async def _seed_default_org_data(org_id: str, slug: str):
+async def _seed_default_org_data(org_id: str, slug: str, city: str = "", created_by: str = "system"):
     try:
         db = await get_db()
+
+        # 1) Seed the departments the GOV PORTAL actually reads: gov_departments,
+        # keyed by `city` (= admin.org in the JWT). This is what makes the
+        # standard departments show up in City Setup and route reports on day
+        # one. Each carries canonical issue_types for report routing.
+        if city:
+            try:
+                from app.gov.default_departments import seed_default_departments
+            except ImportError:
+                from gov.default_departments import seed_default_departments
+            await seed_default_departments(db, city, created_by or "system")
+
+        # 2) Legacy org_departments mirror (kept for any org-scoped views).
         default_depts = [
             {"name": "Public Works", "color": "#D4A017", "categories": ["Potholes", "Street repair", "Signage"]},
             {"name": "Sanitation", "color": "#F97316", "categories": ["Trash", "Recycling", "Bulk pickup"]},
@@ -778,7 +793,7 @@ async def _seed_default_org_data(org_id: str, slug: str):
         await db["org_departments"].insert_many([
             {**d, "org_id": org_id, "org_slug": slug, "created_at": datetime.utcnow()} for d in default_depts
         ])
-        logger.info(f"Seeded default departments for org {slug}")
+        logger.info(f"Seeded default departments for org {slug} (city='{city}')")
     except Exception as e:
         logger.error(f"Failed to seed default org data for {slug}: {e}")
 

@@ -11,6 +11,9 @@ PERMISSIONS = {
 
     # Issue Actions
     "assign_issue": ["super_admin", "admin", "operations", "ops_manager"],
+    # Operations staff (and above) verify/decline a crew member's resolution
+    # photo before a report can be marked resolved. Crew CANNOT self-verify.
+    "verify_resolution": ["super_admin", "admin", "operations", "ops_manager"],
     "view_all_issues": ["super_admin", "admin"],
     "view_assigned_issues": ["super_admin", "admin", "team_member"],
     "approve_all": ["super_admin", "admin"],
