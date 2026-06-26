@@ -251,6 +251,10 @@ class Issue(BaseModel):
     known_issues: Optional[List[Dict]] = []
     unknown_issues: Optional[List[Dict]] = []
     scene_description: Optional[str] = ""
+    # The resident's own submitted/edited text. Stored top-level on the issue doc
+    # (see create endpoint) — must be declared here or extra="ignore" drops it and
+    # the report-detail screen falls back to the AI scene_description.
+    description: Optional[str] = ""
     total_detected_issues: Optional[int] = 1
     
     model_config = ConfigDict(

@@ -1011,6 +1011,21 @@ async def upload_avatar(file: UploadFile = File(...), current_user: dict = Depen
         logger.error(f"Avatar upload error: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload avatar")
 
+@router.post("/remove-avatar")
+async def remove_avatar(current_user: dict = Depends(get_current_user)):
+    """Remove the user's profile avatar (falls back to initials in the app)."""
+    try:
+        db = await get_db()
+        await db["users"].update_one(
+            {"email": current_user["sub"]},
+            {"$set": {"avatar": None}}
+        )
+        logger.info(f"🗑️ Avatar removed for {current_user['sub']}")
+        return {"message": "Avatar removed successfully"}
+    except Exception as e:
+        logger.error(f"Avatar remove error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove avatar")
+
 @router.post("/accept-tos")
 async def accept_tos(current_user: dict = Depends(get_current_user), background_tasks: BackgroundTasks = BackgroundTasks()):
     """Manually accept Terms of Service and trigger confirmation email."""
