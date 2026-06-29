@@ -37,7 +37,9 @@ PERMISSIONS = {
     "view_users": ["super_admin"],
     "view_team": ["super_admin", "admin"],
     "view_analytics": ["super_admin", "admin", "viewer", "mayor", "onboarding_specialist"],
-    "view_audit": ["super_admin", "admin"],
+    # Audit logs & security — IT Super Admin (SYSTEM) only, per the architecture.
+    # A City Super Admin runs city ops, not platform security auditing.
+    "view_audit": ["it_super_admin", "admin"],
     "view_mapping": ["super_admin", "admin"],
     "view_authorities": ["super_admin", "admin", "operations", "ops_manager", "department_admin", "onboarding_specialist"],
     "manage_authorities": ["super_admin", "admin", "ops_manager", "operations", "department_admin"],
@@ -72,15 +74,28 @@ PERMISSIONS = {
     "view_stats": ["super_admin", "admin", "viewer", "mayor", "onboarding_specialist"],
 }
 
+# City-OPERATION permissions the IT Super Admin (SYSTEM) does NOT inherit. Per the
+# architecture, the IT Super Admin handles platform tasks (create city, billing,
+# provisioning, audit/security) while the City Super Admin / City Manager runs the
+# city (routing config, report triage, contractor governance, war room). Keeping
+# these out of IT keeps the two roles cleanly separated.
+IT_SUPER_ADMIN_EXCLUDED = {
+    "view_routing_config", "manage_routing_config",
+    "assign_issue", "verify_resolution",
+    "view_all_issues", "approve_all", "approve_assigned",
+    "decline_all", "decline_assigned", "send_to_authority", "edit_report",
+    "view_warroom", "view_reviews",
+}
+
 def has_permission(user_role: str, permission: str) -> bool:
     if not user_role or not permission:
         return False
     allowed_roles = PERMISSIONS.get(permission, [])
     if user_role in allowed_roles:
         return True
-    # IT Super Admin (SYSTEM) inherits EVERY City Super Admin permission, plus the
-    # system-only ones (create_city_tenant) it's listed on directly above. So we
-    # only ever maintain super_admin in the matrix and IT inherits it here.
-    if user_role == "it_super_admin" and "super_admin" in allowed_roles:
+    # IT Super Admin (SYSTEM) inherits the City Super Admin's SYSTEM/shared
+    # permissions, but NOT the city-operation ones above — those belong to the
+    # City Super Admin. (create_city_tenant is listed for it_super_admin directly.)
+    if user_role == "it_super_admin" and "super_admin" in allowed_roles and permission not in IT_SUPER_ADMIN_EXCLUDED:
         return True
     return False

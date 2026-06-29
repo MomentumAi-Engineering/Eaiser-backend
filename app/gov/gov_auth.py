@@ -180,14 +180,16 @@ async def setup_gov_account(
             raise HTTPException(status_code=403, detail=f"Can only create Crew Members for your assigned department ({admin.get('dept')})")
         account.city = admin.get("org", account.city) # Force same city
 
-    # A CITY Super Admin can only create accounts for their own city. An IT Super
-    # Admin (SYSTEM) is platform-level and may provision into any city.
-    if role == "super_admin" and account.city != admin.get("org"):
+    # A CITY Super Admin (gov-portal) can only create accounts for their OWN city.
+    # System admins (type "admin") and IT Super Admins are platform-level and may
+    # provision into any city (incl. the SYSTEM scope) — so they're exempt here.
+    is_city_super_admin = admin.get("type") == "gov_portal" and role == "super_admin"
+    if is_city_super_admin and account.city != admin.get("org"):
         raise HTTPException(status_code=403, detail="You can only provision accounts for your own city")
 
     # A CITY Super Admin cannot mint another (City) Super Admin — only an IT Super
     # Admin / System can. (The IT Super Admin sits above the city Super Admin.)
-    if role == "super_admin" and target_role == "super_admin":
+    if is_city_super_admin and target_role == "super_admin":
         raise HTTPException(status_code=403, detail="Only an IT Super Admin can provision new City Super Admin accounts")
 
     db = await get_db()
