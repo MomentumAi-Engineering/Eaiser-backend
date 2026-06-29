@@ -124,22 +124,30 @@ def get_responsive_urls(url: str) -> Dict[str, str]:
     }
 
 
-async def upload_file_to_cloudinary(file: Optional[UploadFile] = None, contents: Optional[bytes] = None, folder: str = "chat_media") -> Optional[Dict]:
+async def upload_file_to_cloudinary(file: Optional[UploadFile] = None, contents: Optional[bytes] = None, folder: str = "chat_media", resource_type: Optional[str] = None) -> Optional[Dict]:
     """
     Uploads a file or bytes to Cloudinary and returns the URL and Type.
     🚀 Now includes CDN-optimized URLs for faster frontend loading.
+
+    Pass `resource_type="auto"` (or "raw") for non-image files such as PDFs —
+    Cloudinary then stores/delivers them correctly instead of treating them as
+    images.
     """
     if not os.getenv("CLOUDINARY_CLOUD_NAME"):
         logger.error("Cloudinary is not configured!")
         return None
 
     try:
-        resource_type = "image"
-        
+        # Caller-specified resource_type wins (e.g. "auto" for PDFs); otherwise
+        # infer from the file content type, defaulting to image.
+        if resource_type is None:
+            resource_type = "image"
+            if file:
+                file_type = file.content_type
+                resource_type = "video" if file_type and file_type.startswith("video") else "image"
+
         # Read the file data if file provided
         if file:
-            file_type = file.content_type
-            resource_type = "video" if file_type and file_type.startswith("video") else "image"
             contents = await file.read()
         
         if not contents:

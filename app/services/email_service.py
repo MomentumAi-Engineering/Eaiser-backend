@@ -758,6 +758,113 @@ async def notify_user_status_change(user_email: str, issue_id: str, status: str,
 
 ADMIN_DASHBOARD_URL = "https://www.eaiser.ai/admin"
 
+async def send_contractor_invite_email(
+    contractor_email: str,
+    company: str,
+    city: str,
+    department: str = "",
+    zip_code: str = "",
+    invited_by: str = "",
+    apply_url: str = "https://eaiser.ai/contractor/apply",
+) -> bool:
+    """Invite a contractor to APPLY to work for a city / department via the Field App."""
+    dept_line = f" — {department}" if department else ""
+    zip_html = (
+        f'<p style="color:#888;font-size:13px;">Service area ZIP: '
+        f'<strong style="color:#D4A017;">{zip_code}</strong></p>' if zip_code else ""
+    )
+    html = f"""
+    <div style="font-family:Inter,Arial,sans-serif;background:#0A0A0A;padding:32px;color:#fff;">
+      <div style="max-width:520px;margin:0 auto;background:#0F0F0D;border:1px solid rgba(255,255,255,0.08);border-radius:16px;overflow:hidden;">
+        <div style="background:#D4A017;padding:18px 24px;">
+          <span style="font-weight:900;color:#000;font-size:18px;letter-spacing:.5px;">EAiSER Civic</span>
+        </div>
+        <div style="padding:28px 24px;">
+          <h2 style="margin:0 0 8px;font-size:20px;color:#fff;">You're invited to apply as a contractor</h2>
+          <p style="color:#bbb;font-size:14px;line-height:1.6;">
+            <strong>{city}{dept_line}</strong> has invited <strong>{company or 'your company'}</strong>
+            to apply for city repair &amp; maintenance work through the EAiSER Contractor Field App.
+          </p>
+          <p style="color:#bbb;font-size:14px;line-height:1.6;">
+            Download the app, create your contractor account, and submit your compliance documents
+            (insurance, business license, W-9, bonding). Once your department head approves you,
+            you'll start receiving work orders.
+          </p>
+          {zip_html}
+          <a href="{apply_url}" style="display:inline-block;margin-top:12px;background:#D4A017;color:#000;font-weight:800;text-decoration:none;padding:12px 22px;border-radius:10px;font-size:13px;">Apply to work &rarr;</a>
+          <p style="color:#666;font-size:11px;margin-top:20px;">Invited by {invited_by or 'your city operations team'} &middot; EAiSER Civic</p>
+        </div>
+      </div>
+    </div>
+    """
+    text = (
+        f"{city}{dept_line} invited {company or 'your company'} to apply as a contractor on EAiSER. "
+        f"Download the EAiSER Contractor Field App, register, and submit your compliance docs "
+        f"(insurance, business license, W-9, bonding). Apply: {apply_url}"
+    )
+    try:
+        return await send_email(
+            contractor_email,
+            f"You're invited to work with {city} on EAiSER",
+            html,
+            text,
+        )
+    except Exception as e:
+        logger.error(f"contractor invite email failed for {contractor_email}: {e}")
+        return False
+
+
+async def send_resolution_closure_email(
+    user_email: str,
+    issue_type: str = "",
+    location: str = "",
+    before_url: Optional[str] = None,
+    after_url: Optional[str] = None,
+) -> bool:
+    """
+    Close the loop: tell the citizen their report is RESOLVED, with before/after
+    photo evidence of the completed work (EAiSER's key differentiator).
+    """
+    if not user_email:
+        return False
+    nice_type = (issue_type or "your reported issue").replace("_", " ").title()
+
+    imgs = ""
+    if before_url or after_url:
+        cells = ""
+        if before_url:
+            cells += (
+                '<td style="width:50%;padding:6px;text-align:center;vertical-align:top;">'
+                '<div style="font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:1px;margin-bottom:6px;">BEFORE</div>'
+                f'<img src="{before_url}" width="240" style="width:100%;max-width:240px;border-radius:10px;border:1px solid #e2e8f0;display:block;margin:0 auto;">'
+                '</td>'
+            )
+        if after_url:
+            cells += (
+                '<td style="width:50%;padding:6px;text-align:center;vertical-align:top;">'
+                '<div style="font-size:11px;font-weight:700;color:#16a34a;letter-spacing:1px;margin-bottom:6px;">AFTER</div>'
+                f'<img src="{after_url}" width="240" style="width:100%;max-width:240px;border-radius:10px;border:1px solid #e2e8f0;display:block;margin:0 auto;">'
+                '</td>'
+            )
+        imgs = f'<table role="presentation" width="100%" style="margin:18px 0;"><tr>{cells}</tr></table>'
+
+    inner = (
+        f'<h1 style="{EMAIL_STYLES["h1"]}">Your report is resolved ✅</h1>'
+        f'<p style="{EMAIL_STYLES["p"]}">Good news — the issue you reported (<strong>{nice_type}</strong>'
+        + (f' at {location}' if location else '') + ') has been completed and verified by the city.</p>'
+        + imgs +
+        f'<div style="{EMAIL_STYLES["box"]}">Thank you for helping improve your community. Above is the photo evidence of the completed work.</div>'
+        f'<p style="{EMAIL_STYLES["muted"]}">You\'re receiving this because you submitted this report through EAiSER.</p>'
+    )
+    html = build_branded_email("Report Resolved", inner, preheader=f"{nice_type} resolved")
+    text = f"Your report ({nice_type}) has been resolved and verified by the city. Thank you for using EAiSER."
+    try:
+        return await send_email(user_email, f"✅ Resolved: {nice_type}", html, text)
+    except Exception as e:
+        logger.error(f"Closure email failed for {user_email}: {e}")
+        return False
+
+
 async def send_admin_welcome_email(
     admin_email: str,
     admin_name: str,
@@ -1054,6 +1161,71 @@ async def send_tos_email(email: str, name: str) -> bool:
 # --------------------------------------------------------------------
 
 GOV_PORTAL_URL = "https://gov.eaiser.ai/login"
+
+async def send_city_manager_welcome_email(
+    email: str,
+    name: str,
+    city: str,
+    zip_code: str,
+    temporary_password: str,
+    provisioned_by: str = "EAiSER Global Operations",
+) -> bool:
+    """Welcome + credentials email for a newly provisioned City Manager (Operation
+    Manager) when a new city tenant is created by the IT Super Admin. Mirrors the
+    Super Admin credential email: Portal ID (email) + temporary password + login link."""
+    try:
+        subject = f"Your city is live — EAiSER Government Portal ({city})"
+        credential_card = (
+            '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:24px 26px;margin:24px 0;">'
+            '<div style="margin-bottom:18px;">'
+            '<span style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:700;">Portal ID / Email</span>'
+            '<span style="font-size:15px;color:#111;font-weight:700;">' + email.lower() + '</span>'
+            '</div>'
+            '<div>'
+            '<span style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:700;">Temporary Password</span>'
+            '<div style="background:#ffffff;border:1px dashed #cbd5e1;padding:12px 18px;border-radius:10px;font-family:Consolas,monospace;font-size:17px;color:#000;font-weight:800;display:table;margin-top:8px;">' + str(temporary_password) + '</div>'
+            '</div>'
+            '</div>'
+        )
+        steps = (
+            '<div style="background:#f0fdf4;border:1px solid #dcfce7;padding:18px 20px;border-radius:12px;margin:24px 0;">'
+            '<h4 style="margin:0 0 8px;color:#166534;font-size:14px;font-weight:800;">&#128640; Your first steps as City Manager</h4>'
+            '<ol style="margin:0;padding-left:18px;font-size:13px;color:#15803d;line-height:1.8;">'
+            '<li>Sign in and set a new password</li>'
+            '<li>Set up your departments + heads + staff</li>'
+            '<li>Configure routing (recipients, categories, Tier 0 floors)</li>'
+            '<li>Invite contractors and start receiving reports</li>'
+            '</ol></div>'
+        )
+        inner_html = (
+            '<h1 style="' + EMAIL_STYLES["h1"] + '">Welcome, City Manager</h1>'
+            '<div style="display:inline-block;padding:5px 14px;background:#fffbeb;border:1px solid #fde68a;color:#b45309;border-radius:50px;font-size:11px;font-weight:800;margin-bottom:18px;text-transform:uppercase;">Operation Manager &mdash; ' + str(city) + '</div>'
+            '<p style="' + EMAIL_STYLES["p"] + '">Hello <strong>' + str(name) + '</strong>,</p>'
+            '<p style="' + EMAIL_STYLES["p"] + '"><strong>' + str(city) + '</strong> is now live on the EAiSER Government Portal, and you have been provisioned as its <strong>City Manager (Operation Manager)</strong> by ' + str(provisioned_by) + '. Use the credentials below to sign in.</p>'
+            + credential_card
+            + steps
+            + '<div style="' + EMAIL_STYLES["btn_wrap"] + '">'
+            '<a href="' + GOV_PORTAL_URL + '" style="' + EMAIL_STYLES["btn"] + '">Sign in to your city &rarr;</a>'
+            '</div>'
+        )
+        html_content = build_branded_email(
+            "Your city is live on EAiSER",
+            inner_html,
+            preheader="Your City Manager credentials for the EAiSER Government Portal are ready.",
+        )
+        text_content = (
+            f"Welcome, City Manager — {city}\n\n"
+            f"Hello {name},\n{city} is now live on the EAiSER Government Portal. "
+            f"You are the City Manager (Operation Manager).\n\n"
+            f"Portal ID: {email.lower()}\nTemporary Password: {temporary_password}\n\n"
+            f"Sign in at: {GOV_PORTAL_URL}\n\n"
+            f"First steps: set a new password, set up departments + staff, configure routing, invite contractors."
+        )
+        return await send_email(email, subject, html_content, text_content)
+    except Exception as e:
+        logger.error(f"Failed to send city manager welcome email to {email}: {e}")
+        return False
+
 
 async def send_gov_welcome_email(
     email: str,

@@ -108,6 +108,166 @@ async def list_departments(zip_code: str):
 
 
 # ═══════════════════════════════════════════════════════════════
+# CITY ROUTING CONFIG OVERLAY
+# ───────────────────────────────────────────────────────────────
+# The sync routing engine (routing_engine_v5) routes off static JSON maps. The
+# gov portal's City Manager separately configures a per-city `routing_config`
+# (recipients, issue category table, location overrides, severity rules, Tier-0
+# floors) in MongoDB. These helpers layer that live config ON TOP of the engine
+# output so portal configuration actually influences dispatch — additively and
+# safely (engine recipients are never removed, only augmented).
+# ═══════════════════════════════════════════════════════════════
+
+def _norm(s) -> str:
+    return str(s or "").strip().lower().replace(" ", "_")
+
+
+async def _resolve_city_for_zip(db, zip_code: str):
+    """Map a ZIP to the gov tenant 'city' string used as routing_config.city."""
+    if not zip_code:
+        return None
+    org = await db["organizations"].find_one(
+        {"$or": [{"zip_codes": zip_code}, {"primary_zip": zip_code}]}
+    )
+    if org:
+        return org.get("legal_name") or org.get("city")
+    u = await db["government_users"].find_one({"zip_code": zip_code})
+    return u.get("city") if u else None
+
+
+async def apply_city_routing_config(db, zip_code, issues, address, result):
+    """Augment engine recipients with the City Manager's routing_config.
+
+    Adds: external recipients whose category matches a detected issue, issue
+    category-table routes, and location-override recipients (when the override
+    resolves to a configured recipient with an email). Surfaces Tier-0 floors
+    for emergencies. Only runs for LIVE, in-area reports. Best-effort.
+    """
+    try:
+        # Only layer config onto a normal, in-area, LIVE recipient list.
+        if result.get("phase") != "recipient_list_ready" or result.get("is_out_of_area"):
+            return result
+        if (result.get("city_state") or {}).get("status") != "LIVE":
+            return result
+
+        city = await _resolve_city_for_zip(db, zip_code)
+        if not city:
+            return result
+        cfg = await db["routing_config"].find_one({"city": city})
+        if not cfg:
+            return result
+
+        recipients = result.get("recipients", [])
+        existing = {(r.get("email", ""), r.get("type", "")) for r in recipients}
+        labels = [_norm(i.get("label")) for i in issues]
+        addr_l = (address or "").lower()
+        cfg_recipients = cfg.get("recipients", [])
+        by_name = {_norm(r.get("name")): r for r in cfg_recipients}
+        added = 0
+        advisory = []
+
+        def _add(rec, reason):
+            nonlocal added
+            email = rec.get("email")
+            name = rec.get("name")
+            if not email:
+                if name:
+                    advisory.append(name)  # no email → can't dispatch, surface as advisory
+                return
+            key = (email, rec.get("type") or "external")
+            if key in existing:
+                return
+            existing.add(key)
+            recipients.append({
+                "name": name,
+                "email": email,
+                "type": rec.get("type") or "external",
+                "issue_labels": [i.get("label") for i in issues],
+                "reason": reason,
+                "checked": True,
+                "locked": False,
+                "severity": "P2",
+                "source": "city_config",
+            })
+            added += 1
+
+        def _label_match(cat):
+            if not cat or cat in ("all", "global", "global_fallback_/_ops_queue"):
+                return True
+            return any(cat == l or cat in l or l in cat for l in labels)
+
+        # 1. External recipients by category (issue category → recipient)
+        for r in cfg_recipients:
+            if (r.get("type") or "external") == "internal":
+                continue
+            if _label_match(_norm(r.get("category"))):
+                _add(r, "city_config_category")
+
+        # 2. Issue category table: route_to a configured recipient name
+        for route in cfg.get("category_routes", []):
+            if _norm(route.get("issue_type")) in labels:
+                target = by_name.get(_norm(route.get("route_to")))
+                if target:
+                    _add(target, "city_config_category_route")
+                elif route.get("route_to"):
+                    advisory.append(route.get("route_to"))
+
+        # 3. Location overrides: address keyword → add recipient
+        for rule in cfg.get("location_overrides", []):
+            kw = str(rule.get("keyword", "")).lower()
+            if kw and kw in addr_l:
+                target = by_name.get(_norm(rule.get("add_recipient")))
+                if target:
+                    _add(target, "city_config_location")
+                elif rule.get("add_recipient"):
+                    advisory.append(rule.get("add_recipient"))
+
+        result["recipients"] = recipients
+        result["total_recipients"] = len(recipients)
+        result["city_config_applied"] = True
+        result["city"] = city
+        result["city_config_added"] = added
+        if advisory:
+            result["city_config_advisory_recipients"] = sorted({a for a in advisory if a})
+        if result.get("has_p0"):
+            tier0 = [t.get("name") for t in cfg.get("tier0_floors", []) if t.get("name")]
+            if tier0:
+                result["tier0_floors"] = tier0
+        return result
+    except Exception as e:
+        logger.warning(f"city routing config overlay failed for zip {zip_code}: {e}")
+        return result
+
+
+async def _log_routing_decision(db, issue_id, zip_code, address, issues, result):
+    """Persist an auditable routing decision (recipients + confidence + config flag)."""
+    try:
+        if result.get("phase") != "recipient_list_ready":
+            return
+        await db["routing_decisions"].insert_one({
+            "issue_id": issue_id,
+            "zip_code": zip_code,
+            "city": result.get("city"),
+            "address": address or "",
+            "issues": [
+                {"label": i.get("label"), "confidence": i.get("confidence"), "severity": i.get("severity")}
+                for i in issues
+            ],
+            "recipients": [
+                {"name": r.get("name"), "email": r.get("email"), "type": r.get("type"),
+                 "source": r.get("source", "ai_recommended"), "reason": r.get("reason")}
+                for r in result.get("recipients", [])
+            ],
+            "has_emergency": bool(result.get("has_p0")),
+            "city_config_applied": bool(result.get("city_config_applied")),
+            "city_config_added": result.get("city_config_added", 0),
+            "created_at": datetime.utcnow(),
+        })
+    except Exception as e:
+        logger.warning(f"routing_decisions log failed: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════
 # PHASE 5-6: BUILD RECIPIENTS
 # ═══════════════════════════════════════════════════════════════
 
@@ -170,6 +330,21 @@ async def build_recipients(req: BuildRecipientsRequest):
         user_continued_out_of_area=req.user_continued_out_of_area,
         address=req.address or "",
     )
+
+    # Layer the city's live routing_config on top of the engine output, then
+    # persist an auditable routing decision (recipients + confidence). Both are
+    # best-effort and never block the response.
+    try:
+        try:
+            from app.services.mongodb_service import get_db
+        except ImportError:
+            from services.mongodb_service import get_db
+        db = await get_db()
+        result = await apply_city_routing_config(db, req.zip_code, issues, req.address or "", result)
+        await _log_routing_decision(db, req.issue_id, req.zip_code, req.address or "", issues, result)
+    except Exception as overlay_err:
+        logger.warning(f"build-recipients overlay/log skipped: {overlay_err}")
+
     return result
 
 

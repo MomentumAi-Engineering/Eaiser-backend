@@ -162,7 +162,7 @@ async def get_gov_reports(
 
     # ROLE & DEPARTMENT ISOLATION
     clean_role = str(user_role).lower().strip()
-    is_management = clean_role in ["super_admin", "ops_manager", "admin"] or str(user_dept).upper() in ["ALL", "CITY_MANAGEMENT", "MANAGEMENT"]
+    is_management = clean_role in ["super_admin", "ops_manager", "admin", "mayor"] or str(user_dept).upper() in ["ALL", "CITY_MANAGEMENT", "MANAGEMENT"]
 
     async def _allowed_types_for(dept_name):
         """A department's issue_types (seeded source of truth, alias-expanded),
@@ -286,6 +286,13 @@ async def get_gov_reports(
             "assigned_to": iss.get("assigned_to"),
             "assigned_by": iss.get("assigned_by"),
             "assigned_at": iss.get("assigned_at"),
+            # Contractor workflow surface (assignment, quote, accept, escalation)
+            # so the portal can show quotes + escalation state.
+            "contractor_ref": iss.get("contractor_ref"),
+            "contractor_quote": iss.get("contractor_quote"),
+            "contractor_accepted": bool(iss.get("contractor_accepted")),
+            "contractor_before_url": iss.get("contractor_before_url"),
+            "escalated_to_dept_head": bool(iss.get("escalated_to_dept_head")),
             "resolved_by": iss.get("resolved_by"),
             # Verification workflow: an "after" photo (resolution_media_url) makes
             # a report ready for ops review; verify → resolved, decline → reopen.
@@ -647,9 +654,20 @@ async def assign_incident(
             contractor = await db["gov_contractors"].find_one({"_id": ObjectId(payload.staff_email)})
         except:
             pass
-            
+
     if not staff and not contractor:
         raise HTTPException(status_code=404, detail=f"Target {payload.staff_email} not found. Is it a valid crew/contractor?")
+
+    # Only APPROVED contractors may receive work orders (architecture: "assign to
+    # APPROVED contractors"). A pending / escalated / rejected contractor is
+    # blocked server-side even if a stale UI offered them — the dropdown filters
+    # too, but this gate must not be bypassable.
+    if contractor and str(contractor.get("approval_status", "")).lower() != "approved":
+        raise HTTPException(
+            status_code=403,
+            detail=f"{contractor.get('company', 'This contractor')} is not approved yet "
+                   f"(status: {contractor.get('approval_status', 'pending')}). Approve them before assigning work.",
+        )
 
     # 3. Apply assignment transformation
     if contractor:
@@ -659,7 +677,10 @@ async def assign_incident(
             "assigned_by": current_user.get("email"),
             "assigned_at": datetime.utcnow(),
             "last_updated_at": datetime.utcnow().isoformat(),
-            "contractor_ref": str(contractor["_id"])
+            "contractor_ref": str(contractor["_id"]),
+            # Also store the contractor's email so the work-order link survives the
+            # contractor being re-created with a new _id (id can churn; email is stable).
+            "contractor_email": contractor.get("email"),
         }
     else:
         update_data = {
@@ -706,9 +727,17 @@ async def assign_incident(
     
     logger.info(f"✅ DEPLOYMENT: Incident {payload.issue_id} assigned to {payload.staff_email} by {current_user.get('email')}")
     
+    # `staff` is None when the target is a contractor — derive the name safely.
+    if contractor:
+        assignee_name = f"{contractor.get('company', 'Contractor')} (Contractor)"
+    elif staff:
+        assignee_name = staff.get("name", payload.staff_email)
+    else:
+        assignee_name = payload.staff_email
+
     return {
-        "success": True, 
-        "message": f"Successfully assigned to {staff.get('name', payload.staff_email)}",
+        "success": True,
+        "message": f"Successfully assigned to {assignee_name}",
         "assignment": update_data
     }
 
@@ -718,7 +747,7 @@ class StatusUpdate(BaseModel):
     resolved_by: Optional[str] = None
     resolved_at: Optional[str] = None
 
-VERIFY_ROLES = {"super_admin", "admin", "operations", "ops_manager"}
+VERIFY_ROLES = {"super_admin", "admin", "operations", "ops_manager", "department_admin"}
 
 
 def _can_verify(user: dict) -> bool:
@@ -812,6 +841,8 @@ async def verify_resolution(
             "verified_by_email": current_user.get("email"),
             "verified_at": datetime.utcnow().isoformat(),
             "resolved_at": issue.get("resolved_at") or datetime.utcnow().isoformat(),
+            # Step 7 of the Resolution Loop: evidence is immutable once resolved.
+            "evidence_locked": True,
         }},
     )
     # Free up whoever was assigned.
@@ -819,7 +850,58 @@ async def verify_resolution(
         {"assignment": str(query_id)},
         {"$set": {"status": "available", "assignment": None}},
     )
+
+    # Step 6 of the Resolution Loop: close the loop with the citizen — send a
+    # resolution notification with the before/after photo evidence.
+    citizen_email = issue.get("user_email")
+    if citizen_email:
+        iu = issue.get("image_urls")
+        before_url = (iu[0] if isinstance(iu, list) and iu else None) or issue.get("image_url")
+        after_url = issue.get("resolution_media_url")
+        try:
+            from services.email_service import send_resolution_closure_email
+            await send_resolution_closure_email(
+                citizen_email,
+                issue.get("issue_type", ""),
+                issue.get("address", ""),
+                before_url,
+                after_url,
+            )
+            await db["issues"].update_one({"_id": query_id}, {"$set": {"citizen_notified_at": datetime.utcnow().isoformat()}})
+        except Exception as e:
+            logger.warning(f"⚠️ Citizen closure notification failed for {citizen_email}: {e}")
+
     return {"success": True, "status": "resolved"}
+
+
+@router.post("/reports/{issue_id}/escalate")
+async def escalate_report(
+    issue_id: str,
+    current_user: dict = Depends(require_permission("assign_issue")),
+):
+    """
+    Staff escalates a report to the Department Head for attention (diagram:
+    "Escalate to Dept Head"). Flags the report; Dept Heads can filter on it.
+    """
+    db = await get_db()
+    try:
+        query_id = ObjectId(issue_id)
+    except Exception:
+        query_id = issue_id
+
+    issue = await db["issues"].find_one({"_id": query_id})
+    if not issue:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    await db["issues"].update_one(
+        {"_id": query_id},
+        {"$set": {
+            "escalated_to_dept_head": True,
+            "escalated_by": current_user.get("email"),
+            "escalated_at": datetime.utcnow().isoformat(),
+        }},
+    )
+    return {"success": True, "escalated": True}
 
 
 @router.post("/reports/{issue_id}/decline")
@@ -842,6 +924,8 @@ async def decline_resolution(
     issue = await db["issues"].find_one({"_id": query_id})
     if not issue:
         raise HTTPException(status_code=404, detail="Report not found")
+    if issue.get("evidence_locked") or str(issue.get("status", "")).lower() == "resolved":
+        raise HTTPException(status_code=400, detail="This report is resolved — its evidence is locked and can't be changed.")
 
     history = issue.get("rejected_resolutions") or []
     if issue.get("resolution_media_url"):
@@ -875,7 +959,17 @@ async def upload_evidence(
 ):
     from services.cloudinary_service import upload_file_to_cloudinary
     db = await get_db()
-    
+
+    # Evidence lock: once a report is resolved, its before/after evidence is
+    # immutable — reject any further upload.
+    try:
+        _guard_id = ObjectId(issue_id)
+    except Exception:
+        _guard_id = issue_id
+    _existing = await db["issues"].find_one({"_id": _guard_id})
+    if _existing and (_existing.get("evidence_locked") or str(_existing.get("status", "")).lower() == "resolved"):
+        raise HTTPException(status_code=400, detail="This report is resolved — its evidence is locked.")
+
     contents = await file.read()
     result = await upload_file_to_cloudinary(contents=contents, folder="report_evidence")
     

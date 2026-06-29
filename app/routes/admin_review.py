@@ -599,106 +599,83 @@ async def get_dashboard_analytics(admin: dict = Depends(get_admin_user)):
             }
         ]
         
-        facet_results = await collection.aggregate(pipeline).to_list(1)
+        # ── All heavy work runs as independent aggregations executed CONCURRENTLY ──
+        # Previously this endpoint fired ~18 SERIAL queries — most damaging was a
+        # 7-day loop of 14 sequential count_documents calls. Now it's a handful of
+        # aggregations run in parallel (one wall-clock scan-ish). $convert safely
+        # normalizes string|date|null timestamps without throwing on bad data.
+        import asyncio
+        seven_days_ago = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        one_hour_ago = now - timedelta(hours=1)
+
+        resolution_pipeline = [
+            {"$match": {"status": {"$in": ["approved", "submitted", "resolved", "completed"]}}},
+            {"$addFields": {
+                "review_date": {"$convert": {"input": "$admin_review.timestamp", "to": "date", "onError": None, "onNull": None}},
+                "submit_date": {"$convert": {"input": "$timestamp", "to": "date", "onError": None, "onNull": None}},
+            }},
+            {"$match": {"review_date": {"$ne": None}, "submit_date": {"$ne": None}}},
+            {"$addFields": {"resolution_hours": {"$divide": [{"$subtract": ["$review_date", "$submit_date"]}, 3600000]}}},
+            {"$match": {"resolution_hours": {"$gt": 0}}},
+            {"$group": {"_id": None, "avg_hours": {"$avg": "$resolution_hours"}, "count": {"$sum": 1}}},
+        ]
+        weekly_pipeline = [
+            {"$addFields": {"_ts": {"$convert": {"input": "$timestamp", "to": "date", "onError": None, "onNull": None}}}},
+            {"$match": {"_ts": {"$gte": seven_days_ago}}},
+            {"$group": {"_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$_ts"}}, "count": {"$sum": 1}}},
+        ]
+        recent_pipeline = [
+            {"$addFields": {"_ts": {"$convert": {"input": "$timestamp", "to": "date", "onError": None, "onNull": None}}}},
+            {"$match": {"_ts": {"$gte": one_hour_ago}}},
+            {"$count": "n"},
+        ]
+        approved_today_pipeline = [
+            {"$match": {"status": {"$in": ["approved", "submitted"]}}},
+            {"$addFields": {"_rev": {"$convert": {"input": "$admin_review.timestamp", "to": "date", "onError": None, "onNull": None}}}},
+            {"$match": {"_rev": {"$gte": today_start}}},
+            {"$count": "n"},
+        ]
+
+        async def _agg(p, n):
+            try:
+                return await collection.aggregate(p, allowDiskUse=True).to_list(n)
+            except Exception as e:
+                logger.warning(f"Analytics sub-aggregation failed: {e}")
+                return []
+
+        facet_results, res_result, weekly_rows, recent_res, today_res = await asyncio.gather(
+            _agg(pipeline, 1),
+            _agg(resolution_pipeline, 1),
+            _agg(weekly_pipeline, 32),
+            _agg(recent_pipeline, 1),
+            _agg(approved_today_pipeline, 1),
+        )
+
         res = facet_results[0] if facet_results else {}
-        counts = res.get("counts", [{}])[0]
-        
+        counts = (res.get("counts") or [{}])[0] if res.get("counts") else {}
         total_count = counts.get("total", 0)
         pending_count = counts.get("pending", 0)
         approved_count = counts.get("approved", 0)
         rejected_count = counts.get("rejected", 0)
         resolved_count = counts.get("resolved", 0)
-        approved_today = counts.get("approved_today", 0)
         high_confidence_count = counts.get("high_conf", 0)
-        
-        # Fallback for approved_today since timestamp might be string or Date
-        if approved_today == 0 and approved_count > 0:
-             # re-check specifically with string ISO format if aggregate check (as Date) might have missed it
-             approved_today = await collection.count_documents({
-                 "status": {"$in": ["approved", "submitted"]},
-                 "admin_review.timestamp": {"$gte": today_start.isoformat()}
-             })
+        approved_today = today_res[0].get("n", 0) if today_res else 0
 
-        # --- Resolution Time & Weekly Trends (Specific optimized pipelines) ---
-        avg_resolution_hours = 0
-        try:
-            resolution_pipeline = [
-                {"$match": {
-                    "status": {"$in": ["approved", "submitted", "resolved", "completed"]},
-                    "admin_review.timestamp": {"$exists": True},
-                    "timestamp": {"$exists": True}
-                }},
-                {"$addFields": {
-                    "review_date": {
-                        "$cond": {
-                            "if": {"$eq": [{"$type": "$admin_review.timestamp"}, "string"]},
-                            "then": {"$toDate": "$admin_review.timestamp"},
-                            "else": "$admin_review.timestamp"
-                        }
-                    },
-                    "submit_date": {
-                        "$cond": {
-                            "if": {"$eq": [{"$type": "$timestamp"}, "string"]},
-                            "then": {"$toDate": "$timestamp"},
-                            "else": "$timestamp"
-                        }
-                    }
-                }},
-                {"$addFields": {
-                    "resolution_hours": {
-                        "$divide": [
-                            {"$subtract": ["$review_date", "$submit_date"]},
-                            3600000  # ms to hours
-                        ]
-                    }
-                }},
-                {"$match": {"resolution_hours": {"$gt": 0}}},
-                {"$group": {
-                    "_id": None,
-                    "avg_hours": {"$avg": "$resolution_hours"},
-                    "count": {"$sum": 1}
-                }}
-            ]
-            res_result = await collection.aggregate(resolution_pipeline).to_list(1)
-            avg_resolution_hours = round(res_result[0]["avg_hours"], 1) if res_result and res_result[0].get("avg_hours") else 0
-        except Exception as e:
-            logger.warning(f"Resolution time calc failed: {e}")
-            avg_resolution_hours = 0
-        
-        # --- 3. Weekly Trend Data (last 7 days actual + next 3 days predicted) ---
-        weekly_data = []
+        avg_resolution_hours = round(res_result[0]["avg_hours"], 1) if res_result and res_result[0].get("avg_hours") else 0
+
+        # --- Weekly trend: map the per-day histogram onto the last 7 calendar days ---
         day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        
+        weekly_counts = {w["_id"]: w["count"] for w in (weekly_rows or []) if w.get("_id")}
+        weekly_data = []
         for i in range(6, -1, -1):
             day_start = (now - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
-            day_end = day_start + timedelta(days=1)
-            
-            # Try with both Date and string timestamp formats
-            day_count = 0
-            try:
-                # Try Date format first
-                day_count = await collection.count_documents({
-                    "timestamp": {"$gte": day_start, "$lt": day_end}
-                })
-            except Exception:
-                pass
-            
-            if day_count == 0:
-                # Try string format (ISO format comparison)
-                try:
-                    day_count = await collection.count_documents({
-                        "timestamp": {"$gte": day_start.isoformat(), "$lt": day_end.isoformat()}
-                    })
-                except Exception:
-                    pass
-            
-            weekday_name = day_names[day_start.weekday()]
+            key = day_start.strftime("%Y-%m-%d")
             weekly_data.append({
-                "name": weekday_name,
-                "actual": day_count,
-                "predicted": None
+                "name": day_names[day_start.weekday()],
+                "actual": weekly_counts.get(key, 0),
+                "predicted": None,
             })
-        
+
         # Simple prediction: average of last 7 days ± small variance
         avg_daily = sum(d["actual"] for d in weekly_data) / max(len(weekly_data), 1)
         import random
@@ -710,13 +687,13 @@ async def get_dashboard_analytics(admin: dict = Depends(get_admin_user)):
                 "actual": None,
                 "predicted": predicted
             })
-        
+
         # Trend percentage (this week vs projected)
         last_week_total = sum(d["actual"] or 0 for d in weekly_data[:7])
         projected_total = last_week_total + sum(d["predicted"] or 0 for d in weekly_data[7:])
         trend_pct = round(((projected_total - last_week_total) / max(last_week_total, 1)) * 100)
-        
-        # --- 4. Issue Type & Hotspots (already resolved in facet) ---
+
+        # --- Issue Type & Hotspots (resolved in the facet) ---
         issue_types = [{"type": t["_id"] or "unknown", "count": t["count"]} for t in res.get("issue_types", [])]
         hotspots = [{
                 "location": h["_id"] or "Unknown",
@@ -724,15 +701,9 @@ async def get_dashboard_analytics(admin: dict = Depends(get_admin_user)):
                 "lat": h.get("lat"),
                 "lng": h.get("lng")
         } for h in res.get("hotspots", [])]
-        
-        # --- 6. System Health ---
-        one_hour_ago = now - timedelta(hours=1)
-        try:
-            recent_submissions = await collection.count_documents({"timestamp": {"$gte": one_hour_ago}})
-            if recent_submissions == 0:
-                recent_submissions = await collection.count_documents({"timestamp": {"$gte": one_hour_ago.isoformat()}})
-        except Exception:
-            recent_submissions = 0
+
+        # --- System Health ---
+        recent_submissions = recent_res[0].get("n", 0) if recent_res else 0
         system_load = min(100, round((recent_submissions / max(total_count, 1)) * 1000))  # Rough metric
         
         return {
@@ -768,17 +739,24 @@ async def get_warroom_data(
     search: Optional[str] = None,
     issue_type: Optional[str] = None,
     severity: Optional[str] = None,
+    limit: int = 2000,
     admin: dict = Depends(get_admin_user)
 ):
     """
     Advanced War Room data: all issues with coordinates + filters + hotspot analysis.
+
+    `limit` caps how many mapped issues are returned (default 2000, max 10000) so
+    the globe/insights reflect the full picture rather than an arbitrary slice.
+    The stats block is computed over the ENTIRE matching set, not just the
+    returned page, so the counters are always accurate.
     """
     try:
         mongo_service = await get_optimized_mongodb_service()
         if not mongo_service:
             raise HTTPException(status_code=503, detail="Database unavailable")
-        
+
         collection = await mongo_service.get_collection("issues")
+        capped_limit = max(1, min(int(limit or 2000), 10000))
         
         # Build filter
         match_filter = {
@@ -807,7 +785,7 @@ async def get_warroom_data(
         pipeline = [
             {"$match": match_filter},
             {"$sort": {"timestamp": -1}},
-            {"$limit": 200},
+            {"$limit": capped_limit},
             {"$project": {
                 "_id": 1,
                 "issue_id": {"$toString": "$_id"},
@@ -828,7 +806,7 @@ async def get_warroom_data(
             }}
         ]
         
-        issues = await collection.aggregate(pipeline).to_list(200)
+        issues = await collection.aggregate(pipeline).to_list(length=capped_limit)
         
         # Normalize coordinates
         for issue in issues:
@@ -857,26 +835,50 @@ async def get_warroom_data(
             }},
             {"$match": {"count": {"$gte": 2}}},
             {"$sort": {"count": -1}},
-            {"$limit": 20}
+            {"$limit": 100}
         ]
-        
-        hotspots = await collection.aggregate(hotspot_pipeline).to_list(20)
+
+        hotspots = await collection.aggregate(hotspot_pipeline).to_list(100)
         for h in hotspots:
             h["_id"] = str(h["_id"])
         
-        # Stats summary
-        total_on_map = len(issues)
-        high_severity = len([i for i in issues if i.get("severity") == "high" or (i.get("confidence_score") or 0) > 80])
-        
+        # ── Accurate stats over the ENTIRE matching set (not just the page) ──
+        # Counting only the returned page made the counters wrong whenever the
+        # data exceeded the cap. This aggregates over the full match_filter.
+        stats_pipeline = [
+            {"$match": match_filter},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "high_severity": {"$sum": {"$cond": [
+                    {"$or": [
+                        {"$in": [{"$toLower": {"$ifNull": ["$severity", ""]}}, ["high", "critical", "emergency"]]},
+                        {"$gt": [{"$toDouble": {"$ifNull": ["$confidence", 0]}}, 80]},
+                    ]}, 1, 0]}},
+                "pending": {"$sum": {"$cond": [
+                    {"$in": ["$status", ["reported", "pending", "pending_review", "needs_review", "submitted"]]}, 1, 0]}},
+                "needs_review": {"$sum": {"$cond": [{"$eq": ["$status", "needs_review"]}, 1, 0]}},
+                "resolved": {"$sum": {"$cond": [
+                    {"$in": ["$status", ["approved", "resolved"]]}, 1, 0]}},
+            }},
+        ]
+        stats_res = await collection.aggregate(stats_pipeline).to_list(1)
+        agg = stats_res[0] if stats_res else {}
+        total_matching = agg.get("total", len(issues))
+
         return {
             "issues": issues,
             "hotspots": hotspots,
+            "returned": len(issues),
+            "total_matching": total_matching,
+            "truncated": total_matching > len(issues),
             "stats": {
-                "total_on_map": total_on_map,
-                "high_severity": high_severity,
-                "reported": len([i for i in issues if i.get("status") in ["reported", "pending", "pending_review", "submitted"]]),
-                "needs_review": len([i for i in issues if i.get("status") == "needs_review"]),
-                "resolved": len([i for i in issues if i.get("status") in ["approved", "resolved"]])
+                "total_on_map": total_matching,
+                "high_severity": agg.get("high_severity", 0),
+                "reported": agg.get("pending", 0),
+                "pending": agg.get("pending", 0),
+                "needs_review": agg.get("needs_review", 0),
+                "resolved": agg.get("resolved", 0),
             }
         }
         

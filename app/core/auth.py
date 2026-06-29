@@ -1,6 +1,7 @@
 from fastapi import HTTPException, Depends, Header, status
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
+from bson import ObjectId
 import logging
 from utils.security import SECRET_KEY, ALGORITHM
 from services.mongodb_optimized_service import get_optimized_mongodb_service
@@ -29,26 +30,57 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
+        token_id = payload.get("id")  # the EXACT account this token was issued for
         token_type = payload.get("type", "admin") # default to admin token
-        
+
         if email is None:
             raise credentials_exception
-            
+
         mongo_service = await get_optimized_mongodb_service()
         if not mongo_service:
             return {"email": email, "role": "admin"} # Fallback if DB is down during startup
 
-        # Select appropriate collection based on token type
-        collection_name = "government_users" if token_type == "gov_portal" else "admins"
+        # Select appropriate collection based on token type. Contractor accounts
+        # (Field App "apply to work") live in gov_contractors, not government_users.
+        if token_type == "contractor":
+            collection_name = "gov_contractors"
+        elif token_type == "gov_portal":
+            collection_name = "government_users"
+        else:
+            collection_name = "admins"
         collection = await mongo_service.get_collection(collection_name)
-        user = await collection.find_one({"email": email})
-        
+        # Resolve by the token's account id FIRST. One email can hold several
+        # accounts (e.g. an Operation Manager in one dept + Staff in another); a
+        # plain find_one({"email"}) grabs an arbitrary (often the oldest) one, so
+        # the wrong role/dept would be used. The token id is unambiguous.
+        user = None
+        if token_id:
+            try:
+                user = await collection.find_one({"_id": ObjectId(token_id)})
+            except Exception:
+                user = None
+        if not user:
+            user = await collection.find_one({"email": email})
+
         if not user:
             raise credentials_exception
-            
+
         if not user.get("is_active", True):
             raise HTTPException(status_code=403, detail="Account is deactivated")
-            
+
+        # Contractors carry their own shape (company name, dept/city, approval).
+        if token_type == "contractor":
+            return {
+                "id": str(user["_id"]),
+                "email": user["email"],
+                "role": "contractor",
+                "name": user.get("company", "Contractor"),
+                "type": "contractor",
+                "dept": user.get("dept"),
+                "org": user.get("city"),
+                "approval_status": user.get("approval_status", "pending"),
+            }
+
         # Return unified user object
         user_data = {
             "id": str(user["_id"]),
@@ -74,8 +106,10 @@ async def get_admin_user(current_user: Dict[str, Any] = Depends(get_current_user
     Admin-only authentication dependency - allows all admin roles
     """
     # Allow all admin roles: super_admin, admin, team_member, viewer, operations
-    # Both EAiSER system roles and Gov Portal operational roles are permitted here
-    valid_roles = ["admin", "super_admin", "team_member", "viewer", "operations", "ops_manager"]
+    # Both EAiSER system roles and Gov Portal operational roles are permitted here.
+    # Gov ops hierarchy: ops_manager (Operation Manager, head over all depts) >
+    # department_admin (Department Admin, head of one dept) > operations (Staff).
+    valid_roles = ["admin", "super_admin", "it_super_admin", "team_member", "viewer", "operations", "ops_manager", "department_admin", "mayor", "onboarding_specialist"]
     
     current_role = current_user.get("role", "").lower().replace("-", "_").replace(" ", "_")
     
