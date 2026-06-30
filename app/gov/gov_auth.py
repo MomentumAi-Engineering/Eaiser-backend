@@ -567,16 +567,22 @@ async def update_gov_profile(
     Allow gov user to update their own profile and password.
     """
     db = await get_db()
-    
+
+    # The same email can hold several accounts (uniqueness is email+dept+city).
+    # Matching by email alone grabs an arbitrary account, so the current-password
+    # check could verify against the WRONG account and 401 a valid password.
+    # Always target THIS account via the token's account id.
+    acct_filter = {"_id": ObjectId(user["id"])} if user.get("id") else {"email": user["email"]}
+
     # If the user is trying to change password, verify the current one
     if update.password:
         if not update.current_password:
              raise HTTPException(status_code=400, detail="Current password is required to set a new password")
-        
-        gov_user = await db["government_users"].find_one({"email": user["email"]})
-        if not verify_password(update.current_password, gov_user.get("hashed_password", "")):
+
+        gov_user = await db["government_users"].find_one(acct_filter)
+        if not gov_user or not verify_password(update.current_password, gov_user.get("hashed_password", "")):
              raise HTTPException(status_code=401, detail="Incorrect current password")
-             
+
     upd = {"updated_at": datetime.utcnow()}
     if update.name: upd["name"] = update.name
     if update.zip_code: upd["zip_code"] = update.zip_code
@@ -584,10 +590,7 @@ async def update_gov_profile(
         upd["hashed_password"] = get_password_hash(update.password)
         upd["require_password_change"] = False
 
-    await db["government_users"].update_one(
-        {"email": user["email"]},
-        {"$set": upd}
-    )
+    await db["government_users"].update_one(acct_filter, {"$set": upd})
     return {"success": True, "message": "Profile updated"}
 
 @router.post("/profile/avatar")
@@ -602,8 +605,9 @@ async def update_gov_avatar(
     
     if result and result.get("url"):
         url = result.get("url")
+        acct_filter = {"_id": ObjectId(user["id"])} if user.get("id") else {"email": user["email"]}
         await db["government_users"].update_one(
-            {"email": user["email"]},
+            acct_filter,
             {"$set": {"avatar_url": url, "updated_at": datetime.utcnow()}}
         )
         return {"success": True, "avatar_url": url}

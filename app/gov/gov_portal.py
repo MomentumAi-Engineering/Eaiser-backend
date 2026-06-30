@@ -272,7 +272,14 @@ async def get_gov_reports(
             "confidence": iss.get("confidence"),
             "date": iss.get("timestamp_formatted") or "Recently",
             "timestamp": iss.get("timestamp"),
-            "desc": iss.get("description") or iss.get("report", {}).get("issue_overview", {}).get("summary_explanation", "No description provided."),
+            "desc": (
+                iss.get("description")
+                or iss.get("scene_description")
+                or iss.get("report", {}).get("issue_overview", {}).get("summary_explanation")
+                or iss.get("report", {}).get("template_fields", {}).get("formatted_text")
+                or "No description provided."
+            ),
+            "scene_description": iss.get("scene_description") or "",
             "recommended_actions": iss.get("recommended_actions") or [],
             "reporter": iss.get("user_email"),
             # Before = original citizen submission (one or many). After = field
@@ -280,7 +287,8 @@ async def get_gov_reports(
             "images": original_images,                     # all "before" images
             "image": before_primary,                       # first before (back-compat)
             "media_url": before_primary,                   # first before (back-compat)
-            "resolution_media_url": iss.get("resolution_media_url"),  # "after" image
+            "resolution_media_url": iss.get("resolution_media_url"),  # "after" image (primary, back-compat)
+            "resolution_media_urls": iss.get("resolution_media_urls") or ([iss.get("resolution_media_url")] if iss.get("resolution_media_url") else []),  # all "after" images
             "department": user_dept or "GENERAL",
             "coordinates": [iss.get("latitude", 0), iss.get("longitude", 0)],
             "assigned_to": iss.get("assigned_to"),
@@ -981,16 +989,24 @@ async def upload_evidence(
         except:
             query_id = issue_id
             
-        # Change status to 'pending_verification' directly when evidence is uploaded
+        # Crew uploads MULTIPLE "after" photos (min 3, enforced client-side).
+        # Append each to resolution_media_urls[] and keep resolution_media_url as
+        # the primary (first) for back-compat. Status → pending_verification.
         await db["issues"].update_one(
             {"_id": query_id},
-            {"$set": {
-                "resolution_media_url": url, 
-                "status": "pending_verification",
-                "resolved_at": datetime.utcnow().isoformat(),
-                "resolved_by": current_user.get("name", "Field Officer")
-            }}
+            {
+                "$set": {
+                    "status": "pending_verification",
+                    "resolved_at": datetime.utcnow().isoformat(),
+                    "resolved_by": current_user.get("name", "Field Officer"),
+                },
+                "$push": {"resolution_media_urls": url},
+            }
         )
+        # Ensure resolution_media_url (primary) is set to the first uploaded photo.
+        _doc = await db["issues"].find_one({"_id": query_id}, {"resolution_media_url": 1})
+        if _doc and not _doc.get("resolution_media_url"):
+            await db["issues"].update_one({"_id": query_id}, {"$set": {"resolution_media_url": url}})
         
         # Crew member has successfully completed their field task, so free them up immediately!
         if current_user and current_user.get("email"):
