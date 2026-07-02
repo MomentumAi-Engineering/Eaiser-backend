@@ -58,6 +58,44 @@ class CompletePayload(BaseModel):
     logoDataUrl: Optional[str] = None
 
 # ──────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────
+
+async def _resolve_org_slug(db, user_doc, user_token) -> Optional[str]:
+    """
+    Best-effort resolution of the org slug the wizard should write to.
+
+    Some accounts (e.g. an admin who created the city, or legacy super-admins)
+    carry the org via `org_id` or the token's `org` (city name) rather than a
+    `org_slug` on their user doc. Fall back through those before giving up so the
+    onboarding wizard never dead-ends with "No org assigned".
+    """
+    slug = user_doc.get("org_slug")
+    if slug:
+        return slug
+
+    # 2) Resolve from org_id on the user doc.
+    org_id = user_doc.get("org_id")
+    if org_id:
+        try:
+            from bson import ObjectId
+            org = await db["organizations"].find_one({"_id": ObjectId(str(org_id))})
+        except Exception:
+            org = await db["organizations"].find_one({"_id": org_id})
+        if org and org.get("slug"):
+            return org["slug"]
+
+    # 3) Resolve from the token's `org` (city display name) → org.name match.
+    city_name = (user_token or {}).get("org")
+    if city_name:
+        org = await db["organizations"].find_one({"name": city_name})
+        if org and org.get("slug"):
+            return org["slug"]
+
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────────────────────────────
 
@@ -73,7 +111,7 @@ async def save_step(payload: SaveStep, user=Depends(get_current_user)):
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
 
-    org_slug = user_doc.get("org_slug")
+    org_slug = await _resolve_org_slug(db, user_doc, user)
     if not org_slug:
         return {"success": False, "message": "No org assigned"}
 
@@ -108,7 +146,7 @@ async def complete_onboarding(
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
 
-    org_slug = user_doc.get("org_slug")
+    org_slug = await _resolve_org_slug(db, user_doc, user)
     if not org_slug:
         raise HTTPException(status_code=400, detail="No org assigned to this user")
 
