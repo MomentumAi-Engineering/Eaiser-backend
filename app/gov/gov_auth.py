@@ -460,12 +460,15 @@ async def gov_login(creds: GovLoginRequest):
     # Extended token life for operational use
     access_token = create_access_token(data=token_data, expires_delta=timedelta(hours=24))
     
+    # Some legacy accounts have no `name` field — fall back to the email prefix so
+    # login never 500s on a missing key.
+    display_name = user.get("name") or (user.get("email", "").split("@")[0]) or "User"
     return {
         "access_token": access_token,
         "token_type": "bearer",
         "user": {
-            "name": user["name"],
-            "email": user["email"],
+            "name": display_name,
+            "email": user.get("email", ""),
             "role": role,
             "department": user.get("department"),
             "zip": user.get("zip_code"),
@@ -476,7 +479,7 @@ async def gov_login(creds: GovLoginRequest):
             # billing checkout flow added this field.
             "org_slug": user.get("org_slug"),
             "org_id": user.get("org_id"),
-            "initials": "".join([n[0] for n in user["name"].split() if n]).upper(),
+            "initials": ("".join([n[0] for n in display_name.split() if n]).upper()[:2]) or "U",
             "avatar_url": user.get("avatar_url")
         }
     }
