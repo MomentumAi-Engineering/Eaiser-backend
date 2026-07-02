@@ -638,6 +638,47 @@ async def renew_subscription(
     return await _org_to_subscription(db, org)
 
 
+@router.delete("/{sub_id}")
+async def delete_subscription(
+    sub_id: str,
+    admin=Depends(require_permission("manage_subscriptions")),
+):
+    """PERMANENTLY delete a city tenant — its organization record and every
+    government user that belongs to it. Irreversible. Cancels the Stripe
+    subscription first if one is configured. Citizen-reported issues (tied to a
+    ZIP, not the tenant) are intentionally left untouched."""
+    db = await get_db()
+    org = await db["organizations"].find_one(_org_filter(sub_id))
+    if not org:
+        raise HTTPException(404, "Subscription not found")
+
+    org_id = str(org["_id"])
+    slug = org.get("slug")
+    city = org.get("legal_name")
+
+    # Best-effort: cancel the Stripe subscription so we stop billing.
+    try:
+        stripe_sub = org.get("stripe_subscription_id") or org.get("subscription_id")
+        if _stripe_enabled() and stripe_sub:
+            await _stripe_cancel_subscription(stripe_sub)
+    except Exception as e:
+        logger.warning(f"Stripe cancel failed while deleting {city}: {e}")
+
+    # Remove every gov user scoped to this tenant (by org id / slug / city).
+    or_clauses = [{"org_id": org_id}]
+    if slug:
+        or_clauses.append({"org_slug": slug})
+    if city:
+        or_clauses.append({"city": city})
+    users_res = await db["government_users"].delete_many({"$or": or_clauses})
+
+    # Finally, delete the tenant itself.
+    await db["organizations"].delete_one({"_id": org["_id"]})
+
+    logger.info(f"🗑️ PERMANENTLY deleted city tenant '{city}' ({slug}) + {users_res.deleted_count} users — by {admin.get('email')}")
+    return {"success": True, "deleted_city": city, "deleted_users": users_res.deleted_count}
+
+
 @router.post("/{sub_id}/upgrade")
 async def upgrade_subscription(
     sub_id: str, payload: UpgradePayload,
